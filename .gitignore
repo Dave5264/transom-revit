@@ -1,40 +1,19 @@
-# Build output
-[Bb]in/
-[Oo]bj/
-[Dd]ebug/
-[Rr]elease/
-artifacts/
+﻿#IDE folders
+*.idea/
+*.vs/
+*.vscode/
+
+#Project-specific folders
+*obj/
+*bin/
+
+#Build output folder
+/output/
+
+#User-specific files
 *.user
-*.suo
-*.userosscache
-*.sln.docstates
 
-# .NET / Visual Studio
-.vs/
-*.dll
-*.pdb
-project.lock.json
-project.fragment.lock.json
-
-# Rider / VS Code
-.idea/
-.vscode/
-
-# NuGet
-*.nupkg
-*.snupkg
-packages/
-!packages/build/
-
-# Revit add-in staging / exchange + test output
+#Transom: staging + exported artifacts (never source)
 .claude-exchange/
-*.xlsx
-*.xls
-*.csv
+/exports/
 run-log.json
-!**/TestData/**
-
-# OS
-Thumbs.db
-desktop.ini
-.DS_Store

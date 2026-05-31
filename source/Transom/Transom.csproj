@@ -1,0 +1,52 @@
+<Project Sdk="Nice3point.Revit.Sdk/6.2.2">
+
+    <PropertyGroup>
+        <UseWPF>true</UseWPF>
+        <DeployAddin>true</DeployAddin>
+        <LaunchRevit>false</LaunchRevit>
+        <IsRepackable>false</IsRepackable>
+        <EnableDynamicLoading>true</EnableDynamicLoading>
+        <!-- Transom targets Revit 2025 (.NET 8) and 2027 (.NET 10) only -->
+        <Configurations>Debug.R25;Debug.R27</Configurations>
+        <Configurations>$(Configurations);Release.R25;Release.R27</Configurations>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <!-- Revit Dependencies -->
+        <PackageReference Include="Nice3point.Revit.Toolkit" Version="$(RevitVersion).*"/>
+        <PackageReference Include="Nice3point.Revit.Extensions" Version="$(RevitVersion).*"/>
+        <PackageReference Include="Nice3point.Revit.Api.RevitAPI" Version="$(RevitVersion).*"/>
+        <PackageReference Include="Nice3point.Revit.Api.RevitAPIUI" Version="$(RevitVersion).*"/>
+
+        <!-- Excel engine: xlsx (XSSF) + legacy xls (HSSF). Pinned per plan; co-deployed via dynamic loading. -->
+        <PackageReference Include="NPOI" Version="2.7.1"/>
+        <!-- Override NPOI's transitive SixLabors.ImageSharp 2.1.8 (known CVEs) with the patched 2.1.x.
+             2.1.10 clears both high-severity CVEs + one moderate. The last moderate (GHSA-rxmq-m78w-7wmc)
+             is fixed only in ImageSharp 3.x, which NPOI 2.7.1 is not compatible with; it is an image-decode
+             path Transom never invokes (no image cells), so it is suppressed individually below.
+             Revisit when NPOI targets ImageSharp 3.x. -->
+        <PackageReference Include="SixLabors.ImageSharp" Version="2.1.10"/>
+
+        <!-- MVVM -->
+        <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2"/>
+
+        <!-- Development Dependencies -->
+        <PackageReference Include="JetBrains.Annotations" Version="2025.2.4" PrivateAssets="all"/>
+        <PackageReference Include="Polyfill" Version="10.5.1" PrivateAssets="all"/>
+    </ItemGroup>
+    
+    <ItemGroup>
+        <!-- See SixLabors.ImageSharp note above: unused image-decode path, fixed only in incompatible 3.x. -->
+        <NuGetAuditSuppress Include="https://github.com/advisories/GHSA-rxmq-m78w-7wmc"/>
+    </ItemGroup>
+
+    <ItemGroup>
+        <Resource Include="Resources\Icons\RibbonIcon16.png"/>
+        <Resource Include="Resources\Icons\RibbonIcon32.png"/>
+    </ItemGroup>
+
+    <ItemGroup>
+        <Folder Include="Models"/>
+    </ItemGroup>
+
+</Project>
