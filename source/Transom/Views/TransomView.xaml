@@ -26,11 +26,7 @@
 
         <!-- Footer -->
         <Border DockPanel.Dock="Bottom" Background="#FFFFFF" BorderBrush="#E3E1D9" BorderThickness="0,1,0,0" Padding="14,12">
-            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                <Button Content="Cancel" Width="84" Height="34" Margin="0,0,8,0" IsCancel="True" />
-                <Button Content="Export" Width="150" Height="34" Background="#185FA5" Foreground="White"
-                        BorderThickness="0" Command="{Binding ExportCommand}" />
-            </StackPanel>
+            <Button Content="Close" Width="84" Height="34" HorizontalAlignment="Right" Click="Close_Click" />
         </Border>
 
         <!-- Tabs -->
@@ -47,6 +43,10 @@
                                   SelectedItem="{Binding SelectedSchedule}"
                                   DisplayMemberPath="Name"
                                   Height="32" />
+
+                        <Button Content="Export to .xlsx…" Height="34" Padding="16,0" Margin="0,12,0,0"
+                                HorizontalAlignment="Left" Background="#185FA5" Foreground="White"
+                                BorderThickness="0" Command="{Binding ExportCommand}" />
 
                         <Border Background="#E6F1FB" BorderBrush="#85B7EB" BorderThickness="1" CornerRadius="6" Padding="10" Margin="0,16,0,0">
                             <DockPanel>

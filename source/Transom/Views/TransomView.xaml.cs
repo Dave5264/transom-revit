@@ -14,4 +14,6 @@ public sealed partial class TransomView
         Instance = this;
         Closed += (_, _) => Instance = null;
     }
+
+    private void Close_Click(object sender, System.Windows.RoutedEventArgs e) => Close();
 }

@@ -38,7 +38,8 @@ public sealed class ChangeSet
 
 /// <summary>
 ///     Diffs an imported workbook against the live model (read-only) to produce a change set, and applies
-///     a confirmed change set inside one transaction. Type params are conflict-checked and written once.
+///     a confirmed change set inside one transaction. Type params are conflict-checked across ALL rows of
+///     a type (not just edited ones) and written once.
 /// </summary>
 public sealed class Importer
 {
@@ -46,11 +47,12 @@ public sealed class Importer
     {
         public ImportColumn Col = null!;
         public string TypeName = "";
-        public string OldDisplay = "";
-        public readonly List<string> NewDisplays = new();
         public bool IsString;
-        public string NewString = "";
-        public double NewDouble;
+        public string? SpecTypeId;
+        public string CurString = "";
+        public double CurDouble;
+        public string CurDisplay = "";
+        public readonly List<string> CellValues = new(); // every instance row's cell for this type+param
     }
 
     public ChangeSet BuildChangeSet(Document doc, ImportWorkbook wb)
@@ -91,99 +93,125 @@ public sealed class Importer
                     var param = GetParam(host, col.ParameterId);
                     if (param == null || param.IsReadOnly) continue; // read-only (e.g. computed Length) skipped silently
 
+                    bool measurableDouble = param.StorageType == StorageType.Double && col.SpecTypeId != null;
+                    if (param.StorageType != StorageType.String && !measurableDouble) continue; // unsupported storage
+
+                    if (col.Binding == "type")
+                    {
+                        var key = (host.Id.Value, col.ParameterId);
+                        if (!typeGroups.TryGetValue(key, out var tc))
+                        {
+                            tc = new TypeCandidate { Col = col, TypeName = SafeName(host), SpecTypeId = col.SpecTypeId };
+                            if (param.StorageType == StorageType.String)
+                            {
+                                tc.IsString = true;
+                                tc.CurString = param.AsString() ?? "";
+                                tc.CurDisplay = tc.CurString;
+                            }
+                            else
+                            {
+                                tc.IsString = false;
+                                tc.CurDouble = param.AsDouble();
+                                tc.CurDisplay = param.AsValueString() ?? "";
+                            }
+                            typeGroups[key] = tc;
+                        }
+                        tc.CellValues.Add(cellText); // record EVERY row, changed or not
+                        continue;
+                    }
+
+                    // instance binding
                     if (param.StorageType == StorageType.String)
                     {
                         var cur = param.AsString() ?? "";
                         if (cur == cellText) continue;
-                        Record(cs, typeGroups, col, host, el, isString: true,
-                            newString: cellText, newDouble: 0, oldDisplay: cur, newDisplay: cellText);
+                        cs.Changes.Add(InstanceChange(el, col, cur, cellText, isString: true, str: cellText, dbl: 0));
                     }
-                    else if (param.StorageType == StorageType.Double && col.SpecTypeId != null)
+                    else
                     {
-                        if (!UnitFormatUtils.TryParse(units, new ForgeTypeId(col.SpecTypeId), cellText, out double parsed))
+                        if (!UnitFormatUtils.TryParse(units, new ForgeTypeId(col.SpecTypeId!), cellText, out double parsed))
                         {
                             cs.Skipped.Add(new SkippedItem { Reason = "unparseable", Detail = $"{col.FieldName} = '{cellText}'" });
                             continue;
                         }
                         if (Math.Abs(param.AsDouble() - parsed) < 1e-9) continue;
-                        Record(cs, typeGroups, col, host, el, isString: false,
-                            newString: "", newDouble: parsed, oldDisplay: param.AsValueString() ?? "", newDisplay: cellText);
+                        cs.Changes.Add(InstanceChange(el, col, param.AsValueString() ?? "", cellText, isString: false, str: "", dbl: parsed));
                     }
-                    // other storage types (ElementId/Integer) not handled in this slice
                 }
             }
 
-            // Resolve type-param groups: conflicting values are skipped; consistent ones become one write.
-            foreach (var kv in typeGroups)
-            {
-                var tc = kv.Value;
-                var distinct = tc.NewDisplays.Distinct().ToList();
-                if (distinct.Count > 1)
-                {
-                    cs.Skipped.Add(new SkippedItem
-                    {
-                        Reason = "conflict",
-                        Detail = $"{tc.Col.FieldName} on type '{tc.TypeName}': {string.Join(" / ", distinct)}",
-                    });
-                    continue;
-                }
-                cs.Changes.Add(new ProposedChange
-                {
-                    TypeId = kv.Key.Item1,
-                    ParameterId = kv.Key.Item2,
-                    Binding = "type",
-                    ElementName = tc.TypeName,
-                    Field = tc.Col.FieldName,
-                    OldValue = tc.OldDisplay,
-                    NewValue = distinct[0],
-                    InstancesAffected = tc.NewDisplays.Count,
-                    IsString = tc.IsString,
-                    NewString = tc.NewString,
-                    NewDouble = tc.NewDouble,
-                });
-            }
+            ResolveTypeGroups(cs, typeGroups, units);
         }
 
         return cs;
     }
 
-    private static void Record(ChangeSet cs, Dictionary<(long, int), TypeCandidate> typeGroups,
-        ImportColumn col, Element host, Element instance,
-        bool isString, string newString, double newDouble, string oldDisplay, string newDisplay)
+    private static void ResolveTypeGroups(ChangeSet cs, Dictionary<(long, int), TypeCandidate> typeGroups, Units units)
     {
-        if (col.Binding == "type")
+        foreach (var kv in typeGroups)
         {
-            var key = (host.Id.Value, col.ParameterId);
-            if (!typeGroups.TryGetValue(key, out var tc))
+            var tc = kv.Value;
+            var distinct = tc.CellValues.Distinct().ToList();
+            if (distinct.Count > 1)
             {
-                tc = new TypeCandidate
+                cs.Skipped.Add(new SkippedItem
                 {
-                    Col = col, TypeName = SafeName(host), OldDisplay = oldDisplay,
-                    IsString = isString, NewString = newString, NewDouble = newDouble,
-                };
-                typeGroups[key] = tc;
+                    Reason = "conflict",
+                    Detail = $"{tc.Col.FieldName} on type '{tc.TypeName}': {string.Join(" / ", distinct)}",
+                });
+                continue;
             }
-            tc.NewDisplays.Add(newDisplay);
-            tc.NewString = newString;
-            tc.NewDouble = newDouble;
-        }
-        else
-        {
-            cs.Changes.Add(new ProposedChange
+
+            var value = distinct.Count == 1 ? distinct[0] : tc.CurDisplay;
+
+            if (tc.IsString)
             {
-                UniqueId = instance.UniqueId,
-                ParameterId = col.ParameterId,
-                Binding = "instance",
-                ElementName = SafeName(instance),
-                Field = col.FieldName,
-                OldValue = oldDisplay,
-                NewValue = newDisplay,
-                IsString = isString,
-                NewString = newString,
-                NewDouble = newDouble,
-            });
+                if (value == tc.CurString) continue; // no change
+                cs.Changes.Add(TypeChange(kv.Key, tc, value, isString: true, str: value, dbl: 0));
+            }
+            else
+            {
+                if (!UnitFormatUtils.TryParse(units, new ForgeTypeId(tc.SpecTypeId!), value, out double parsed))
+                {
+                    cs.Skipped.Add(new SkippedItem { Reason = "unparseable", Detail = $"{tc.Col.FieldName} = '{value}'" });
+                    continue;
+                }
+                if (Math.Abs(parsed - tc.CurDouble) < 1e-9) continue; // no change
+                cs.Changes.Add(TypeChange(kv.Key, tc, value, isString: false, str: "", dbl: parsed));
+            }
         }
     }
+
+    private static ProposedChange InstanceChange(Element el, ImportColumn col, string oldDisp, string newDisp,
+        bool isString, string str, double dbl) => new()
+    {
+        UniqueId = el.UniqueId,
+        ParameterId = col.ParameterId,
+        Binding = "instance",
+        ElementName = SafeName(el),
+        Field = col.FieldName,
+        OldValue = oldDisp,
+        NewValue = newDisp,
+        IsString = isString,
+        NewString = str,
+        NewDouble = dbl,
+    };
+
+    private static ProposedChange TypeChange((long, int) key, TypeCandidate tc, string newDisp,
+        bool isString, string str, double dbl) => new()
+    {
+        TypeId = key.Item1,
+        ParameterId = key.Item2,
+        Binding = "type",
+        ElementName = tc.TypeName,
+        Field = tc.Col.FieldName,
+        OldValue = tc.CurDisplay,
+        NewValue = newDisp,
+        InstancesAffected = tc.CellValues.Count,
+        IsString = isString,
+        NewString = str,
+        NewDouble = dbl,
+    };
 
     /// <summary>Applies a confirmed change set inside one transaction. Returns a summary line.</summary>
     public string Apply(Document doc, ChangeSet cs)
