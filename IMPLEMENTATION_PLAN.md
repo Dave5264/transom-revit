@@ -34,16 +34,25 @@ MIT, not a dependency):** [`bimone/addins-excelexporterimporter`](https://github
 > re-implementation of Revit's sort/group/filter drifts from the real display, which mis-anchors rows
 > (AUDIT2 **C2**). The display pass eliminates both.
 
-**Anchor mechanism = to be decided by spike (milestone 2), two candidates:**
-- **(A) Working-copy hidden-ID field.** On a temporary copy of the schedule (inside a `Transaction`/
-  `TransactionGroup` that is **rolled back** so the user's schedule is never mutated), add a field carrying a
-  unique per-element key, then read that column via `GetCellText` — giving row→UniqueId in the *exact same
-  row order* as the display pass. First audit's recommendation; no sort re-implementation.
-- **(B) Enumeration + match.** `FilteredElementCollector(doc, vs.Id).WhereElementIsNotElementType()` +
-  correlate to body rows. Simpler but must solve correlation; fragile for several schedule kinds (see §10).
+**Anchor mechanism = DECIDED — Approach A (spike-proven live in Revit 2025, 2026-05-31).**
 
-Spike **both** against a real sorted/grouped/itemized schedule and pick the reliable one. Round-trip
-integrity (BRIEF success criterion #1) depends on this — prove it on day 2, not at the end.
+Live spike against a real wall schedule (6 walls, 2 types, grouped by Type + sorted by Length desc,
+itemized) showed:
+- **(B) Enumeration — REJECTED.** `FilteredElementCollector(doc, vs.Id)` returns **collector/ElementId
+  order** (`M1,M2,M3,M4,M5,M6`), which differed from display order (`M3,M5,M1,M2,M6,M4`) on every row →
+  silent mis-anchor. Not viable.
+- **(A) Rolled-back UID injection — CHOSEN, works, non-destructive.** Inside a `Transaction`:
+  (1) stamp each element's `UniqueId` into a transient field, (2) `AddField` it to the schedule definition,
+  (3) `doc.Regenerate()` **without committing** — the table immediately reflects the new column + values,
+  (4) read both the visible cells and the UID column via `GetCellText` in one pass (same display order),
+  (5) `RollBack()`. Verified post-rollback: field count restored (4→5→4) and all stamped params reverted —
+  **the model is never persistently mutated.** No sort/group/filter re-implementation needed.
+
+Export flow: open a `Transaction` → inject UID field + regenerate → read display cells (fidelity) + UID
+column (anchors) in display order → `RollBack` → write visible columns + hidden UID anchor column to Excel.
+Impl notes: skip the column-header row (row 0 of Body carries field names); prefer a **dedicated transient
+parameter** over overwriting a meaningful one like `Comments`; element rows carry a UID, group-header/blank
+rows don't (clean classifier). For huge schedules, stamping is the main cost — guard by element count.
 
 ---
 
