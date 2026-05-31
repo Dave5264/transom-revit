@@ -53,7 +53,7 @@ Last updated: 2026-05-31
 - **CSV** → one file per schedule, named `filename_<schedule>` (CSV can't hold tabs).
 
 ### Formatting fidelity (.xlsx — full visual match)
-Read per-cell from `GetCellStyle` / `GetMergedCell` / section data and reproduced:
+Read per-cell from `GetTableCellStyle` / `GetMergedCell` / section data and reproduced:
 - Merged cells (grouped/merged headers and title rows).
 - Bold / italic / underline.
 - Text and background colors, **including conditional-formatting colors** (per-cell).
@@ -70,18 +70,28 @@ Not carried: image-based cell content (API returns no text). **CSV = data only.*
 **.xls** supports styling within the old format's limits (≤65k rows, 256-color palette).
 
 ### Round-trip metadata
-- Hidden `cowork_meta` sheet (`.xlsx` / `.xls` only) stores:
-  - **per workbook:** source-model id (for cross-model detection on import).
-  - **per tab/schedule:** the schedule's **UniqueId** + full name (drives import auto-select).
-  - **per data row:** element **UniqueId** anchor (only on real element rows; group/total/
-    blank rows none).
+- **Anchor = a hidden Excel column** whose header carries a **magic sentinel** (e.g.
+  `__transom_uid__`) holding each element row's **UniqueId** (group/total/blank rows blank).
+  Import locates this column **by the sentinel header, not by index**, so the anchor survives
+  the user moving/inserting rows or columns in Excel.
+- Hidden `cowork_meta` sheet (`.xlsx` / `.xls` only) additionally stores:
+  - **per workbook:** source-model id (for cross-model detection on import) + the anchor sentinel.
+  - **per tab/schedule:** the schedule's **UniqueId** + full name (drives import auto-select),
+    its **kind** and **round-trippable** flag, and phase / active-design-option.
   - **per column/field:** field → parameter map, writable flags (read-only / calculated /
     combined marked non-writable), and the field's unit / spec (ForgeTypeId) for parsing.
+  - **per data row:** UniqueId + row kind, and **per-row** type/instance bindings (a shared
+    param can be type-bound in one family, instance-bound in another). Any `excelRow` index in
+    the metadata is **advisory only** — import re-derives row→anchor from the live sheet.
 - CSV is display-only (no metadata, not round-trippable).
 
-### Guards
-- Non-itemized schedule (rows collapse multiple elements) → **warn and ask** before
-  exporting, since those rows won't round-trip.
+### Round-trip gating by schedule kind
+The display export (full visual fidelity from `GetCellText`) works for **every** schedule. Write-back
+round-trip is enabled only where each visible row maps cleanly to one writable element:
+- **Round-trippable:** standard itemized (single category), key schedules, multi-category.
+- **Display-only (round-trip disabled, warn-and-ask):** non-itemized / multi-value collapsed,
+  material-takeoff, embedded, and linked-model-element schedules. Related-element fields (e.g. the
+  room a door is in) are exported but marked non-writable (the parameter lives on another element).
 
 ---
 
@@ -105,7 +115,10 @@ Not carried: image-based cell content (API returns no text). **CSV = data only.*
   review *before* you commit (the two-step: review in chat → return → Apply).
 
 ### Matching & scope
-- Match each data row to an element by **UniqueId**; compare spreadsheet value vs model.
+- Locate the hidden anchor column **by its sentinel header** and re-derive each row's element
+  **UniqueId** from the live sheet (not from a stored row index); compare spreadsheet value vs model.
+- If the anchor column is **missing or shorter than the data** → **reject that sheet** with a clear
+  message rather than risk mis-writing.
 - Write only **writable** fields; skip read-only / calculated / combined (flagged in metadata).
 - Unmatched rows (deleted element or hand-added row) → **skip and report**.
 
@@ -120,7 +133,9 @@ Not carried: image-based cell content (API returns no text). **CSV = data only.*
   type give *different* values for a type-param column, flag as a **conflict and skip**
   (reported, never written).
 - Consistent edits (all rows agree, value differs from model) → write **once** to the type,
-  on confirmation.
+  on confirmation. The write sets the **literal value** on the element type; the spreadsheet
+  carries the value on each instance row (no Excel formula mirroring), so re-sorting or filtering
+  in Excel can't desync the conflict check.
 
 ### Apply
 - **Preview + confirm:** a diff list (element, field, old → new) the user approves before
@@ -133,8 +148,9 @@ Not carried: image-based cell content (API returns no text). **CSV = data only.*
 
 - Both tabs have a **Claude-assist** checkbox.
 - On dialog open (and a small **Refresh**), the add-in **pings the MCP bridge's localhost
-  port** (the same listener `get_revit_status` hits). Port discovered during build from the
-  configured MCP setup.
+  port** (the same listener `get_revit_status` hits) with an **async** health check (short
+  200–500 ms timeout, off the UI thread). The port is a **persisted, user-editable setting
+  (default 48884)** — not build-discovered — pointing at the write-capable Revit MCP server.
   - Bridge answers → checkbox **enabled**.
   - No answer → checkbox **greyed out**, tooltip "Start Claude to enable."
 - Probe is a TCP/HTTP health ping only (most reliable; not a process-name check).

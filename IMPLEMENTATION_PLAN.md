@@ -270,8 +270,10 @@ For **round-trippable** schedules only (see §10), attach an element key per bod
 
 ## 10. Schedule-kind support matrix
 
-Detect kind up front (`IsKeySchedule`, `IsMaterialTakeoff`, embedded present via `ScheduleDefinition`,
-`<Multi-Category>`, contains linked elements, `IsItemized`). **Round-trip only where the anchor is sound:**
+Detect kind up front via **`ScheduleDefinition`**: `Definition.IsKeySchedule`, `Definition.IsMaterialTakeoff`,
+embedded = `Definition.EmbeddedDefinition != null`, multi-category = `Definition.CategoryId ==
+OST_MultiCategorySchedule` (not a name string), `Definition.IsItemized`, plus a scan for linked-model
+elements. **Round-trip only where the anchor is sound:**
 
 | Kind | Display export | Round-trip |
 |---|---|---|
