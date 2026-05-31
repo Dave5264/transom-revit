@@ -45,8 +45,26 @@ public sealed class ExcelWriter
         foreach (var m in table.Merges)
             sheet.AddMergedRegion(new CellRangeAddress(m.Top, m.Bottom, m.Left, m.Right));
 
+        // Size columns to fit their text at Excel's normal scale (Revit's paper widths are tiny).
         for (int c = 0; c < table.ColCount; c++)
-            sheet.SetColumnWidth(c, PxToWidthUnits(table.ColWidthsPx[c]));
+        {
+            int w;
+            try
+            {
+                sheet.AutoSizeColumn(c);                      // measures the actual cell fonts
+                w = (int)sheet.GetColumnWidth(c) + 2 * 256;   // ~2 chars of padding
+            }
+            catch
+            {
+                // Fallback if font metrics are unavailable: estimate from the longest cell.
+                int maxLen = 4;
+                for (int r = 0; r < table.RowCount; r++)
+                    maxLen = Math.Max(maxLen, table.Cells[r][c].Text.Length);
+                w = (maxLen + 2) * 256;
+            }
+            w = Math.Max(8 * 256, Math.Min(w, 60 * 256)); // clamp 8..60 chars
+            sheet.SetColumnWidth(c, w);
+        }
 
         sheet.SetColumnHidden(anchorCol, true);
 
@@ -116,12 +134,6 @@ public sealed class ExcelWriter
         "Bottom" => VerticalAlignment.Bottom,
         _ => VerticalAlignment.Top,
     };
-
-    private static int PxToWidthUnits(int px)
-    {
-        int units = (int)(px / 7.0 * 256); // ~7px per character
-        return Math.Max(256, Math.Min(units, 255 * 256));
-    }
 
     private static string SafeSheetName(string name)
     {
