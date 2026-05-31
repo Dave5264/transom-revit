@@ -12,6 +12,10 @@ public sealed class CellStyleInfo
     public string VAlign = "Top";    // Top  | Middle | Bottom
     public int TextColor = -1;       // 0xRRGGBB or -1
     public int BackColor = -1;       // 0xRRGGBB or -1
+    public int BorderTop;            // 0=none, 1=thin, 2=medium, 3=thick
+    public int BorderBottom;
+    public int BorderLeft;
+    public int BorderRight;
 }
 
 public sealed class TableCell

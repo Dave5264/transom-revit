@@ -107,7 +107,7 @@ public sealed class ScheduleReader
 
     // --- styles / merges / widths -----------------------------------------
 
-    private static CellStyleInfo ReadStyle(TableSectionData sec, int r, int c)
+    private CellStyleInfo ReadStyle(TableSectionData sec, int r, int c)
     {
         var info = new CellStyleInfo();
         TableCellStyle s;
@@ -124,7 +124,26 @@ public sealed class ScheduleReader
         info.VAlign = s.FontVerticalAlignment.ToString();
         info.TextColor = PackColor(s.TextColor);
         info.BackColor = PackColor(s.BackgroundColor);
+        info.BorderTop = BorderWeight(s.BorderTopLineStyle);
+        info.BorderBottom = BorderWeight(s.BorderBottomLineStyle);
+        info.BorderLeft = BorderWeight(s.BorderLeftLineStyle);
+        info.BorderRight = BorderWeight(s.BorderRightLineStyle);
         return info;
+    }
+
+    /// <summary>Maps a border line-style id to a coarse weight: 0=none, 1=thin, 2=medium, 3=thick.</summary>
+    private int BorderWeight(ElementId lineStyleId)
+    {
+        if (lineStyleId == null || lineStyleId.Value == -1) return 0; // -1 = no border
+        if (lineStyleId.Value < 0) return 1;                          // built-in grid line -> thin
+        try
+        {
+            var cat = (_doc.GetElement(lineStyleId) as GraphicsStyle)?.GraphicsStyleCategory;
+            int? w = cat?.GetLineWeight(GraphicsStyleType.Projection);
+            if (w == null) return 1;
+            return w <= 3 ? 1 : (w <= 6 ? 2 : 3);
+        }
+        catch { return 1; }
     }
 
     private static int PackColor(Color c)

@@ -95,7 +95,7 @@ public sealed partial class TransomViewModel : ObservableObject
 
         var dlg = new SaveFileDialog
         {
-            Filter = "Excel Workbook (*.xlsx)|*.xlsx",
+            Filter = "Excel Workbook (*.xlsx)|*.xlsx|Excel 97-2003 (*.xls)|*.xls|CSV — display only (*.csv)|*.csv",
             FileName = SelectedSchedule.Name + ".xlsx",
         };
         if (dlg.ShowDialog() != true) return;
