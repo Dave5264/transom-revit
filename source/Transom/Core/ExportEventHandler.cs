@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using Autodesk.Revit.DB;
 using Autodesk.Revit.UI;
@@ -7,14 +8,18 @@ using Autodesk.Revit.UI;
 namespace Transom.Core;
 
 /// <summary>
-///     Runs the export inside Revit's API context, raised from the modeless dialog via an
-///     <see cref="ExternalEvent"/>. Reads each selected schedule and writes one workbook (a sheet each).
+///     Runs the export inside Revit's API context. Reads each selected schedule and writes one workbook
+///     (a sheet each). When Claude-assist staging is on, writes to the exchange folder + a run-log and
+///     reports the staged path for a later Finalize.
 /// </summary>
 public sealed class ExportEventHandler : IExternalEventHandler
 {
     public List<long> ScheduleIds = new();
     public string OutputPath = "";
+    public bool Stage;
+    public string ExchangeFolder = "";
     public Action<string> ReportStatus = _ => { };
+    public Action<string> OnStaged = _ => { };
 
     public void Execute(UIApplication app)
     {
@@ -33,9 +38,22 @@ public sealed class ExportEventHandler : IExternalEventHandler
                 return;
             }
 
-            new ExcelWriter().WriteMany(tables, OutputPath);
             int elems = tables.Sum(t => t.ElementRowCount);
-            ReportStatus($"Exported {tables.Count} schedule(s) ({elems} element rows) to {OutputPath}");
+
+            if (Stage && !string.IsNullOrWhiteSpace(ExchangeFolder))
+            {
+                Directory.CreateDirectory(ExchangeFolder);
+                var staged = Path.Combine(ExchangeFolder, Path.GetFileName(OutputPath));
+                new ExcelWriter().WriteMany(tables, staged);
+                RunLog.WriteExport(ExchangeFolder, tables, staged);
+                OnStaged(staged);
+                ReportStatus($"Staged {tables.Count} schedule(s) to the exchange folder. Verify with Claude, then Finalize.");
+            }
+            else
+            {
+                new ExcelWriter().WriteMany(tables, OutputPath);
+                ReportStatus($"Exported {tables.Count} schedule(s) ({elems} element rows) to {OutputPath}");
+            }
         }
         catch (Exception ex)
         {

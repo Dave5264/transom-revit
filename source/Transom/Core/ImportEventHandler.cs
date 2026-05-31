@@ -14,6 +14,8 @@ public sealed class ImportEventHandler : IExternalEventHandler
     public Mode RequestedMode = Mode.Preview;
     public string WorkbookPath = "";
     public ChangeSet? PendingChangeSet;
+    public bool WriteRunLog;
+    public string ExchangeFolder = "";
 
     public Action<ChangeSet> OnPreview = _ => { };
     public Action<string> OnApplied = _ => { };
@@ -28,6 +30,7 @@ public sealed class ImportEventHandler : IExternalEventHandler
             {
                 var wb = new ExcelReader().Read(WorkbookPath);
                 var cs = new Importer().BuildChangeSet(doc, wb);
+                if (WriteRunLog) RunLog.WriteImport(ExchangeFolder, WorkbookPath, cs);
                 OnPreview(cs);
             }
             else

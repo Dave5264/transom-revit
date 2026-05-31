@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.IO;
 using System.Linq;
+using System.Threading.Tasks;
 using System.Windows.Threading;
 using Autodesk.Revit.DB;
 using Autodesk.Revit.UI;
@@ -40,7 +42,10 @@ public sealed partial class TransomViewModel : ObservableObject
     private readonly Dispatcher _ui = Dispatcher.CurrentDispatcher;
     private readonly DispatcherTimer _copyResetTimer;
     private readonly List<ScheduleEntry> _allOther; // non-active schedules
+    private readonly TransomSettings _settings;
     private ChangeSet? _lastChangeSet;
+    private string _stagedPath = "";
+    private string _finalDestination = "";
 
     [ObservableProperty] private string _status = "Pick schedules and export.";
     [ObservableProperty] private bool _copied;
@@ -49,6 +54,14 @@ public sealed partial class TransomViewModel : ObservableObject
 
     [ObservableProperty] private string _workbookPath = "";
     [ObservableProperty] private string _importStatus = "Choose a Transom workbook to import.";
+
+    [ObservableProperty] private bool _claudeAvailable;
+    [ObservableProperty] private bool _claudeAssistExport;
+    [ObservableProperty] private bool _claudeAssistImport;
+    [ObservableProperty] private bool _canFinalize;
+    [ObservableProperty] private int _bridgePort = 48884;
+    [ObservableProperty] private string _exchangeFolder = "";
+    [ObservableProperty] private string _bridgeStatus = "Checking bridge…";
 
     public TransomViewModel(Document doc, ViewSchedule? active,
         ExternalEvent exportEvent, ExportEventHandler exportHandler,
@@ -69,6 +82,12 @@ public sealed partial class TransomViewModel : ObservableObject
             _lastChangeSet = null;
         });
         _importHandler.OnError = s => _ui.Invoke(() => ImportStatus = "Error: " + s);
+
+        _settings = TransomSettings.Load();
+        BridgePort = _settings.BridgePort;
+        ExchangeFolder = _settings.ExchangeFolder;
+        _exportHandler.OnStaged = p => _ui.Invoke(() => { _stagedPath = p; CanFinalize = true; });
+        _ = RefreshBridgeAsync();
 
         _copyResetTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1.4) };
         _copyResetTimer.Tick += (_, _) => { Copied = false; _copyResetTimer.Stop(); };
@@ -144,9 +163,14 @@ public sealed partial class TransomViewModel : ObservableObject
         };
         if (dlg.ShowDialog() != true) return;
 
+        bool stage = ClaudeAssistExport && ClaudeAvailable && !string.IsNullOrWhiteSpace(ExchangeFolder);
         _exportHandler.ScheduleIds = ids;
         _exportHandler.OutputPath = dlg.FileName;
-        Status = $"Exporting {ids.Count} schedule(s)…";
+        _exportHandler.Stage = stage;
+        _exportHandler.ExchangeFolder = ExchangeFolder;
+        _finalDestination = dlg.FileName;
+        CanFinalize = false;
+        Status = stage ? $"Staging {ids.Count} schedule(s)…" : $"Exporting {ids.Count} schedule(s)…";
         _exportEvent.Raise();
     }
 
@@ -187,6 +211,8 @@ public sealed partial class TransomViewModel : ObservableObject
         }
         _importHandler.RequestedMode = ImportEventHandler.Mode.Preview;
         _importHandler.WorkbookPath = WorkbookPath;
+        _importHandler.WriteRunLog = ClaudeAssistImport && ClaudeAvailable;
+        _importHandler.ExchangeFolder = ExchangeFolder;
         ImportStatus = "Analyzing…";
         _importEvent.Raise();
     }
@@ -236,5 +262,61 @@ public sealed partial class TransomViewModel : ObservableObject
 
         ImportStatus = $"{cs.Changes.Count} change(s), {cs.Skipped.Count} skipped"
                        + (cs.CrossModel ? "  — ⚠ different source model" : "");
+    }
+
+    // --- Claude-assist ---
+
+    [RelayCommand]
+    private async Task RefreshBridge() => await RefreshBridgeAsync();
+
+    private async Task RefreshBridgeAsync()
+    {
+        BridgeStatus = "Checking bridge…";
+        var ok = await BridgeProbe.IsAvailableAsync(BridgePort);
+        _ui.Invoke(() =>
+        {
+            ClaudeAvailable = ok;
+            BridgeStatus = ok
+                ? $"Claude bridge: available (port {BridgePort})"
+                : $"Claude bridge: offline (port {BridgePort})";
+            if (!ok) { ClaudeAssistExport = false; ClaudeAssistImport = false; }
+        });
+    }
+
+    [RelayCommand]
+    private void FinalizeExport()
+    {
+        if (string.IsNullOrEmpty(_stagedPath) || string.IsNullOrEmpty(_finalDestination)) return;
+        try
+        {
+            File.Copy(_stagedPath, _finalDestination, true);
+            Status = $"Finalized to {_finalDestination}";
+            CanFinalize = false;
+            _stagedPath = "";
+        }
+        catch (Exception ex)
+        {
+            Status = "Finalize failed: " + ex.Message;
+        }
+    }
+
+    [RelayCommand]
+    private void ChooseExchangeFolder()
+    {
+        var dlg = new OpenFolderDialog();
+        if (dlg.ShowDialog() == true) ExchangeFolder = dlg.FolderName;
+    }
+
+    partial void OnBridgePortChanged(int value)
+    {
+        _settings.BridgePort = value;
+        _settings.Save();
+        _ = RefreshBridgeAsync();
+    }
+
+    partial void OnExchangeFolderChanged(string value)
+    {
+        _settings.ExchangeFolder = value;
+        _settings.Save();
     }
 }
