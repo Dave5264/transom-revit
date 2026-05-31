@@ -1,5 +1,6 @@
 using System.Windows.Interop;
 using Autodesk.Revit.Attributes;
+using Autodesk.Revit.DB;
 using Nice3point.Revit.Toolkit.External;
 using Transom.ViewModels;
 using Transom.Views;
@@ -15,7 +16,9 @@ public class StartupCommand : ExternalCommand
 {
     public override void Execute()
     {
-        var viewModel = new TransomViewModel();
+        var uiDoc = Application.ActiveUIDocument;
+        var active = uiDoc.ActiveView as ViewSchedule;
+        var viewModel = new TransomViewModel(uiDoc.Document, active);
         var view = new TransomView(viewModel);
         new WindowInteropHelper(view) { Owner = Application.MainWindowHandle };
         view.ShowDialog();
