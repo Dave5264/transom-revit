@@ -54,7 +54,8 @@ public sealed partial class TransomViewModel : ObservableObject
         _importHandler.OnApplied = s => _ui.Invoke(() =>
         {
             ImportStatus = s;
-            ChangeLines.Clear();
+            Changes.Clear();
+            Skipped.Clear();
             _lastChangeSet = null;
         });
         _importHandler.OnError = s => _ui.Invoke(() => ImportStatus = "Error: " + s);
@@ -80,7 +81,8 @@ public sealed partial class TransomViewModel : ObservableObject
     }
 
     public List<ScheduleEntry> Schedules { get; }
-    public ObservableCollection<string> ChangeLines { get; } = new();
+    public ObservableCollection<ProposedChange> Changes { get; } = new();
+    public ObservableCollection<SkippedItem> Skipped { get; } = new();
 
     // --- Export ---
 
@@ -124,11 +126,12 @@ public sealed partial class TransomViewModel : ObservableObject
     [RelayCommand]
     private void ChooseWorkbook()
     {
-        var dlg = new OpenFileDialog { Filter = "Excel Workbook (*.xlsx)|*.xlsx" };
+        var dlg = new OpenFileDialog { Filter = "Transom Workbook (*.xlsx;*.xls)|*.xlsx;*.xls" };
         if (dlg.ShowDialog() != true) return;
         WorkbookPath = dlg.FileName;
         ImportStatus = "Ready — click Preview.";
-        ChangeLines.Clear();
+        Changes.Clear();
+        Skipped.Clear();
         _lastChangeSet = null;
     }
 
@@ -149,26 +152,45 @@ public sealed partial class TransomViewModel : ObservableObject
     [RelayCommand]
     private void Apply()
     {
-        if (_lastChangeSet == null || _lastChangeSet.Changes.Count == 0)
+        var selected = Changes.Where(c => c.Selected).ToList();
+        if (selected.Count == 0)
         {
-            ImportStatus = "Nothing to apply — preview first.";
+            ImportStatus = "Nothing selected to apply.";
             return;
         }
+        var toApply = new ChangeSet
+        {
+            ScheduleName = _lastChangeSet?.ScheduleName ?? "",
+            Skipped = _lastChangeSet?.Skipped ?? new System.Collections.Generic.List<SkippedItem>(),
+        };
+        toApply.Changes.AddRange(selected);
+
         _importHandler.RequestedMode = ImportEventHandler.Mode.Apply;
-        _importHandler.PendingChangeSet = _lastChangeSet;
-        ImportStatus = "Applying…";
+        _importHandler.PendingChangeSet = toApply;
+        ImportStatus = $"Applying {selected.Count} selected change(s)…";
         _importEvent.Raise();
+    }
+
+    [RelayCommand]
+    private void SelectAll() { foreach (var c in Changes) c.Selected = true; RefreshChanges(); }
+
+    [RelayCommand]
+    private void SelectNone() { foreach (var c in Changes) c.Selected = false; RefreshChanges(); }
+
+    private void RefreshChanges()
+    {
+        var snapshot = Changes.ToList();
+        Changes.Clear();
+        foreach (var c in snapshot) Changes.Add(c);
     }
 
     private void ShowPreview(ChangeSet cs)
     {
         _lastChangeSet = cs;
-        ChangeLines.Clear();
-        foreach (var c in cs.Changes)
-            ChangeLines.Add($"{c.ElementName} · {c.Field}: '{c.OldValue}' → '{c.NewValue}'"
-                            + (c.Binding == "type" ? $"  (type · {c.InstancesAffected} inst)" : ""));
-        foreach (var s in cs.Skipped)
-            ChangeLines.Add($"skip [{s.Reason}] {s.Detail}");
+        Changes.Clear();
+        Skipped.Clear();
+        foreach (var c in cs.Changes) Changes.Add(c);
+        foreach (var s in cs.Skipped) Skipped.Add(s);
 
         ImportStatus = $"{cs.Changes.Count} change(s), {cs.Skipped.Count} skipped"
                        + (cs.CrossModel ? "  — ⚠ different source model" : "");

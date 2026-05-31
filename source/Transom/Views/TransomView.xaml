@@ -111,29 +111,59 @@
                                     Command="{Binding ChooseWorkbookCommand}" />
                         </Grid>
 
-                        <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,10">
-                            <Button Content="Preview changes" Height="32" Padding="12,0"
-                                    Command="{Binding PreviewCommand}" />
-                            <Button Content="Apply" Height="32" Padding="16,0" Margin="8,0,0,0"
-                                    Background="#185FA5" Foreground="White" BorderThickness="0"
-                                    Command="{Binding ApplyCommand}" />
-                        </StackPanel>
+                        <Grid DockPanel.Dock="Top" Margin="0,0,0,10">
+                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Left">
+                                <Button Content="Preview changes" Height="32" Padding="12,0" Command="{Binding PreviewCommand}" />
+                                <Button Content="Apply selected" Height="32" Padding="16,0" Margin="8,0,0,0"
+                                        Background="#185FA5" Foreground="White" BorderThickness="0" Command="{Binding ApplyCommand}" />
+                            </StackPanel>
+                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                                <Button Content="All" Height="32" Padding="12,0" Command="{Binding SelectAllCommand}" />
+                                <Button Content="None" Height="32" Padding="12,0" Margin="6,0,0,0" Command="{Binding SelectNoneCommand}" />
+                            </StackPanel>
+                        </Grid>
 
                         <Border DockPanel.Dock="Bottom" Background="#E6F1FB" BorderBrush="#85B7EB" BorderThickness="1"
                                 CornerRadius="6" Padding="10" Margin="0,8,0,0">
                             <TextBlock Text="{Binding ImportStatus}" Foreground="#185FA5" TextWrapping="Wrap" FontSize="12" />
                         </Border>
 
-                        <Border BorderBrush="#E3E1D9" BorderThickness="1" CornerRadius="6">
-                            <ListBox ItemsSource="{Binding ChangeLines}" BorderThickness="0" FontSize="11.5"
-                                     ScrollViewer.HorizontalScrollBarVisibility="Disabled">
-                                <ListBox.ItemContainerStyle>
-                                    <Style TargetType="ListBoxItem">
-                                        <Setter Property="Padding" Value="6,3" />
-                                    </Style>
-                                </ListBox.ItemContainerStyle>
+                        <Border DockPanel.Dock="Bottom" BorderBrush="#F0D6A8" BorderThickness="1" CornerRadius="6"
+                                Background="#FBF3E4" Margin="0,8,0,0" MaxHeight="84">
+                            <Border.Style>
+                                <Style TargetType="Border">
+                                    <Setter Property="Visibility" Value="Visible" />
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding Skipped.Count}" Value="0">
+                                            <Setter Property="Visibility" Value="Collapsed" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Border.Style>
+                            <ListBox ItemsSource="{Binding Skipped}" BorderThickness="0" Background="Transparent" FontSize="11">
+                                <ListBox.ItemTemplate>
+                                    <DataTemplate>
+                                        <TextBlock Foreground="#854F0B" TextWrapping="Wrap">
+                                            <Run Text="skip [" /><Run Text="{Binding Reason}" /><Run Text="] " /><Run Text="{Binding Detail}" />
+                                        </TextBlock>
+                                    </DataTemplate>
+                                </ListBox.ItemTemplate>
                             </ListBox>
                         </Border>
+
+                        <DataGrid ItemsSource="{Binding Changes}" AutoGenerateColumns="False" CanUserAddRows="False"
+                                  HeadersVisibility="Column" GridLinesVisibility="Horizontal" BorderBrush="#E3E1D9"
+                                  BorderThickness="1" FontSize="11.5" RowHeight="24" ColumnHeaderHeight="26"
+                                  Background="White" RowBackground="White" AlternatingRowBackground="#F7F9FC">
+                            <DataGrid.Columns>
+                                <DataGridCheckBoxColumn Binding="{Binding Selected, UpdateSourceTrigger=PropertyChanged}" Width="30" />
+                                <DataGridTextColumn Header="Element" Binding="{Binding ElementName}" Width="*" IsReadOnly="True" />
+                                <DataGridTextColumn Header="Field" Binding="{Binding Field}" Width="Auto" IsReadOnly="True" />
+                                <DataGridTextColumn Header="Old" Binding="{Binding OldValue}" Width="Auto" IsReadOnly="True" />
+                                <DataGridTextColumn Header="New" Binding="{Binding NewValue}" Width="Auto" IsReadOnly="True" />
+                                <DataGridTextColumn Header="Scope" Binding="{Binding Scope}" Width="Auto" IsReadOnly="True" />
+                            </DataGrid.Columns>
+                        </DataGrid>
                     </DockPanel>
                 </Border>
             </TabItem>

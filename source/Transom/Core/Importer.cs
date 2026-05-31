@@ -11,11 +11,15 @@ public sealed class ProposedChange
     public long TypeId;            // type writes (0 = instance)
     public int ParameterId;
     public string Binding = "instance";
-    public string ElementName = "";
-    public string Field = "";
-    public string OldValue = "";
-    public string NewValue = "";
-    public int InstancesAffected = 1;
+
+    // Bound in the preview grid -> must be properties.
+    public bool Selected { get; set; } = true;
+    public string ElementName { get; set; } = "";
+    public string Field { get; set; } = "";
+    public string OldValue { get; set; } = "";
+    public string NewValue { get; set; } = "";
+    public int InstancesAffected { get; set; } = 1;
+    public string Scope => Binding == "type" ? $"type · {InstancesAffected} inst" : "instance";
 
     public bool IsString;
     public string NewString = "";
@@ -24,8 +28,8 @@ public sealed class ProposedChange
 
 public sealed class SkippedItem
 {
-    public string Reason = "";   // unparseable | conflict | unmatched | notRoundtrippable
-    public string Detail = "";
+    public string Reason { get; set; } = "";   // unparseable | conflict | unmatched | notRoundtrippable
+    public string Detail { get; set; } = "";
 }
 
 public sealed class ChangeSet
