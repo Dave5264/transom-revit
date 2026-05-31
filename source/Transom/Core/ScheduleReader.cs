@@ -26,7 +26,8 @@ public sealed class ScheduleReader
             ScheduleUniqueId = vs.UniqueId,
             SourceModelGuid = _doc.CreationGUID.ToString(),
             SourceModelTitle = _doc.Title,
-            RoundTrippable = def.IsItemized, // TODO: also gate key/material-takeoff/embedded/linked
+            // Round-trippable only where each visible row maps to one writable element.
+            RoundTrippable = def.IsItemized && !def.IsMaterialTakeoff,
         };
 
         var sec = vs.GetTableData().GetSectionData(SectionType.Body);

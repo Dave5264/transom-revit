@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using Autodesk.Revit.DB;
 using Autodesk.Revit.UI;
 
@@ -6,17 +8,12 @@ namespace Transom.Core;
 
 /// <summary>
 ///     Runs the export inside Revit's API context, raised from the modeless dialog via an
-///     <see cref="ExternalEvent"/>. The dialog stays open (Revit's main thread is free, so the
-///     MCP bridge and Revit UI keep responding); model work is marshalled here.
+///     <see cref="ExternalEvent"/>. Reads each selected schedule and writes one workbook (a sheet each).
 /// </summary>
 public sealed class ExportEventHandler : IExternalEventHandler
 {
-    /// <summary>ElementId value of the schedule to export (re-fetched in API context).</summary>
-    public long ScheduleId;
-
+    public List<long> ScheduleIds = new();
     public string OutputPath = "";
-
-    /// <summary>Reports a status line back to the UI (the view-model marshals it to the UI thread).</summary>
     public Action<string> ReportStatus = _ => { };
 
     public void Execute(UIApplication app)
@@ -24,16 +21,21 @@ public sealed class ExportEventHandler : IExternalEventHandler
         try
         {
             var doc = app.ActiveUIDocument.Document;
-            if (doc.GetElement(new ElementId(ScheduleId)) is not ViewSchedule vs)
+            var reader = new ScheduleReader(doc);
+            var tables = new List<ScheduleTable>();
+            foreach (var id in ScheduleIds.Distinct())
+                if (doc.GetElement(new ElementId(id)) is ViewSchedule vs)
+                    tables.Add(reader.Read(vs));
+
+            if (tables.Count == 0)
             {
-                ReportStatus("Export failed: schedule not found.");
+                ReportStatus("Export failed: no schedules found.");
                 return;
             }
 
-            var table = new ScheduleReader(doc).Read(vs);
-            new ExcelWriter().Write(table, OutputPath);
-            ReportStatus($"Exported {table.ElementRowCount} element rows " +
-                         $"({table.RowCount} rows x {table.ColCount} cols) to {OutputPath}");
+            new ExcelWriter().WriteMany(tables, OutputPath);
+            int elems = tables.Sum(t => t.ElementRowCount);
+            ReportStatus($"Exported {tables.Count} schedule(s) ({elems} element rows) to {OutputPath}");
         }
         catch (Exception ex)
         {

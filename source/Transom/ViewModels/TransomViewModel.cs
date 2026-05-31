@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Linq;
@@ -11,16 +12,23 @@ using Transom.Core;
 
 namespace Transom.ViewModels;
 
-public sealed class ScheduleEntry
+public sealed partial class ScheduleEntry : ObservableObject
 {
-    public ScheduleEntry(ViewSchedule vs)
+    public ScheduleEntry(ViewSchedule vs, bool isActive)
     {
         Id = vs.Id.Value;
         Name = vs.Name;
+        IsActive = isActive;
     }
 
     public long Id { get; }
     public string Name { get; }
+    public bool IsActive { get; }
+    public Action? CheckedChanged;
+
+    [ObservableProperty] private bool _isChecked;
+
+    partial void OnIsCheckedChanged(bool value) => CheckedChanged?.Invoke();
 }
 
 public sealed partial class TransomViewModel : ObservableObject
@@ -31,11 +39,13 @@ public sealed partial class TransomViewModel : ObservableObject
     private readonly ImportEventHandler _importHandler;
     private readonly Dispatcher _ui = Dispatcher.CurrentDispatcher;
     private readonly DispatcherTimer _copyResetTimer;
+    private readonly List<ScheduleEntry> _allOther; // non-active schedules
     private ChangeSet? _lastChangeSet;
 
-    [ObservableProperty] private ScheduleEntry? _selectedSchedule;
-    [ObservableProperty] private string _status = "Pick a schedule and export.";
+    [ObservableProperty] private string _status = "Pick schedules and export.";
     [ObservableProperty] private bool _copied;
+    [ObservableProperty] private string _scheduleFilter = "";
+    [ObservableProperty] private string _selectionInfo = "";
 
     [ObservableProperty] private string _workbookPath = "";
     [ObservableProperty] private string _importStatus = "Choose a Transom workbook to import.";
@@ -60,51 +70,83 @@ public sealed partial class TransomViewModel : ObservableObject
         });
         _importHandler.OnError = s => _ui.Invoke(() => ImportStatus = "Error: " + s);
 
-        _copyResetTimer = new DispatcherTimer { Interval = System.TimeSpan.FromSeconds(1.4) };
-        _copyResetTimer.Tick += (_, _) =>
-        {
-            Copied = false;
-            _copyResetTimer.Stop();
-        };
+        _copyResetTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1.4) };
+        _copyResetTimer.Tick += (_, _) => { Copied = false; _copyResetTimer.Stop(); };
 
-        Schedules = new FilteredElementCollector(doc)
+        var schedules = new FilteredElementCollector(doc)
             .OfClass(typeof(ViewSchedule))
             .Cast<ViewSchedule>()
             .Where(v => !v.IsTemplate && !v.IsTitleblockRevisionSchedule)
             .OrderBy(v => v.Name)
-            .Select(v => new ScheduleEntry(v))
             .ToList();
 
-        SelectedSchedule = active != null
-            ? Schedules.FirstOrDefault(e => e.Id == active.Id.Value) ?? Schedules.FirstOrDefault()
-            : Schedules.FirstOrDefault();
+        ActiveSchedule = active != null ? new ScheduleEntry(active, true) : null;
+        _allOther = schedules
+            .Where(v => active == null || v.Id.Value != active.Id.Value)
+            .Select(v => new ScheduleEntry(v, false))
+            .ToList();
+        foreach (var e in _allOther) e.CheckedChanged = UpdateSelectionInfo;
+
+        ApplyFilter();
+        UpdateSelectionInfo();
     }
 
-    public List<ScheduleEntry> Schedules { get; }
+    public ScheduleEntry? ActiveSchedule { get; }
+    public bool HasActive => ActiveSchedule != null;
+    public ObservableCollection<ScheduleEntry> FilteredSchedules { get; } = new();
     public ObservableCollection<ProposedChange> Changes { get; } = new();
     public ObservableCollection<SkippedItem> Skipped { get; } = new();
 
     // --- Export ---
 
+    partial void OnScheduleFilterChanged(string value) => ApplyFilter();
+
+    private void ApplyFilter()
+    {
+        FilteredSchedules.Clear();
+        foreach (var e in _allOther)
+            if (string.IsNullOrEmpty(ScheduleFilter) ||
+                e.Name.Contains(ScheduleFilter, StringComparison.OrdinalIgnoreCase))
+                FilteredSchedules.Add(e);
+    }
+
+    private void UpdateSelectionInfo()
+    {
+        int total = _allOther.Count + (HasActive ? 1 : 0);
+        int sel = _allOther.Count(e => e.IsChecked) + (HasActive ? 1 : 0);
+        SelectionInfo = $"{sel} of {total} selected";
+    }
+
+    [RelayCommand]
+    private void SelectAllSchedules()
+    {
+        foreach (var e in FilteredSchedules) e.IsChecked = true;
+    }
+
     [RelayCommand]
     private void Export()
     {
-        if (SelectedSchedule == null)
+        var ids = new List<long>();
+        if (ActiveSchedule != null) ids.Add(ActiveSchedule.Id);
+        ids.AddRange(_allOther.Where(e => e.IsChecked).Select(e => e.Id));
+        if (ids.Count == 0)
         {
-            Status = "No schedule selected.";
+            Status = "Select at least one schedule.";
             return;
         }
 
+        var defaultName = ActiveSchedule?.Name
+                          ?? _allOther.First(e => e.IsChecked).Name;
         var dlg = new SaveFileDialog
         {
             Filter = "Excel Workbook (*.xlsx)|*.xlsx|Excel 97-2003 (*.xls)|*.xls|CSV — display only (*.csv)|*.csv",
-            FileName = SelectedSchedule.Name + ".xlsx",
+            FileName = defaultName + ".xlsx",
         };
         if (dlg.ShowDialog() != true) return;
 
-        _exportHandler.ScheduleId = SelectedSchedule.Id;
+        _exportHandler.ScheduleIds = ids;
         _exportHandler.OutputPath = dlg.FileName;
-        Status = "Exporting…";
+        Status = $"Exporting {ids.Count} schedule(s)…";
         _exportEvent.Raise();
     }
 
@@ -161,7 +203,7 @@ public sealed partial class TransomViewModel : ObservableObject
         var toApply = new ChangeSet
         {
             ScheduleName = _lastChangeSet?.ScheduleName ?? "",
-            Skipped = _lastChangeSet?.Skipped ?? new System.Collections.Generic.List<SkippedItem>(),
+            Skipped = _lastChangeSet?.Skipped ?? new List<SkippedItem>(),
         };
         toApply.Changes.AddRange(selected);
 

@@ -11,25 +11,44 @@ using NPOI.XSSF.UserModel;
 namespace Transom.Core;
 
 /// <summary>
-///     Writes a <see cref="ScheduleTable"/> to .xlsx (XSSF), legacy .xls (HSSF), or .csv (display-only).
-///     Reproduces fonts, colors, alignment, per-side borders, merges, and fitted column widths, plus a
-///     hidden sentinel-headed UniqueId anchor column and a hidden cowork_meta sheet (xlsx/xls only).
+///     Writes one or more <see cref="ScheduleTable"/>s to .xlsx (XSSF), legacy .xls (HSSF), or .csv.
+///     Each schedule becomes its own worksheet (xlsx/xls); CSV gets one file per schedule. Reproduces
+///     fonts, colors, alignment, per-side borders, merges, and fitted widths, plus a hidden
+///     sentinel-headed UniqueId anchor column and a hidden cowork_meta sheet (xlsx/xls only).
 /// </summary>
 public sealed class ExcelWriter
 {
-    private const int HssfStyleCap = 4000; // .xls hard limit on distinct cell styles
+    private const int HssfStyleCap = 4000;
 
-    public void Write(ScheduleTable table, string path)
+    public void Write(ScheduleTable table, string path) => WriteMany(new List<ScheduleTable> { table }, path);
+
+    public void WriteMany(List<ScheduleTable> tables, string path)
     {
         var ext = Path.GetExtension(path).ToLowerInvariant();
-        if (ext == ".csv") { WriteCsv(table, path); return; }
-        WriteWorkbook(table, path, xls: ext == ".xls");
+        if (ext == ".csv") { WriteCsvMany(tables, path); return; }
+
+        bool xls = ext == ".xls";
+        IWorkbook wb = xls ? new HSSFWorkbook() : new XSSFWorkbook();
+        var used = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var pairs = new List<(ScheduleTable t, string name)>();
+
+        foreach (var table in tables)
+        {
+            var name = UniqueName(SafeSheetName(table.ScheduleName), used);
+            WriteSheet(wb, wb.CreateSheet(name), table, xls);
+            pairs.Add((table, name));
+        }
+
+        var meta = wb.CreateSheet("cowork_meta");
+        meta.CreateRow(0).CreateCell(0).SetCellValue(BuildMetaJson(pairs));
+        wb.SetSheetHidden(wb.GetSheetIndex(meta), SheetState.VeryHidden);
+
+        using var fs = File.Create(path);
+        wb.Write(fs);
     }
 
-    private static void WriteWorkbook(ScheduleTable table, string path, bool xls)
+    private static void WriteSheet(IWorkbook wb, ISheet sheet, ScheduleTable table, bool xls)
     {
-        IWorkbook wb = xls ? new HSSFWorkbook() : new XSSFWorkbook();
-        var sheet = wb.CreateSheet(SafeSheetName(table.ScheduleName));
         var cache = new Dictionary<string, ICellStyle>();
         int anchorCol = table.ColCount;
 
@@ -54,7 +73,6 @@ public sealed class ExcelWriter
         foreach (var m in table.Merges)
             sheet.AddMergedRegion(new CellRangeAddress(m.Top, m.Bottom, m.Left, m.Right));
 
-        // Size columns to fit their text at Excel's normal scale (Revit's paper widths are tiny).
         for (int c = 0; c < table.ColCount; c++)
         {
             int w;
@@ -74,13 +92,6 @@ public sealed class ExcelWriter
         }
 
         sheet.SetColumnHidden(anchorCol, true);
-
-        var meta = wb.CreateSheet("cowork_meta");
-        meta.CreateRow(0).CreateCell(0).SetCellValue(BuildMetaJson(table));
-        wb.SetSheetHidden(wb.GetSheetIndex(meta), SheetState.VeryHidden);
-
-        using var fs = File.Create(path);
-        wb.Write(fs);
     }
 
     // --- styling -----------------------------------------------------------
@@ -144,7 +155,7 @@ public sealed class ExcelWriter
 
     private static void ApplyFill(IWorkbook wb, ICellStyle style, int packed)
     {
-        if (packed < 0 || packed == 0xFFFFFF) return; // skip white / none
+        if (packed < 0 || packed == 0xFFFFFF) return;
         byte r = (byte)((packed >> 16) & 0xFF), g = (byte)((packed >> 8) & 0xFF), b = (byte)(packed & 0xFF);
         if (wb is XSSFWorkbook)
         {
@@ -186,7 +197,32 @@ public sealed class ExcelWriter
         return string.IsNullOrEmpty(s) ? "Schedule" : s;
     }
 
+    private static string UniqueName(string baseName, HashSet<string> used)
+    {
+        var name = baseName;
+        int i = 2;
+        while (!used.Add(name))
+        {
+            var suffix = " (" + i++ + ")";
+            name = baseName.Length + suffix.Length > 31
+                ? baseName.Substring(0, 31 - suffix.Length) + suffix
+                : baseName + suffix;
+        }
+        return name;
+    }
+
     // --- CSV (display-only, not round-trippable) ---------------------------
+
+    private static void WriteCsvMany(List<ScheduleTable> tables, string path)
+    {
+        if (tables.Count == 1) { WriteCsv(tables[0], path); return; }
+
+        // CSV can't hold multiple sheets -> one file per schedule.
+        var dir = Path.GetDirectoryName(path) ?? ".";
+        var baseName = Path.GetFileNameWithoutExtension(path);
+        foreach (var t in tables)
+            WriteCsv(t, Path.Combine(dir, $"{baseName}_{SafeFileName(t.ScheduleName)}.csv"));
+    }
 
     private static void WriteCsv(ScheduleTable table, string path)
     {
@@ -207,36 +243,41 @@ public sealed class ExcelWriter
         return "\"" + v.Replace("\"", "\"\"") + "\"";
     }
 
+    private static string SafeFileName(string name)
+    {
+        foreach (var ch in Path.GetInvalidFileNameChars())
+            name = name.Replace(ch, '_');
+        return name;
+    }
+
     // --- cowork_meta -------------------------------------------------------
 
-    private static string BuildMetaJson(ScheduleTable t)
+    private static string BuildMetaJson(List<(ScheduleTable t, string name)> pairs)
     {
+        var first = pairs.Count > 0 ? pairs[0].t : new ScheduleTable();
         var meta = new
         {
             tool = "Transom",
             version = 1,
             anchorSentinel = ScheduleReader.AnchorSentinel,
-            sourceModel = new { guid = t.SourceModelGuid, title = t.SourceModelTitle },
-            sheets = new[]
+            sourceModel = new { guid = first.SourceModelGuid, title = first.SourceModelTitle },
+            sheets = pairs.Select(p => new
             {
-                new
+                sheetName = p.name,
+                scheduleUniqueId = p.t.ScheduleUniqueId,
+                scheduleName = p.t.ScheduleName,
+                roundTrippable = p.t.RoundTrippable,
+                anchorColumnHeader = ScheduleReader.AnchorSentinel,
+                columns = p.t.Columns.Select(c => new
                 {
-                    sheetName = t.ScheduleName,
-                    scheduleUniqueId = t.ScheduleUniqueId,
-                    scheduleName = t.ScheduleName,
-                    roundTrippable = t.RoundTrippable,
-                    anchorColumnHeader = ScheduleReader.AnchorSentinel,
-                    columns = t.Columns.Select(c => new
-                    {
-                        col = c.Col, fieldName = c.FieldName, parameterId = c.ParameterId,
-                        binding = c.Binding, writable = c.Writable, specTypeId = c.SpecTypeId,
-                    }).ToArray(),
-                    rows = t.Rows.Select(r => new
-                    {
-                        excelRow = r.ExcelRow, uniqueId = r.UniqueId, kind = r.Kind,
-                    }).ToArray(),
-                },
-            },
+                    col = c.Col, fieldName = c.FieldName, parameterId = c.ParameterId,
+                    binding = c.Binding, writable = c.Writable, specTypeId = c.SpecTypeId,
+                }).ToArray(),
+                rows = p.t.Rows.Select(r => new
+                {
+                    excelRow = r.ExcelRow, uniqueId = r.UniqueId, kind = r.Kind,
+                }).ToArray(),
+            }).ToArray(),
         };
         return System.Text.Json.JsonSerializer.Serialize(meta);
     }
