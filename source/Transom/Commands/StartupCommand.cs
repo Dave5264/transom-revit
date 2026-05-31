@@ -29,10 +29,13 @@ public class StartupCommand : ExternalCommand
         var uiDoc = Application.ActiveUIDocument;
         var active = uiDoc.ActiveView as ViewSchedule;
 
-        var handler = new ExportEventHandler();
-        var exportEvent = Autodesk.Revit.UI.ExternalEvent.Create(handler);
+        var exportHandler = new ExportEventHandler();
+        var exportEvent = Autodesk.Revit.UI.ExternalEvent.Create(exportHandler);
+        var importHandler = new ImportEventHandler();
+        var importEvent = Autodesk.Revit.UI.ExternalEvent.Create(importHandler);
 
-        var viewModel = new TransomViewModel(uiDoc.Document, active, exportEvent, handler);
+        var viewModel = new TransomViewModel(uiDoc.Document, active,
+            exportEvent, exportHandler, importEvent, importHandler);
         var view = new TransomView(viewModel);
         new WindowInteropHelper(view) { Owner = Application.MainWindowHandle };
         view.Show();
