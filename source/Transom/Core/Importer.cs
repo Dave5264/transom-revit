@@ -32,12 +32,38 @@ public sealed class SkippedItem
     public string Detail { get; set; } = "";
 }
 
+/// <summary>One candidate value for a type-parameter conflict (pre-parsed in API context).</summary>
+public sealed class ConflictOption
+{
+    public string Display = "";
+    public bool IsString;
+    public string NewString = "";
+    public double NewDouble;
+    public bool Parseable = true; // false when a measurable value couldn't be parsed
+}
+
+/// <summary>
+///     A type parameter whose rows disagree. Surfaced for interactive resolution (pick one value to
+///     apply to all instances of the type) rather than silently skipped.
+/// </summary>
+public sealed class TypeConflict
+{
+    public long TypeId;
+    public int ParameterId;
+    public string Field = "";
+    public string TypeName = "";
+    public string CurrentDisplay = "";
+    public int InstancesAffected;
+    public List<ConflictOption> Options = new();
+}
+
 public sealed class ChangeSet
 {
     public string ScheduleName = "";
     public bool CrossModel;
     public List<ProposedChange> Changes = new();
     public List<SkippedItem> Skipped = new();
+    public List<TypeConflict> Conflicts = new();
 }
 
 /// <summary>
@@ -158,11 +184,27 @@ public sealed class Importer
             var distinct = tc.CellValues.Distinct().ToList();
             if (distinct.Count > 1)
             {
-                cs.Skipped.Add(new SkippedItem
+                // Disagreement -> surface for interactive resolution (pre-parse each candidate now).
+                var conflict = new TypeConflict
                 {
-                    Reason = "conflict",
-                    Detail = $"{tc.Col.FieldName} on type '{tc.TypeName}': {string.Join(" / ", distinct)}",
-                });
+                    TypeId = kv.Key.Item1,
+                    ParameterId = kv.Key.Item2,
+                    Field = tc.Col.FieldName,
+                    TypeName = tc.TypeName,
+                    CurrentDisplay = tc.CurDisplay,
+                    InstancesAffected = tc.CellValues.Count,
+                };
+                foreach (var v in distinct)
+                {
+                    var opt = new ConflictOption { Display = v, IsString = tc.IsString, NewString = v };
+                    if (!tc.IsString)
+                    {
+                        opt.Parseable = UnitFormatUtils.TryParse(units, new ForgeTypeId(tc.SpecTypeId!), v, out double d);
+                        opt.NewDouble = opt.Parseable ? d : 0;
+                    }
+                    conflict.Options.Add(opt);
+                }
+                cs.Conflicts.Add(conflict);
                 continue;
             }
 
@@ -215,6 +257,22 @@ public sealed class Importer
         IsString = isString,
         NewString = str,
         NewDouble = dbl,
+    };
+
+    /// <summary>Builds a type-write change from a user-resolved conflict choice.</summary>
+    public static ProposedChange ResolveToChange(TypeConflict c, ConflictOption opt) => new()
+    {
+        TypeId = c.TypeId,
+        ParameterId = c.ParameterId,
+        Binding = "type",
+        ElementName = c.TypeName,
+        Field = c.Field,
+        OldValue = c.CurrentDisplay,
+        NewValue = opt.Display,
+        InstancesAffected = c.InstancesAffected,
+        IsString = opt.IsString,
+        NewString = opt.NewString,
+        NewDouble = opt.NewDouble,
     };
 
     /// <summary>Applies a confirmed change set inside one transaction. Returns a summary line.</summary>

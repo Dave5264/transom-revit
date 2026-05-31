@@ -73,7 +73,7 @@ public sealed partial class TransomViewModel : ObservableObject
         _importHandler = importHandler;
 
         _exportHandler.ReportStatus = s => _ui.Invoke(() => Status = s);
-        _importHandler.OnPreview = cs => _ui.Invoke(() => ShowPreview(cs));
+        _importHandler.OnPreview = cs => _ui.BeginInvoke(() => ShowPreview(cs));
         _importHandler.OnApplied = s => _ui.Invoke(() =>
         {
             ImportStatus = s;
@@ -115,6 +115,9 @@ public sealed partial class TransomViewModel : ObservableObject
     public ObservableCollection<ScheduleEntry> FilteredSchedules { get; } = new();
     public ObservableCollection<ProposedChange> Changes { get; } = new();
     public ObservableCollection<SkippedItem> Skipped { get; } = new();
+
+    /// <summary>Set by the view: shows a modal resolver for one type-param conflict, returns the chosen value (or null = skip).</summary>
+    public Func<TypeConflict, ConflictOption?>? ConflictResolver;
 
     // --- Export ---
 
@@ -260,7 +263,18 @@ public sealed partial class TransomViewModel : ObservableObject
         foreach (var c in cs.Changes) Changes.Add(c);
         foreach (var s in cs.Skipped) Skipped.Add(s);
 
-        ImportStatus = $"{cs.Changes.Count} change(s), {cs.Skipped.Count} skipped"
+        // Resolve type-parameter conflicts one at a time (Revit-style), letting the user pick a value.
+        foreach (var conflict in cs.Conflicts)
+        {
+            var opt = ConflictResolver?.Invoke(conflict);
+            if (opt != null)
+                Changes.Add(Importer.ResolveToChange(conflict, opt));
+            else
+                Skipped.Add(new SkippedItem { Reason = "conflict — unresolved", Detail = $"{conflict.Field} on '{conflict.TypeName}'" });
+        }
+
+        ImportStatus = $"{Changes.Count} change(s), {Skipped.Count} skipped"
+                       + (cs.Conflicts.Count > 0 ? $", {cs.Conflicts.Count} conflict(s) reviewed" : "")
                        + (cs.CrossModel ? "  — ⚠ different source model" : "");
     }
 
