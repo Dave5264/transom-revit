@@ -1,4 +1,4 @@
-# Schedule Excel — Project Brief
+# Transom — Project Brief
 
 ## One-line summary
 A Revit add-in (C#) that exports schedules to spreadsheets with full visual fidelity and

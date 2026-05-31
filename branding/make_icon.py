@@ -1,4 +1,4 @@
-"""Render the Schedule Excel add-in icon at multiple sizes.
+"""Render the Transom add-in icon at multiple sizes.
 Drawn large (1024) and downscaled with LANCZOS for crisp small-size output.
 """
 import math, os

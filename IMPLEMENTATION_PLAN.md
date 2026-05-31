@@ -1,280 +1,367 @@
-# Schedule Excel — Implementation / Coding Plan
+# Transom — Implementation / Coding Plan
 
-This is the technical plan the add-in will be built from. It is the document to audit for
-viability. See `SPEC.md` for the locked requirements and `BRIEF.md` for context.
+Technical plan for **Transom**, a Revit add-in that exports schedules to spreadsheets with full visual
+fidelity and imports edits back into the model, with an optional Claude-assisted QA layer.
 
-Target: Revit 2025 (**.NET 8**) and Revit 2027 (**.NET 10**), C#, multi-target. Excel via
-NPOI. Optional Claude-assist via a local MCP bridge.
+> **This revision supersedes the earlier draft.** It reconciles `AUDIT.md` (first audit), `AUDIT2.md`
+> (second audit), and web research. See `SPEC.md` for locked requirements and `BRIEF.md` for context.
 
-> CORRECTION (post-audit): an earlier draft said "both .NET 8." Revit 2027 runs on **.NET 10**
-> (`net10.0-windows`) and relocates the add-in folder to Program Files with new isolation
-> settings. See `AUDIT.md`.
+**Targets:** Revit 2025 (**.NET 8**, `net8.0-windows`) and Revit 2027 (**.NET 10**, `net10.0-windows`),
+C#, multi-target. **Excel via NPOI** (Apache-2.0; handles `.xlsx` + legacy `.xls`). **Scaffold base:**
+[`Nice3point/RevitTemplates`](https://github.com/Nice3point/RevitTemplates) (MIT). **Reference (studied,
+MIT, not a dependency):** [`bimone/addins-excelexporterimporter`](https://github.com/bimone/addins-excelexporterimporter).
+
+---
+
+## 0. Core architecture decision (the one that drives everything)
+
+**ADDITIVE HYBRID.** Two independent passes produce one workbook:
+
+1. **Display pass (owns the visible sheet + row order).** Render every visible cell from
+   `ViewSchedule.GetCellText` / `GetTableData`, with styling from `GetTableCellStyle` / `GetMergedCell`.
+   This reproduces *exactly what Revit shows* — calculated fields, combined-parameter fields,
+   percentage/count fields, subtotals, grand totals, group headers, blank separators, per-column unit /
+   precision / prefix-suffix overrides — and the row order **by construction** (Revit already sorted,
+   grouped and filtered). **We do NOT re-implement sort/group/filter in C#.**
+
+2. **Anchor pass (owns round-trip only).** Attach the source element's **UniqueId** to each rendered
+   *element* body row (group/subtotal/blank rows get none), written into a **hidden anchor column**, plus
+   per-row writable/binding flags and field spec. Round-trip values are resolved on import by reading the
+   model and comparing to the displayed cell — never the reverse.
+
+> Why not "enumerate elements → rebuild the table"? Because reading values from `element.Parameters` alone
+> cannot reproduce calculated/combined/subtotal/overridden display values (AUDIT2 **C1**), and a C#
+> re-implementation of Revit's sort/group/filter drifts from the real display, which mis-anchors rows
+> (AUDIT2 **C2**). The display pass eliminates both.
+
+**Anchor mechanism = to be decided by spike (milestone 2), two candidates:**
+- **(A) Working-copy hidden-ID field.** On a temporary copy of the schedule (inside a `Transaction`/
+  `TransactionGroup` that is **rolled back** so the user's schedule is never mutated), add a field carrying a
+  unique per-element key, then read that column via `GetCellText` — giving row→UniqueId in the *exact same
+  row order* as the display pass. First audit's recommendation; no sort re-implementation.
+- **(B) Enumeration + match.** `FilteredElementCollector(doc, vs.Id).WhereElementIsNotElementType()` +
+  correlate to body rows. Simpler but must solve correlation; fragile for several schedule kinds (see §10).
+
+Spike **both** against a real sorted/grouped/itemized schedule and pick the reliable one. Round-trip
+integrity (BRIEF success criterion #1) depends on this — prove it on day 2, not at the end.
 
 ---
 
 ## 1. Solution structure
 
+Generated from the Nice3point template, then adapted:
+
 ```
-ScheduleExcel/
-  ScheduleExcel.csproj          multi-config (R25 / R27), net8.0-windows, WinForms or WPF
-  App.cs                        IExternalApplication — ribbon panel + button
+Transom/
+  Transom.csproj            multi-TFM net8.0-windows;net10.0-windows, UseWPF, per-TFM Revit refs
+  Directory.Build.props     shared props (from template)
+  App.cs                    IExternalApplication — ribbon panel + button
   Commands/
-    OpenDialogCommand.cs        IExternalCommand — opens the tabbed dialog
+    OpenDialogCommand.cs     IExternalCommand — opens the tabbed dialog
   Ui/
-    MainDialog.(xaml|cs)        tabbed window: Export + Import
+    MainDialog.(xaml|cs)     tabbed window: Export + Import (matches mockup.html)
     ExportTabView, ImportTabView
-    PreviewDialog               import diff + confirm
+    PreviewDialog            import diff + confirm
   Core/
-    ScheduleReader.cs           reads schedule table data + styles
-    ExcelWriter.cs              NPOI workbook build (xlsx/xls) + CSV writer
-    ExcelReader.cs              reads workbook + cowork_meta for import
-    MetaModel.cs                cowork_meta schema (POCOs) + (de)serialization
-    Importer.cs                 match, parse, conflict-check, transaction write
-    UnitsHelper.cs              UnitFormatUtils parse/format wrappers
-    RunLog.cs                   run-log.json model + writer
-    BridgeProbe.cs              MCP bridge port ping (Claude detection)
-    Staging.cs                  exchange-folder staging + finalize/copy
+    ScheduleReader.cs        display pass: GetCellText/GetTableData + styles
+    AnchorResolver.cs        anchor pass: candidate (A) working-copy / (B) enumeration
+    ScheduleKind.cs          detect key/embedded/multi-cat/material-takeoff/linked/itemized
+    ExcelWriter.cs           NPOI workbook build (xlsx/xls) + CSV writer
+    ExcelReader.cs           reads workbook + locates anchor column by sentinel + cowork_meta
+    MetaModel.cs             cowork_meta schema (POCOs) + (de)serialization
+    Importer.cs              match, parse, per-row binding, conflict-check, transaction write
+    BindingClassifier.cs     per-(element,field) type-vs-instance + writability
+    UnitsHelper.cs           UnitFormatUtils parse/format wrappers (IsMeasurableSpec-gated)
+    RunLog.cs                run-log.json model + writer
+    BridgeProbe.cs           async MCP bridge port ping (Claude detection)
+    Staging.cs               exchange-folder staging + finalize/copy
+    Settings.cs              persisted settings (exchange folder, bridge port)
   Resources/
-    icon16.png, icon32.png
-  ScheduleExcel.addin           manifest (per-version install)
+    icon16.png … icon256.png (from branding/)
+  Transom.addin             per-version manifest (2025 + 2027 variants)
 ```
 
-### Build configurations
-- **Multi-target** `TargetFrameworks`: `net8.0-windows` (Revit 2025) and `net10.0-windows`
-  (Revit 2027). Per-TFM `DefineConstants` (`REVIT2025` / `REVIT2027`) for any `#if` branching
-  forced by 2027 API changes (see `AUDIT.md` for the 2027 change list).
-- `<UseWPF>` true (WPF dialog).
-- References to `RevitAPI.dll` / `RevitAPIUI.dll` via per-TFM `HintPath` into
-  `C:\Program Files\Autodesk\Revit 2025\` and `…\Revit 2027\`, `Private=false` (do not copy).
-- **NPOI** via PackageReference, copied to output. Pin/co-deploy its dependencies
-  (esp. `System.Drawing.Common`) and smoke-test loading inside Revit at milestone 1 —
-  documented AssemblyLoadContext conflict risk.
+---
+
+## 2. Build, dependencies & deployment
+
+### Multi-targeting
+- `<TargetFrameworks>net8.0-windows;net10.0-windows</TargetFrameworks>`, `<UseWPF>true</UseWPF>`.
+- Per-TFM `RevitAPI`/`RevitAPIUI` references (Nice3point NuGet API packages or HintPaths into each install).
+  - **2027 uses `Nice3point.Revit.Api.* 2027.0.0-preview.*`** — preview surface; **re-verify at 2027 RTM** (AUDIT2 M1).
+- Per-TFM `DefineConstants` (`REVIT2025` / `REVIT2027`) for the small amount of `#if` plumbing the runtime/
+  manifest layer forces. The schedule APIs we use (ViewSchedule/TableData, ScheduleField, UnitFormatUtils,
+  ribbon, Parameter) are stable 2025→2027 — branching is deploy/runtime only.
+
+### NPOI dependency isolation (the integration risk)
+- Pin a specific NPOI version; run `dotnet list package --include-transitive` and **co-deploy the exact
+  transitive set** (esp. `System.Drawing.Common`) next to the add-in DLL (AUDIT2 M2).
+- **Smoke-test NPOI loading inside Revit at milestone 1** (the documented `System.Drawing.Common` ALC
+  conflict) — for both 2025 and 2027.
+- **2027 manifest:** add explicit `PublicAssemblies` / `UseAllContextsForDependencyResolution` entries for
+  NPOI + `System.Drawing.Common`. Note: the 2026→2027 ManifestSettings dedup behaviour is reportedly in flux —
+  treat the smoke-test as mandatory, not a formality (AUDIT2 M1).
 
 ### Deployment
-- Build output (add-in DLL + NPOI + deps) copied to a known folder; per-version `.addin`
-  manifests:
-  - 2025: `%ProgramData%\Autodesk\Revit\Addins\2025\`.
-  - 2027: the relocated **Program Files** add-ins location + 2027's add-in isolation/manifest
-    settings. Confirm exact path/settings against the 2027 SDK.
+- **2025:** `%AppData%\Autodesk\Revit\Addins\2025\` (per-user — avoids UAC).
+- **2027:** **per-user** `%AppData%\Autodesk\Revit\Addins\2027\`. (All-users moved to `Program Files` in 2027;
+  per-user sidesteps the privilege/UAC issue and is cleaner.)
 
 ---
 
-## 2. Ribbon & command entry
+## 3. Ribbon & command entry
 
 - `App : IExternalApplication`
-  - `OnStartup`: create a ribbon panel "Schedule Tools" on the built-in **Add-Ins** tab via
-    `UIControlledApplication.CreateRibbonPanel(Tab.AddIns, ...)` (or
-    `GetAddinPanels`/`CreateRibbonPanel` with the Add-Ins tab), add a `PushButton` bound to
-    `OpenDialogCommand` with 16/32px icons + tooltip.
+  - `OnStartup`: `CreateRibbonPanel(Tab.AddIns, "Schedule Tools")`, add a `PushButton` bound to
+    `OpenDialogCommand` with the Transom 16/32px icons + tooltip. (Confirmed supported 2025/2027.)
   - `OnShutdown`: nothing required.
 - `OpenDialogCommand : IExternalCommand`
-  - `Execute`: capture `UIDocument`/`Document`, open `MainDialog` (modal, owned to the Revit
-    window via `WindowInteropHelper` + main window handle). All model reads happen on the
-    API context of this command.
+  - Capture `UIDocument`/`Document`; open `MainDialog` **modal**, owned to Revit via
+    `new WindowInteropHelper(window){ Owner = uiapp.MainWindowHandle }`. Keep the apply step modal to avoid
+    `ExternalEvent` complexity. All model reads/writes on this command's API context.
 
 ---
 
-## 3. Export — reading the schedule
+## 4. Export — display pass (visible sheet, full fidelity)
 
 ### Enumerate schedules
-- `new FilteredElementCollector(doc).OfClass(typeof(ViewSchedule))`, filtering out
-  `vs.IsTemplate` and `vs.IsTitleblockRevisionSchedule`. Key schedules included.
-- Active schedule = `uidoc.ActiveView as ViewSchedule` (pin it if non-null).
+- `FilteredElementCollector(doc).OfClass(typeof(ViewSchedule))`, excluding `IsTemplate` and
+  `IsTitleblockRevisionSchedule`. Active schedule = `uidoc.ActiveView as ViewSchedule` (pinned if non-null).
 
-### Read table content (rendered text)
-- `TableData td = vs.GetTableData();`
-- For each `SectionType` in {Header, Body, Footer, Summary} present:
-  - `TableSectionData sec = td.GetSectionData(sectionType);`
-  - dims: `sec.NumberOfRows`, `sec.NumberOfColumns`.
-  - text per cell: `vs.GetCellText(sectionType, row, col)`.
-- This yields exactly what the schedule displays — type params, calculated values, combined
-  fields, units — with no parameter lookups. Header/Body/etc. concatenated in order
-  reproduces grouping, subtotals, totals, blank separators.
+### Read table content (rendered text — the fidelity source)
+- `TableData td = vs.GetTableData();` for each present `SectionType` {Header, Body, Footer, Summary}:
+  - `TableSectionData sec = td.GetSectionData(type);` → `sec.NumberOfRows`, `sec.NumberOfColumns`.
+  - `vs.GetCellText(type, row, col)` per cell — exactly what Revit displays.
+  - `sec.GetCellType(row,col)` to skip image/blank cells cleanly (`GetCellText` only returns text for
+    Text/ParameterText/CustomField types).
 
 ### Read styles (full fidelity, xlsx)
-- Per cell: `TableCellStyle style = sec.GetTableCellStyle(row, col);`
-  - font: `style.FontName`, `style.TextSize`, `style.IsFontBold`, `IsFontItalic`,
-    `IsFontUnderline`.
-  - colors: `style.TextColor`, `style.BackgroundColor` (Revit `Color` → ARGB).
-  - alignment: `style.FontHorizontalAlignment`, `FontVerticalAlignment`.
-  - borders: `style.BorderTopLineStyle` etc. (line style → nearest NPOI BorderStyle).
-- Merged cells: `TableMergedCell mc = sec.GetMergedCell(row, col);` → `mc.Top/Bottom/Left/
-  Right`. Build NPOI `CellRangeAddress` from unique merge regions.
-- Column widths: `sec.GetColumnWidth(col)` (paper units) → convert to Excel char width
-  (approximate). Row heights similar via `sec.GetRowHeight(row)`.
-- Hidden fields: `ScheduleDefinition.GetField(i).IsHidden` → write column then hide it in NPOI
-  (`sheet.SetColumnHidden`).
-
-### Field → parameter map (drives round-trip)
-- `ScheduleDefinition def = vs.Definition;`
-- For each field index: `ScheduleField f = def.GetField(i);`
-  - `f.ParameterId` (ElementId — BuiltInParameter if negative, else project/shared param).
-  - type vs instance: resolve via the parameter — for a project/shared param, check the
-    `Definition`/binding; for built-ins, known. Practical approach: probe a sample element's
-    instance vs type `Parameter` for that id to classify, and cache per field.
-  - writability: `f.FieldType` (Instance vs Calculated vs combined), `f.IsCalculatedField`,
-    `f.IsCombinedParameterField`; plus `Parameter.IsReadOnly` on a sample.
-  - storage type + spec: from the `Parameter` (`StorageType`, `GetUnitTypeId()`/`Definition
-    .GetDataType()` for the ForgeTypeId used in unit parsing).
-
-### Per-row element anchor
-- For an **itemized** schedule, body data rows correspond 1:1 to elements. Obtain the element
-  per row. Candidate approach: `FilteredElementCollector(doc, vs.Id)` returns the elements
-  shown by the schedule; correlate to rows by the schedule's sort/group order. **RISK — see
-  §8.** Store each element's `UniqueId` as the row anchor.
-- Non-itemized schedule (`def.IsItemized == false` or collapsed): warn-and-ask; collapsed
-  rows get no anchor.
+- Per cell: `sec.GetTableCellStyle(row,col)` → `FontName`, `TextSize`, `IsFontBold/Italic/Underline`,
+  `TextColor`, `BackgroundColor` (Revit `Color`→ARGB), `FontHorizontalAlignment`/`FontVerticalAlignment`,
+  `BorderTopLineStyle` etc. (border = line-style ElementId → resolve weight → nearest NPOI BorderStyle; lossy,
+  marked "approximate" in SPEC).
+- Merged cells: `sec.GetMergedCell(row,col)` → `Top/Bottom/Left/Right`; **de-dupe** (an unmerged cell returns
+  its own 1×1 bounds) to find genuine regions → NPOI `CellRangeAddress`.
+- Sizing: prefer **`GetColumnWidthInPixels` / `GetRowHeightInPixels`** (convert to Excel units predictably)
+  over the paper-unit (feet) variants. Absolute font point size + widths remain "approximate" (SPEC).
+- Hidden Revit columns → `ScheduleField.IsHidden` → write the column then `sheet.SetColumnHidden`.
+- **Style caching/interning is mandatory** (`.xls` 4,000-style cap; `.xlsx` ~64,000) — see §6 (AUDIT R3 / L1).
 
 ---
 
-## 4. Export — writing the workbook (NPOI)
+## 5. Export — anchor pass (round-trip)
 
-- `.xlsx` → `XSSFWorkbook`; `.xls` → `HSSFWorkbook`; CSV → manual `StreamWriter`.
-- One `ISheet` per checked schedule; sheet name = sanitized schedule name (≤31 chars, strip
-  `[]:*?/\`), de-duplicated.
-- Write cells section-by-section, applying `ICellStyle` (font, colors, alignment, borders).
-  Cache styles to stay under the `.xls` 4000-style / `.xlsx` practical limits.
-- Apply merges via `sheet.AddMergedRegion`. Set column widths / hidden columns.
-- **Hidden `cowork_meta` sheet** (`sheet.IsHidden = true` or VeryHidden): a JSON blob (single
-  cell) OR structured rows holding the metadata in §6. JSON-in-a-cell is simplest and
-  robust.
-- CSV with multiple schedules → one file per schedule, `filename_<schedule>.csv`, body text
-  only (no styles, no meta).
+For **round-trippable** schedules only (see §10), attach an element key per body row.
 
----
+- **Anchor column:** a hidden column whose header carries a **magic sentinel** value (e.g.
+  `__transom_uid__`) so the importer locates it by content, **not by index** (survives column moves;
+  AUDIT2 H2). Each element body row gets its `element.UniqueId`; group/subtotal/blank rows are empty.
+- **Mechanism (A) or (B)** per §0 — decided by the milestone-2 spike. If working-copy (A), all mutation
+  happens inside a transaction/group that is **rolled back** so the real schedule is untouched (AUDIT R5).
+- **Per-row binding + writability + spec** captured here for each (row element, field) — see §9.
 
-## 5. Import
-
-### Load + auto-match
-- Open workbook (`WorkbookFactory.Create`). Read `cowork_meta`.
-- For each data sheet: read its stored schedule `UniqueId`; `doc.GetElement(uniqueId)`.
-  - found → auto-check, status "matched".
-  - not found → match by stored schedule name against current `ViewSchedule`s → "by name"
-    (flag) or "not found".
-- Compare workbook source-model id to current `doc` (e.g. `doc.CreationGUID` or stored path)
-  → cross-model warning, allow.
-
-### Build change set
-- For each data row with an anchor `UniqueId` → `doc.GetElement(uniqueId)`.
-  - unmatched anchor → skip + report.
-- For each writable column: compare current model value (formatted via UnitFormatUtils) to the
-  cell's current text. If changed:
-  - parse cell text → internal value with `UnitFormatUtils.TryParse(units, specTypeId, text,
-    out double value)` for doubles; direct for strings/ints; ElementId-valued params resolved
-    by name where applicable.
-  - unparseable → skip + report.
-  - target: instance param on the element, or (type field) the element's `ElementType`
-    parameter.
-
-### Type-parameter conflict check
-- Group proposed type-param writes by `(ElementTypeId, parameterId)`.
-- If grouped rows propose **different** values → conflict: skip all, report.
-- If consistent and differs from current type value → one write to the type.
-
-### Preview + apply
-- `PreviewDialog` lists (element, field, old → new), type-param rows grouped with instance
-  counts, plus skipped/conflict/unparseable lists.
-- On confirm: single `Transaction`; set values via `Parameter.Set(...)`; collect failures;
-  show summary. Roll back on fatal error.
+### Field → parameter map
+- `def.GetField(i)` → `ParameterId`, `FieldType` (`Instance` / `ElementType` / `Count` / `Formula` /
+  `MaterialQuantity`), `IsCalculatedField`, `IsCombinedParameterField`, `IsHidden`, `HasSchedulableField`.
+- Spec for unit parsing: **`ScheduleField.GetSpecTypeId()`** (or `sec.GetCellSpec(row,col)`), not fishing it
+  off a sample parameter.
 
 ---
 
-## 6. cowork_meta schema (JSON)
+## 6. Export — writing the workbook (NPOI)
+
+- `.xlsx` → `XSSFWorkbook`; `.xls` → `HSSFWorkbook`; CSV → `StreamWriter`.
+- One `ISheet` per checked schedule; sheet name = sanitized schedule name (≤31 chars, strip `[]:*?/\`),
+  de-duplicated. (Schedule **UniqueId** stored in meta drives import matching — never the lossy tab name.)
+- Write section-by-section, applying cached `ICellStyle`. **Intern styles** in a dictionary keyed by style
+  signature. For `.xls`, if the interned style count would exceed 4,000 → **hard-fail with a clear
+  "too many styles for .xls — use .xlsx" message** (AUDIT R6 / item 6), don't let NPOI throw.
+- Merges via `sheet.AddMergedRegion`; column widths / hidden columns set.
+- **Hidden `cowork_meta` sheet** (`VeryHidden`): JSON blob in a single cell (§8).
+- **CSV** = display data only (no styles, no meta, not round-trippable); multiple schedules → one file each
+  (`filename_<schedule>.csv`).
+
+---
+
+## 7. cowork_meta schema (JSON, hidden sheet)
 
 ```json
 {
-  "tool": "ScheduleExcel", "version": 1,
+  "tool": "Transom", "version": 1,
+  "anchorSentinel": "__transom_uid__",
   "sourceModel": { "guid": "...", "path": "...", "title": "..." },
   "exportedUtc": "2026-05-31T...",
   "sheets": [
     {
       "sheetName": "Door Schedule",
       "scheduleUniqueId": "...", "scheduleName": "Door Schedule",
-      "itemized": true,
+      "kind": "standard|key|materialTakeoff|embedded|multiCategory",
+      "itemized": true, "roundTrippable": true,
+      "phase": "New Construction", "activeDesignOption": null,
+      "anchorColumnHeader": "__transom_uid__",
       "columns": [
-        { "col": 0, "fieldName": "Mark", "parameterId": -1010106,
-          "binding": "instance", "writable": true,
-          "storageType": "String", "specTypeId": null },
         { "col": 3, "fieldName": "Fire Rating", "parameterId": 123456,
-          "binding": "type", "writable": true,
+          "fieldType": "ElementType", "writable": true,
           "storageType": "String", "specTypeId": null }
       ],
       "rows": [
-        { "excelRow": 4, "uniqueId": "...", "kind": "element" },
-        { "excelRow": 5, "uniqueId": null, "kind": "groupHeader" }
+        { "excelRow": 5, "uniqueId": "...", "kind": "element",
+          "bindings": { "Fire Rating": "type", "Mark": "instance" } },
+        { "excelRow": 6, "uniqueId": null, "kind": "groupHeader" }
       ]
     }
   ]
 }
 ```
+- `excelRow` is **advisory only** — import re-derives row→anchor from the live sheet via the sentinel column
+  (AUDIT2 H2). `bindings` are **per-row** (AUDIT2 M5).
 
-## 7. run-log.json schema (per run)
+---
+
+## 8. Import
+
+### Load + locate + auto-match
+- Open workbook (`WorkbookFactory.Create`). Read `cowork_meta`. **Reject** non-Transom workbooks.
+- For each data sheet: **find the anchor column by its sentinel header**; if missing/short → **reject the
+  sheet with a clear message** (never mis-write). Re-derive row→UniqueId from the current sheet.
+- Match each sheet's `scheduleUniqueId` → `doc.GetElement(uid)`:
+  - found → auto-check ("matched"); not found → name-match ("by name — verify"); else flag, leave unchecked.
+- Cross-model (workbook `sourceModel.guid` ≠ current doc) → warn, allow (map by name).
+- Warn on phase / active-design-option mismatch (AUDIT2 M3).
+
+### Build change set
+- For each element body row → `doc.GetElement(uniqueId)` (skip+report unmatched: deleted / hand-added).
+- For each **writable** column (per-row binding from meta): compare model value (formatted via
+  `UnitFormatUtils.Format`, honouring the field's spec) to the cell text. If changed:
+  - **gate with `UnitUtils.IsMeasurableSpec`**: only call `UnitFormatUtils.TryParse(units, specTypeId, text,
+    out value)` for unit-bearing doubles; direct-parse strings/ints; resolve ElementId-valued by name.
+    Unparseable → skip+report (never guess) (AUDIT item 7).
+  - target: instance param on the element, or (type field) `element.GetTypeId()` → type param.
+
+### Type-parameter safety (literal value, not formula mirror)
+- Group proposed type-param writes by `(typeId, parameterId)`.
+- **Different values within a group → conflict: skip all, report.** Consistent + differs from model → one
+  write to the type, on confirm. (We write the **literal value to every instance row**'s underlying type;
+  no Excel formula mirroring — AUDIT2 H1.) Preview shows type-param rows grouped with instance counts.
+
+### Apply
+- `PreviewDialog`: (element, field, old → new); type-param rows grouped w/ instance counts; skipped /
+  conflict / unparseable lists.
+- One `Transaction`. Every `Parameter.Set(...)` return value **checked** (it returns bool, can silently
+  fail); skip writes to non-editable worksets; **re-read to confirm** the value changed; collect failures →
+  summary + run-log (AUDIT item 6 / M3). Roll back on fatal error.
+
+---
+
+## 9. Type-vs-instance binding & writability (per-row)
+
+- Primary signal: `ScheduleField.FieldType` — `ElementType` ⇒ type-bound, `Instance` ⇒ instance-bound;
+  `Count`/`Formula`/`MaterialQuantity` ⇒ non-writable.
+- For project/shared params, **confirm per (row element, field)** by probing
+  `element.get_Parameter(id)` vs `type.get_Parameter(id)` (Building Coder technique) — because a shared param
+  can be **type in one family, instance in another** within the same column (AUDIT2 M5). Store binding at
+  **row** granularity in meta.
+- No sample element (empty/filtered-to-zero schedule) or ambiguous → mark **non-writable + report**, never
+  guess (AUDIT R4 / SPEC stance).
+- Always check `Parameter.IsReadOnly` before writing. Shared-param writes may need the param **bound** in the
+  target model (cross-model import) — report, don't crash (AUDIT R6).
+
+---
+
+## 10. Schedule-kind support matrix
+
+Detect kind up front (`IsKeySchedule`, `IsMaterialTakeoff`, embedded present via `ScheduleDefinition`,
+`<Multi-Category>`, contains linked elements, `IsItemized`). **Round-trip only where the anchor is sound:**
+
+| Kind | Display export | Round-trip |
+|---|---|---|
+| Standard itemized (single category) | ✅ | ✅ |
+| Key schedule | ✅ | ✅ (writable params live on the key element) |
+| Multi-category | ✅ | ✅ (binding/grouping category-aware, per-row) |
+| Non-itemized / multi-value collapsed | ✅ (from `GetCellText`) | ❌ disabled (no per-row anchor) |
+| Material takeoff | ✅ | ❌ (rows are materials, not elements) |
+| Embedded schedule | ✅ | ❌ (collector misses embedded blocks) |
+| Linked-model elements | ✅ | ❌ (elements live in the link doc) |
+| Related-element fields (e.g. door's room) | ✅ | ⚠️ that field non-writable (lives on another element) |
+
+Display export must **never depend on the anchor pass succeeding** — non-round-trippable schedules still
+produce a faithful read-only workbook (AUDIT2 M4). Warn-and-ask before exporting a non-round-trippable kind.
+
+---
+
+## 11. run-log.json (enables Claude-assist)
 
 ```json
 {
-  "tool": "ScheduleExcel", "runId": "...", "mode": "export|import",
-  "timestampUtc": "...", "model": { "guid": "...", "title": "..." },
-  "workbook": "….xlsx",
-  "export": { "schedules": ["Door Schedule"], "rowCounts": { "Door Schedule": 142 } },
+  "tool": "Transom", "runId": "...", "mode": "export|import",
+  "timestampUtc": "...", "model": { "guid": "...", "title": "..." }, "workbook": "….xlsx",
+  "export": { "schedules": ["Door Schedule"], "rowCounts": { "Door Schedule": 142 },
+              "displayOnly": ["Material Takeoff"] },
   "import": {
-    "applied": [ { "uniqueId": "...", "field": "Fire Rating", "old": "1 Hour",
-                   "new": "2 Hour", "binding": "type", "instancesAffected": 12 } ],
-    "skipped": [ { "reason": "unparseable|readonly|conflict|unmatched", "detail": "..." } ]
+    "applied": [ { "uniqueId": "...", "field": "Fire Rating", "old": "1 Hour", "new": "2 Hour",
+                   "binding": "type", "instancesAffected": 12, "verified": true } ],
+    "skipped": [ { "reason": "unparseable|readonly|conflict|unmatched|missingAnchor", "detail": "..." } ]
   }
 }
 ```
-
-- Written to the exchange folder when Claude-assist is checked (and alongside the workbook).
+- The **contract** between the add-in and Claude. The add-in never calls Claude (no embedded key). Written to
+  the exchange folder when Claude-assist is checked.
 
 ---
 
-## 8. Claude-assist plumbing
+## 12. Claude-assist plumbing
 
-- `BridgeProbe`: TCP/HTTP health ping to the MCP bridge's localhost port (discovered from the
-  configured MCP setup; configurable). Short timeout; result enables/greys the checkbox.
-- `Staging`: when Claude-assist checked on export, write workbook + run-log to the configured
+- **`BridgeProbe`:** **async** TCP/HTTP health ping, explicit short timeout (200–500 ms), off the UI thread,
+  result marshalled to the checkbox via the dispatcher (never block Revit's UI — AUDIT item 10).
+- **Port = persisted, user-editable setting (default 48884)** + Refresh button — *not* build-discovered
+  (AUDIT2 H4). The **write-capable community revit-mcp** is the bridge (the read-only 2027 built-in server
+  can't do §5 visual flagging / write-back QA). Detection is informational only; all correctness is
+  independent of it.
+- **`Staging`:** when Claude-assist is checked on export, write workbook + run-log to the configured
   **exchange folder** (default `<connected Cowork folder>\.claude-exchange\`). Dialog shows
-  "Stage for review"; **Finalize** copies to the user's chosen destination and clears
-  staging. Exchange folder path is a persisted add-in setting.
-- Claude (separate process) reads the staged file + run-log, queries the live model over MCP,
-  and reports. Interactive trigger only; the add-in never calls Claude.
+  "Staged for review"; **Finalize** copies to the user's chosen destination and clears staging; **Cancel**
+  reaches the destination with nothing. When unchecked/offline: straight to destination, no staging.
 
 ---
 
-## 9. Key risks / open technical questions (for audit)
+## 13. Risks (updated)
 
-1. **Row → element correlation in itemized schedules.** The table-data API gives cell *text*
-   but no direct row→ElementId. Need a reliable way to map each body row to its element
-   (collector order vs schedule sort/group order). If unreliable, round-trip anchors break.
-   Possible fallbacks: include a hidden "Element Id"/GUID field in a working copy of the
-   schedule; or read elements via the schedule and re-sort to mirror the definition's
-   sort/group fields. **Highest-risk item.**
-2. **TableCellStyle availability/shape.** Confirm `GetTableCellStyle`, `GetMergedCell`,
-   `GetColumnWidth`, `GetRowHeight`, and the exact `TableCellStyle` members exist and are
-   populated for schedules in 2025/2027 (API has shifted across versions).
-3. **Type vs instance classification + writing type params.** Confirm classifying a field's
-   binding and writing to `ElementType` parameters works for shared/project params, and that
-   `Parameter.Set` on the type behaves as expected (and the all-instances side effect).
-4. **UnitFormatUtils.TryParse round-trip.** Confirm the ForgeTypeId/spec retrieval per field
-   feeds `TryParse` correctly across unit types; identify formats it can't parse.
-5. **NPOI on .NET 8 inside Revit 2025/2027.** Confirm NPOI loads cleanly in Revit's
-   AssemblyLoadContext without dependency conflicts; check `.xls` style/row limits don't bite.
-6. **Ribbon button on the Add-Ins tab.** Confirm panels can be created on the built-in
-   Add-Ins tab in 2025/2027 (vs a custom tab) via the supported API.
-7. **MCP bridge port.** Confirm the bridge exposes a pingable localhost port and what it is,
-   so `BridgeProbe` can detect it.
-8. **WPF vs WinForms modal ownership** under Revit's message loop on .NET 8.
+| # | Risk | Severity | Mitigation |
+|---|------|----------|------------|
+| 1 | Row→element anchoring (no direct API). | **Critical** | Display pass owns order; anchor by sentinel column; **spike both (A) working-copy-ID and (B) enumeration** in milestone 2, pick winner. |
+| 2 | Display fidelity for calc/combined/subtotal/overridden fields. | **High** | Render from `GetCellText` (the additive-hybrid invariant); never from element Parameters. |
+| 3 | NPOI `System.Drawing.Common` ALC conflict (2025/2027). | **High** | Pin + co-deploy transitive set; 2027 `PublicAssemblies`; smoke-test in Revit at milestone 1. |
+| 4 | 2027 = preview API + manifest-dedup in flux. | **Medium-High** | Keep 2027 a separate milestone; pin preview; re-verify at RTM; per-user Addins folder. |
+| 5 | Type/instance binding (mixed shared params). | **Medium-High** | Classify **per-row** via `FieldType` + element/type probe; non-writable when ambiguous. |
+| 6 | Silent `Parameter.Set` failures. | **Medium** | Check every return; re-read to confirm; surface in summary + run-log. |
+| 7 | `UnitFormatUtils.TryParse` throws on non-measurable specs. | **Medium** | Gate with `IsMeasurableSpec`; direct-parse strings/ints. |
+| 8 | Anchor desync on Excel edits. | **Medium** | Sentinel-located column; `excelRow` advisory; reject on missing anchor. |
+| 9 | MCP bridge port unstable/unknown. | **Low-Med** | User-set port (default 48884), async probe, correctness independent. |
 
 ---
 
-## 10. Build order (milestones)
+## 14. Build order (milestones)
 
-1. Project skeleton + ribbon button + empty dialog, building for R25 and R27.
-2. Export: enumerate + render text → `.xlsx` (no styles), open and eyeball.
-3. Export: full styling, merges, hidden cols, widths.
-4. cowork_meta + field→parameter map + row anchors (resolve Risk #1 first).
-5. CSV + `.xls` outputs.
-6. Import: load, auto-match tabs, build change set, preview.
-7. Import: parsing, type-param conflict check, transaction write, summary.
-8. run-log + Claude-assist checkbox + bridge probe + staging/finalize.
-9. End-to-end round-trip test (export → no-edit import → zero changes).
+1. **Toolchain + scaffold.** Generate Transom from Nice3point; multi-TFM net8/net10; ribbon button + empty
+   WPF dialog building for **2025 (.NET 8)** and **2027 (.NET 10)**. **Smoke-test NPOI loads inside Revit
+   2025** (trivial workbook write) — flush the `System.Drawing.Common` risk now.
+2. **Anchor spike (Risk #1) — before anything else of value.** Implement both (A) working-copy-ID and
+   (B) enumeration; verify each maps every body row to the correct UniqueId on a real sorted+grouped+itemized
+   schedule. Pick the reliable one. If neither holds, cut round-trip scope — learn it now.
+3. Export display pass → `.xlsx` (text only), eyeball vs Revit.
+4. Export styling: styles, merges, hidden cols, **InPixels** widths; style interning.
+5. Anchor pass + `cowork_meta` (sentinel column, per-row binding) + schedule-kind gating (§10).
+6. CSV + `.xls` (enforce 4,000-style cap with a clear error).
+7. Import: load, locate-by-sentinel, auto-match, change set, preview.
+8. Import: `UnitFormatUtils` parse (IsMeasurableSpec-gated), per-row type-param conflict check, transaction
+   write with **per-Set verification**, summary.
+9. run-log + Claude-assist checkbox + **async** bridge probe + staging/finalize.
+10. End-to-end clean round-trip (export → no-edit import → zero changes) on **2025**, across the test-model
+    schedule kinds (key, multi-category, non-itemized display-only, phased…).
+11. **Separate milestone:** validate the **2027** build once stable; resolve .NET 10 / manifest-isolation /
+    preview-API issues at RTM.
+
+## 15. Test fixtures (build via MCP when Revit is launched)
+A model containing one of each: standard itemized, key schedule, multi-category, non-itemized, material
+takeoff, embedded, linked-element, phased, design-option — plus the hybrid invariant assertion (visible
+`GetCellText` == hidden round-trip value where expected).

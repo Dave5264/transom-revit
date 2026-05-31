@@ -1,4 +1,4 @@
-# Schedule Excel — Revit Add-in Spec
+# Transom — Revit Add-in Spec
 
 A Revit add-in that exports schedules to spreadsheets with full visual fidelity and
 imports edits back into the model, with an optional Claude-assisted QA layer that
@@ -17,7 +17,7 @@ Last updated: 2026-05-31
   `RevitAPI.dll` / `RevitAPIUI.dll`. Note: Revit 2027 moved the all-users add-in folder to
   Program Files and added add-in isolation/manifest settings — handled per-version.
 - **Excel engine:** NPOI (handles both `.xlsx` and legacy `.xls`). CSV written directly.
-- **Entry point:** `IExternalApplication` adds a **Schedule Excel** button to the
+- **Entry point:** `IExternalApplication` adds a **Transom** button to the
   **Add-Ins** tab, under a "Schedule Tools" panel (icon + tooltip).
 - Clicking the button opens a **tabbed dialog**: **Export** and **Import**.
 
