@@ -28,14 +28,24 @@ public sealed partial class TransomViewModel : ObservableObject
     private readonly ExportEventHandler _handler;
     private readonly Dispatcher _ui = Dispatcher.CurrentDispatcher;
 
+    private readonly DispatcherTimer _copyResetTimer;
+
     [ObservableProperty] private ScheduleEntry? _selectedSchedule;
     [ObservableProperty] private string _status = "Pick a schedule and export.";
+    [ObservableProperty] private bool _copied;
 
     public TransomViewModel(Document doc, ViewSchedule? active, ExternalEvent exportEvent, ExportEventHandler handler)
     {
         _exportEvent = exportEvent;
         _handler = handler;
         _handler.ReportStatus = s => _ui.Invoke(() => Status = s);
+
+        _copyResetTimer = new DispatcherTimer { Interval = System.TimeSpan.FromSeconds(1.4) };
+        _copyResetTimer.Tick += (_, _) =>
+        {
+            Copied = false;
+            _copyResetTimer.Stop();
+        };
 
         Schedules = new FilteredElementCollector(doc)
             .OfClass(typeof(ViewSchedule))
@@ -78,7 +88,13 @@ public sealed partial class TransomViewModel : ObservableObject
     [RelayCommand]
     private void CopyStatus()
     {
-        try { System.Windows.Clipboard.SetText(Status ?? string.Empty); }
+        try
+        {
+            System.Windows.Clipboard.SetText(Status ?? string.Empty);
+            Copied = true;
+            _copyResetTimer.Stop();
+            _copyResetTimer.Start();
+        }
         catch { /* clipboard busy */ }
     }
 }
