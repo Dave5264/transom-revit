@@ -73,4 +73,11 @@ public sealed partial class TransomViewModel : ObservableObject
             Status = "Export failed: " + ex.Message;
         }
     }
+
+    [RelayCommand]
+    private void CopyStatus()
+    {
+        try { System.Windows.Clipboard.SetText(Status ?? string.Empty); }
+        catch { /* clipboard busy */ }
+    }
 }

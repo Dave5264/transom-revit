@@ -49,7 +49,14 @@
                                   Height="32" />
 
                         <Border Background="#E6F1FB" BorderBrush="#85B7EB" BorderThickness="1" CornerRadius="6" Padding="10" Margin="0,16,0,0">
-                            <TextBlock Text="{Binding Status}" Foreground="#185FA5" TextWrapping="Wrap" FontSize="12" />
+                            <DockPanel>
+                                <Button DockPanel.Dock="Right" Content="Copy" Width="56" Height="24"
+                                        VerticalAlignment="Top" Margin="8,0,0,0"
+                                        Command="{Binding CopyStatusCommand}"
+                                        ToolTip="Copy the status text to the clipboard" />
+                                <TextBlock Text="{Binding Status}" Foreground="#185FA5" TextWrapping="Wrap"
+                                           FontSize="12" VerticalAlignment="Center" />
+                            </DockPanel>
                         </Border>
                     </StackPanel>
                 </Border>
