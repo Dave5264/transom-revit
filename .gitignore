@@ -1,0 +1,40 @@
+# Build output
+[Bb]in/
+[Oo]bj/
+[Dd]ebug/
+[Rr]elease/
+artifacts/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# .NET / Visual Studio
+.vs/
+*.dll
+*.pdb
+project.lock.json
+project.fragment.lock.json
+
+# Rider / VS Code
+.idea/
+.vscode/
+
+# NuGet
+*.nupkg
+*.snupkg
+packages/
+!packages/build/
+
+# Revit add-in staging / exchange + test output
+.claude-exchange/
+*.xlsx
+*.xls
+*.csv
+run-log.json
+!**/TestData/**
+
+# OS
+Thumbs.db
+desktop.ini
+.DS_Store

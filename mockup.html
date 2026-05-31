@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Schedule Excel — GUI mockup</title>
+<style>
+  :root{
+    --bg:#f4f3ee; --surface:#ffffff; --line:#e3e1d9; --line2:#cfccc2;
+    --text:#26251f; --muted:#6b6a62; --hint:#9a988e;
+    --info-bg:#e6f1fb; --info-line:#85b7eb; --info:#185fa5;
+    --ok-bg:#e1f5ee; --ok:#0f6e56;
+    --warn-bg:#faeeda; --warn:#854f0b;
+    --bad-bg:#fcebeb; --bad:#a32d2d;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0; background:var(--bg); color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    padding:32px; line-height:1.5;}
+  h1{font-size:20px; font-weight:500; margin:0 0 4px;}
+  .sub{font-size:13px; color:var(--muted); margin:0 0 24px;}
+  .grid{display:flex; flex-wrap:wrap; gap:24px; align-items:flex-start;}
+  .col{flex:1 1 360px; min-width:340px;}
+  .cap{font-size:12px; color:var(--hint); margin:0 0 8px 4px;}
+  .win{background:var(--surface); border:1px solid var(--line2); border-radius:8px; overflow:hidden;}
+  .bar{display:flex; align-items:center; justify-content:space-between; padding:10px 14px; border-bottom:1px solid var(--line);}
+  .bar .title{display:flex; align-items:center; gap:8px; font-size:14px; font-weight:500;}
+  .bar .ctl{color:var(--hint); font-size:14px; letter-spacing:6px;}
+  .tabs{display:flex; gap:24px; padding:0 14px; border-bottom:1px solid var(--line);}
+  .tab{padding:10px 2px; font-size:14px; color:var(--muted);}
+  .tab.active{font-weight:500; color:var(--info); border-bottom:2px solid var(--info-line);}
+  .body{padding:14px;}
+  .lbl{font-size:13px; color:var(--muted); margin:0 0 6px;}
+  .row{display:flex; align-items:center; gap:10px; padding:8px 12px; border-bottom:1px solid var(--line);}
+  .row:last-child{border-bottom:none;}
+  .box{width:16px; height:16px; border-radius:3px; border:1px solid var(--line2); flex:none; display:flex; align-items:center; justify-content:center;}
+  .box.on{background:var(--info); border-color:var(--info);}
+  .box.on:after{content:"✓"; color:#fff; font-size:11px; line-height:1;}
+  .name{font-size:13px;}
+  .name.off{color:var(--muted);}
+  .pill{margin-left:auto; font-size:11px; padding:2px 8px; border-radius:10px;}
+  .pill.ok{background:var(--ok-bg); color:var(--ok);}
+  .pill.warn{background:var(--warn-bg); color:var(--warn);}
+  .pill.bad{background:var(--bad-bg); color:var(--bad);}
+  .active-box{display:flex; align-items:center; gap:10px; padding:10px 12px; background:var(--info-bg); border:1px solid var(--info-line); border-radius:8px; margin-bottom:16px;}
+  .active-box .name{font-weight:500;}
+  .active-box .tag{margin-left:auto; font-size:11px; color:var(--info);}
+  .listhead{display:flex; align-items:center; justify-content:space-between; margin-bottom:6px;}
+  .selall{font-size:12px; color:var(--info); cursor:pointer;}
+  .filter{display:flex; align-items:center; gap:8px; height:32px; border:1px solid var(--line2); border-radius:8px; padding:0 10px; margin-bottom:8px; color:var(--hint); font-size:12px;}
+  .scroll{border:1px solid var(--line); border-radius:8px; height:148px; overflow-y:auto;}
+  .counter{font-size:11px; color:var(--hint); margin-top:6px;}
+  .two{display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-top:14px;}
+  .field{height:34px; border:1px solid var(--line2); border-radius:8px; display:flex; align-items:center; padding:0 10px; font-size:13px;}
+  .field.path{font-size:12px; color:var(--muted); overflow:hidden; white-space:nowrap;}
+  .field.sel{justify-content:space-between;}
+  .browse{height:34px; padding:0 10px; font-size:12px; border:1px solid var(--line2); border-radius:8px; background:var(--surface); cursor:pointer;}
+  .filerow{display:flex; gap:6px;}
+  .assist{display:flex; align-items:center; gap:10px; margin-top:14px; padding:10px 12px; background:var(--bg); border-radius:8px;}
+  .assist.off{opacity:.5;}
+  .status{margin-left:auto; display:flex; align-items:center; gap:5px; font-size:11px;}
+  .dot{width:7px; height:7px; border-radius:50%;}
+  .status.on{color:var(--ok);} .status.on .dot{background:var(--ok);}
+  .status.offl{color:var(--hint);} .status.offl .dot{background:var(--hint);}
+  .banner{display:flex; align-items:center; gap:8px; padding:8px 12px; margin-bottom:10px; background:var(--warn-bg); color:var(--warn); border-radius:8px; font-size:12px;}
+  .foot{display:flex; justify-content:flex-end; gap:8px; padding:12px 14px; border-top:1px solid var(--line);}
+  .btn{height:34px; padding:0 16px; font-size:13px; border:1px solid var(--line2); border-radius:8px; background:var(--surface); cursor:pointer;}
+  .btn.primary{background:var(--info); color:#fff; border:none;}
+</style>
+</head>
+<body>
+  <h1>Schedule Excel — GUI mockup</h1>
+  <p class="sub">Export tab (active schedule pinned, full list scrolls) and Import tab (tabs auto-matched to schedules). States shown: Export with Claude detected, Import with Claude offline.</p>
+
+  <div class="grid">
+
+    <div class="col">
+      <p class="cap">Export tab — Claude bridge detected</p>
+      <div class="win">
+        <div class="bar"><span class="title">⊞ Schedule Excel</span><span class="ctl">— ✕</span></div>
+        <div class="tabs"><span class="tab active">Export</span><span class="tab">Import</span></div>
+        <div class="body">
+
+          <p class="lbl">Active schedule</p>
+          <div class="active-box"><span class="box on"></span><span class="name">Door Schedule</span><span class="tag">● current view</span></div>
+
+          <div class="listhead"><span class="lbl" style="margin:0;">All schedules</span><span class="selall">Select all</span></div>
+          <div class="filter">⌕ Filter…</div>
+          <div class="scroll">
+            <div class="row"><span class="box on"></span><span class="name">Window Schedule</span></div>
+            <div class="row"><span class="box"></span><span class="name off">Room Schedule</span></div>
+            <div class="row"><span class="box"></span><span class="name off">Wall Schedule</span></div>
+            <div class="row"><span class="box on"></span><span class="name">Floor Finish Schedule</span></div>
+            <div class="row"><span class="box"></span><span class="name off">Ceiling Schedule</span></div>
+            <div class="row"><span class="box"></span><span class="name off">Equipment Schedule</span></div>
+            <div class="row"><span class="box"></span><span class="name off">Plumbing Fixture Schedule</span></div>
+            <div class="row"><span class="box"></span><span class="name off">Sheet List</span></div>
+          </div>
+          <p class="counter">3 of 24 selected</p>
+
+          <div class="two">
+            <div>
+              <p class="lbl">Export folder</p>
+              <div class="filerow"><div class="field path" style="flex:1;">C:\Projects\Tower\Exports</div><button class="browse">Browse…</button></div>
+            </div>
+            <div>
+              <p class="lbl">File type</p>
+              <div class="field sel">.xlsx <span style="color:var(--hint);">▾</span></div>
+            </div>
+          </div>
+
+          <div style="margin-top:12px;">
+            <p class="lbl">File name</p>
+            <div class="field">Tower_Schedules_2026-05-31</div>
+          </div>
+
+          <div class="assist"><span class="box on"></span><span class="name">Claude-assist (QC review before finalize)</span><span class="status on"><span class="dot"></span>available</span></div>
+        </div>
+        <div class="foot"><button class="btn">Cancel</button><button class="btn primary">Stage for review</button></div>
+      </div>
+    </div>
+
+    <div class="col">
+      <p class="cap">Import tab — Claude bridge offline (checkbox greyed)</p>
+      <div class="win">
+        <div class="bar"><span class="title">⊟ Schedule Excel</span><span class="ctl">— ✕</span></div>
+        <div class="tabs"><span class="tab">Export</span><span class="tab active">Import</span></div>
+        <div class="body">
+
+          <p class="lbl">Workbook</p>
+          <div class="filerow" style="margin-bottom:14px;"><div class="field path" style="flex:1;">Tower_Schedules_edited.xlsx</div><button class="browse">Browse…</button></div>
+
+          <div class="banner">⚠ Exported from a different model — tabs mapped by name.</div>
+
+          <p class="lbl">Tabs found → matched schedules</p>
+          <div class="win" style="border-radius:8px;">
+            <div class="row"><span class="box on"></span><span class="name">Door Schedule</span><span class="pill ok">matched</span></div>
+            <div class="row"><span class="box on"></span><span class="name">Window Schedule</span><span class="pill warn">by name</span></div>
+            <div class="row"><span class="box"></span><span class="name off">Room Schedule</span><span class="pill bad">not found</span></div>
+          </div>
+
+          <div class="assist off"><span class="box"></span><span class="name off">Claude-assist (pre-flight review)</span><span class="status offl"><span class="dot"></span>offline</span></div>
+        </div>
+        <div class="foot"><button class="btn">Cancel</button><button class="btn primary">Preview changes</button></div>
+      </div>
+    </div>
+
+  </div>
+</body>
+</html>
