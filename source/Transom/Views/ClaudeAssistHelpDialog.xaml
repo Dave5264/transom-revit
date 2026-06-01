@@ -2,9 +2,9 @@
     x:Class="Transom.Views.ClaudeAssistHelpDialog"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-    Title="How Claude Assist works"
+    Title="How Claude works in Transom"
     Width="540"
-    Height="560"
+    Height="620"
     ResizeMode="CanResizeWithGrip"
     MinWidth="440"
     MinHeight="380"
@@ -37,38 +37,59 @@
             </Button.Template>
         </Button>
 
-        <TextBlock DockPanel.Dock="Top" Text="Claude Assist" FontSize="17" FontWeight="SemiBold" Foreground="{DynamicResource Text}" />
+        <TextBlock DockPanel.Dock="Top" Text="Claude QA — Verify &amp; Assist" FontSize="17" FontWeight="SemiBold" Foreground="{DynamicResource Text}" />
         <TextBlock DockPanel.Dock="Top" Margin="0,4,0,12" Foreground="{DynamicResource Muted}" TextWrapping="Wrap"
-                   Text="Transom writes most schedule edits directly. A few can't be applied in place — most often parameters on elements inside Revit groups (group members can't be changed outside group-edit mode). Transom hands those to Claude over a local MCP write bridge." />
+                   Text="Transom can bring Claude in to QA your round-trip over a local MCP connection — two modes, set by &quot;Claude mode&quot; in Settings. Transom never messages Claude itself; it stages files and you ask Claude to act on them." />
 
         <ScrollViewer VerticalScrollBarVisibility="Auto">
             <StackPanel>
 
-                <TextBlock Text="1 · Set up the write bridge (one time)" FontWeight="SemiBold" Margin="0,0,0,4" Foreground="{DynamicResource Text}" />
-                <TextBlock TextWrapping="Wrap" Foreground="{DynamicResource Muted}" Margin="0,0,0,12">
-                    Set <Run Text="Claude mode" FontWeight="SemiBold" /> to “Assist (write)” in Settings, and start the
-                    write MCP server (the community Revit MCP via pyRevit Routes, port 48884). The bridge status
-                    should read “available”.
+                <!-- ===== VERIFY ===== -->
+                <TextBlock Text="Verify (read-only)" FontSize="14" FontWeight="SemiBold" Foreground="{DynamicResource Accent}" Margin="0,0,0,4" />
+                <TextBlock TextWrapping="Wrap" Foreground="{DynamicResource Muted}" Margin="0,0,0,8">
+                    Claude reviews an export or a pending import against the live model and flags issues — drift,
+                    mismatched values, risky edits — <Run Text="before" FontStyle="Italic" /> you commit. It only reads
+                    the model (a read-only MCP such as Autodesk's Revit MCP Technical Preview), so no write bridge is needed.
+                </TextBlock>
+                <TextBlock TextWrapping="Wrap" Foreground="{DynamicResource Muted}" Margin="0,0,0,4">
+                    1 · Set <Run Text="Claude mode" FontWeight="SemiBold" /> to “Verify (read-only)”, and set a Claude exchange folder.
+                </TextBlock>
+                <TextBlock TextWrapping="Wrap" Foreground="{DynamicResource Muted}" Margin="0,0,0,4">
+                    2 · Export or Preview as usual — Transom stages the workbook + a run-log to the exchange folder.
+                </TextBlock>
+                <TextBlock TextWrapping="Wrap" Foreground="{DynamicResource Muted}" Margin="0,0,0,4">
+                    3 · In your Claude session (with the read-only Revit MCP), ask:
+                </TextBlock>
+                <Border Background="{DynamicResource CodeBg}" BorderBrush="{DynamicResource Line}" BorderThickness="1" CornerRadius="6" Padding="10,8" Margin="0,0,0,4">
+                    <TextBlock FontFamily="Consolas" FontSize="12" TextWrapping="Wrap" Foreground="{DynamicResource Text}"
+                               Text="Review the staged Transom workbook against the model and flag anything off." />
+                </Border>
+                <TextBlock TextWrapping="Wrap" Foreground="{DynamicResource Muted}" Margin="0,0,0,16">
+                    4 · Claude reports discrepancies. Nothing is written — you decide what to apply.
                 </TextBlock>
 
-                <TextBlock Text="2 · Import as usual" FontWeight="SemiBold" Margin="0,0,0,4" Foreground="{DynamicResource Text}" />
-                <TextBlock TextWrapping="Wrap" Foreground="{DynamicResource Muted}" Margin="0,0,0,12">
-                    Preview, then <Run Text="Apply selected" FontWeight="SemiBold" />. If any edits target elements in
-                    groups, Transom shows the group dialog.
+                <!-- ===== ASSIST ===== -->
+                <TextBlock Text="Assist (write)" FontSize="14" FontWeight="SemiBold" Foreground="{DynamicResource Accent}" Margin="0,0,0,4" />
+                <TextBlock TextWrapping="Wrap" Foreground="{DynamicResource Muted}" Margin="0,0,0,8">
+                    Transom writes most edits directly. A few can't be applied in place — most often parameters on
+                    elements inside Revit groups (group members can't be changed outside group-edit mode). In Assist,
+                    Claude applies those for you over a local MCP write bridge.
                 </TextBlock>
-
-                <TextBlock Text="3 · Choose “Let Claude open the groups”" FontWeight="SemiBold" Margin="0,0,0,4" Foreground="{DynamicResource Text}" />
-                <TextBlock TextWrapping="Wrap" Foreground="{DynamicResource Muted}" Margin="0,0,0,12">
-                    Transom asks you where to save an artifact file (<Run Text="transom_group_edits.json" FontStyle="Italic" />)
-                    listing each element, parameter, and value. Everything not in a group is applied right away.
+                <TextBlock TextWrapping="Wrap" Foreground="{DynamicResource Muted}" Margin="0,0,0,4">
+                    1 · Set <Run Text="Claude mode" FontWeight="SemiBold" /> to “Assist (write)” and start the write MCP
+                    server (community Revit MCP via pyRevit Routes, port 48884). Bridge status should read “available”.
                 </TextBlock>
-
-                <TextBlock Text="4 · Ask Claude to apply it" FontWeight="SemiBold" Margin="0,0,0,4" Foreground="{DynamicResource Text}" />
-                <TextBlock TextWrapping="Wrap" Foreground="{DynamicResource Muted}" Margin="0,0,0,6">
-                    In your Claude session connected to the Revit write MCP (Claude Code, or Claude Desktop with the
-                    revit MCP), tell Claude:
+                <TextBlock TextWrapping="Wrap" Foreground="{DynamicResource Muted}" Margin="0,0,0,4">
+                    2 · Preview → <Run Text="Apply selected" FontWeight="SemiBold" />. If edits target group members, the group dialog appears.
                 </TextBlock>
-                <Border Background="{DynamicResource CodeBg}" BorderBrush="{DynamicResource Line}" BorderThickness="1" CornerRadius="6" Padding="10,8" Margin="0,0,0,12">
+                <TextBlock TextWrapping="Wrap" Foreground="{DynamicResource Muted}" Margin="0,0,0,4">
+                    3 · Choose “Let Claude open the groups” and pick where to save the artifact
+                    (<Run Text="transom_group_edits.json" FontStyle="Italic" />). Everything not in a group applies right away.
+                </TextBlock>
+                <TextBlock TextWrapping="Wrap" Foreground="{DynamicResource Muted}" Margin="0,0,0,4">
+                    4 · In your Claude session (with the write MCP), tell Claude:
+                </TextBlock>
+                <Border Background="{DynamicResource CodeBg}" BorderBrush="{DynamicResource Line}" BorderThickness="1" CornerRadius="6" Padding="10,8" Margin="0,0,0,4">
                     <TextBlock FontFamily="Consolas" FontSize="12" TextWrapping="Wrap" Foreground="{DynamicResource Text}"
                                Text="Apply the staged Transom group edits at &lt;path to the .json file&gt;." />
                 </Border>
@@ -78,15 +99,10 @@
                 </TextBlock>
 
                 <Border Background="{DynamicResource InfoBg}" BorderBrush="{DynamicResource AccentLine}" BorderThickness="1" CornerRadius="6" Padding="10">
-                    <StackPanel>
-                        <TextBlock TextWrapping="Wrap" Foreground="{DynamicResource Accent}" FontSize="12">
-                            <Run Text="Note:" FontWeight="SemiBold" /> Transom doesn’t message Claude itself — it
-                            produces the artifact; you ask Claude to act on it.
-                        </TextBlock>
-                        <TextBlock TextWrapping="Wrap" Foreground="{DynamicResource Accent}" FontSize="12" Margin="0,6,0,0">
-                            “Verify (read-only)” mode lets Claude review an import against the model without the write bridge.
-                        </TextBlock>
-                    </StackPanel>
+                    <TextBlock TextWrapping="Wrap" Foreground="{DynamicResource Accent}" FontSize="12">
+                        <Run Text="The two read paths differ:" FontWeight="SemiBold" /> Verify uses a read-only MCP
+                        (no bridge, safe review); Assist uses the write bridge to actually change the model.
+                    </TextBlock>
                 </Border>
 
             </StackPanel>
