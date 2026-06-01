@@ -57,8 +57,7 @@ public sealed partial class TransomViewModel : ObservableObject
     [ObservableProperty] private string _reportPath = "";
 
     [ObservableProperty] private bool _claudeAvailable;
-    [ObservableProperty] private bool _claudeAssistExport;
-    [ObservableProperty] private bool _claudeAssistImport;
+    [ObservableProperty] private string _claudeMode = "Off"; // Off | Verify (read-only) | Assist (write)
     [ObservableProperty] private bool _canFinalize;
     [ObservableProperty] private int _bridgePort = 48884;
     [ObservableProperty] private string _exchangeFolder = "";
@@ -113,6 +112,7 @@ public sealed partial class TransomViewModel : ObservableObject
 
     public ScheduleEntry? ActiveSchedule { get; }
     public bool HasActive => ActiveSchedule != null;
+    public string[] ClaudeModes { get; } = { "Off", "Verify (read-only)", "Assist (write)" };
     public ObservableCollection<ScheduleEntry> FilteredSchedules { get; } = new();
     public ObservableCollection<ProposedChange> Changes { get; } = new();
     public ObservableCollection<SkippedItem> Skipped { get; } = new();
@@ -167,7 +167,7 @@ public sealed partial class TransomViewModel : ObservableObject
         };
         if (dlg.ShowDialog() != true) return;
 
-        bool stage = ClaudeAssistExport && ClaudeAvailable && !string.IsNullOrWhiteSpace(ExchangeFolder);
+        bool stage = ClaudeMode != "Off" && !string.IsNullOrWhiteSpace(ExchangeFolder);
         _exportHandler.ScheduleIds = ids;
         _exportHandler.OutputPath = dlg.FileName;
         _exportHandler.Stage = stage;
@@ -215,7 +215,7 @@ public sealed partial class TransomViewModel : ObservableObject
         }
         _importHandler.RequestedMode = ImportEventHandler.Mode.Preview;
         _importHandler.WorkbookPath = WorkbookPath;
-        _importHandler.WriteRunLog = ClaudeAssistImport && ClaudeAvailable;
+        _importHandler.WriteRunLog = ClaudeMode != "Off";
         _importHandler.ExchangeFolder = ExchangeFolder;
         ImportStatus = "Analyzing…";
         _importEvent.Raise();
@@ -304,9 +304,8 @@ public sealed partial class TransomViewModel : ObservableObject
         {
             ClaudeAvailable = ok;
             BridgeStatus = ok
-                ? $"Claude bridge: available (port {BridgePort})"
-                : $"Claude bridge: offline (port {BridgePort})";
-            if (!ok) { ClaudeAssistExport = false; ClaudeAssistImport = false; }
+                ? $"Write bridge: available (port {BridgePort}) — Assist enabled"
+                : $"Write bridge: offline (port {BridgePort}) — Verify (read-only) still works";
         });
     }
 

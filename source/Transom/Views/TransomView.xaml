@@ -205,9 +205,6 @@
                                     Background="#0F6E56" Foreground="White" BorderThickness="0"
                                     Visibility="{Binding CanFinalize, Converter={StaticResource BoolToVis}}"
                                     Command="{Binding FinalizeExportCommand}" />
-                            <CheckBox DockPanel.Dock="Left" Content="Claude-assist" VerticalAlignment="Center" Margin="0,0,12,0"
-                                      IsChecked="{Binding ClaudeAssistExport}" IsEnabled="{Binding ClaudeAvailable}"
-                                      ToolTip="Stage the workbook to the exchange folder for Claude QC, then Finalize to your chosen path." />
                             <TextBlock Text="{Binding SelectionInfo}" Foreground="#9A988E" FontSize="11" VerticalAlignment="Center" />
                         </DockPanel>
 
@@ -260,9 +257,6 @@
                             </StackPanel>
                         </Grid>
 
-                        <CheckBox DockPanel.Dock="Top" Content="Claude-assist — write a pre-flight run-log on Preview" Margin="0,0,0,10"
-                                  IsChecked="{Binding ClaudeAssistImport}" IsEnabled="{Binding ClaudeAvailable}"
-                                  ToolTip="On Preview, write run-log.json to the exchange folder for Claude to review before you Apply." />
 
                         <Border DockPanel.Dock="Bottom" Background="#E6F1FB" BorderBrush="#85B7EB" BorderThickness="1"
                                 CornerRadius="6" Padding="10" Margin="0,8,0,0">
@@ -325,11 +319,16 @@
             <TabItem Header="Settings">
                 <Border Background="#FFFFFF" BorderBrush="#E3E1D9" BorderThickness="1" CornerRadius="6" Padding="16" Margin="0,10,0,0">
                     <StackPanel>
-                        <TextBlock Text="Claude-assist settings" FontSize="14" FontWeight="Medium" Foreground="#26251F" />
-                        <TextBlock Text="The bridge is the running Revit MCP server (pyRevit Routes). The exchange folder is a Claude-readable location used for staging and run-logs."
+                        <TextBlock Text="Claude QA settings" FontSize="14" FontWeight="Medium" Foreground="#26251F" />
+                        <TextBlock Text="Transom stages the workbook + a run-log to the exchange folder; you then ask Claude to review it against the live model over MCP."
                                    Foreground="#6B6A62" TextWrapping="Wrap" Margin="0,6,0,16" />
 
-                        <TextBlock Text="Bridge port" Foreground="#6B6A62" FontSize="13" Margin="0,0,0,4" />
+                        <TextBlock Text="Claude mode" Foreground="#6B6A62" FontSize="13" Margin="0,0,0,4" />
+                        <ComboBox ItemsSource="{Binding ClaudeModes}" SelectedItem="{Binding ClaudeMode}" Height="32" />
+                        <TextBlock Text="Verify = Claude reads the model to reconcile (read-only, no write bridge needed).  Assist = Claude can also apply / colour-flag in the model (uses the write bridge below)."
+                                   Foreground="#9A988E" FontSize="11" TextWrapping="Wrap" Margin="0,4,0,16" />
+
+                        <TextBlock Text="Write bridge port (for Assist)" Foreground="#6B6A62" FontSize="13" Margin="0,0,0,4" />
                         <DockPanel Margin="0,0,0,14">
                             <Button DockPanel.Dock="Right" Content="Refresh" Command="{Binding RefreshBridgeCommand}" Margin="8,0,0,0" />
                             <TextBox Text="{Binding BridgePort, UpdateSourceTrigger=PropertyChanged}" Width="110" HorizontalAlignment="Left" />
