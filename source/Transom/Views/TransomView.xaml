@@ -14,16 +14,34 @@
     Width="460"
     MinHeight="420"
     MinWidth="380"
-    Background="#F4F3EE"
+    Background="{DynamicResource Bg}"
     FontFamily="Segoe UI">
     <Window.Resources>
         <BooleanToVisibilityConverter x:Key="BoolToVis" />
 
+        <!-- Theme palette (light defaults; ApplyTheme() swaps these for dark to match Revit's UIThemeManager) -->
+        <SolidColorBrush x:Key="Bg" Color="#F4F3EE" />
+        <SolidColorBrush x:Key="Surface" Color="#FFFFFF" />
+        <SolidColorBrush x:Key="Text" Color="#26251F" />
+        <SolidColorBrush x:Key="Muted" Color="#6B6A62" />
+        <SolidColorBrush x:Key="Hint" Color="#9A988E" />
+        <SolidColorBrush x:Key="Line" Color="#E3E1D9" />
+        <SolidColorBrush x:Key="Line2" Color="#CFCCC2" />
+        <SolidColorBrush x:Key="Accent" Color="#185FA5" />
+        <SolidColorBrush x:Key="AccentLine" Color="#85B7EB" />
+        <SolidColorBrush x:Key="InfoBg" Color="#E6F1FB" />
+        <SolidColorBrush x:Key="Ok" Color="#0F6E56" />
+        <SolidColorBrush x:Key="AccentHover" Color="#CFE2F4" />
+        <SolidColorBrush x:Key="AltRow" Color="#F7F9FC" />
+        <SolidColorBrush x:Key="WarnBg" Color="#FBF3E4" />
+        <SolidColorBrush x:Key="WarnLine" Color="#F0D6A8" />
+        <SolidColorBrush x:Key="Warn" Color="#854F0B" />
+
         <!-- Buttons: rounded; primary buttons set Background=#185FA5/Foreground=White inline -->
         <Style TargetType="Button">
-            <Setter Property="Background" Value="White" />
-            <Setter Property="Foreground" Value="#26251F" />
-            <Setter Property="BorderBrush" Value="#CFCCC2" />
+            <Setter Property="Background" Value="{DynamicResource Surface}" />
+            <Setter Property="Foreground" Value="{DynamicResource Text}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource Line2}" />
             <Setter Property="BorderThickness" Value="1" />
             <Setter Property="Padding" Value="12,0" />
             <Setter Property="Height" Value="32" />
@@ -53,16 +71,16 @@
 
         <!-- Text inputs: rounded -->
         <Style TargetType="TextBox">
-            <Setter Property="BorderBrush" Value="#CFCCC2" />
+            <Setter Property="BorderBrush" Value="{DynamicResource Line2}" />
             <Setter Property="BorderThickness" Value="1" />
             <Setter Property="Padding" Value="8,0" />
             <Setter Property="Height" Value="32" />
             <Setter Property="VerticalContentAlignment" Value="Center" />
-            <Setter Property="Foreground" Value="#26251F" />
+            <Setter Property="Foreground" Value="{DynamicResource Text}" />
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="TextBox">
-                        <Border Background="White" BorderBrush="{TemplateBinding BorderBrush}"
+                        <Border Background="{DynamicResource Surface}" BorderBrush="{TemplateBinding BorderBrush}"
                                 BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="8"
                                 Padding="{TemplateBinding Padding}">
                             <ScrollViewer x:Name="PART_ContentHost" VerticalAlignment="Center" />
@@ -78,7 +96,7 @@
                 <Setter.Value>
                     <ControlTemplate TargetType="TabControl">
                         <DockPanel>
-                            <Border DockPanel.Dock="Top" BorderBrush="#E3E1D9" BorderThickness="0,0,0,1">
+                            <Border DockPanel.Dock="Top" BorderBrush="{DynamicResource Line}" BorderThickness="0,0,0,1">
                                 <TabPanel IsItemsHost="True" Margin="2,0,0,0" />
                             </Border>
                             <ContentPresenter ContentSource="SelectedContent" />
@@ -89,7 +107,7 @@
         </Style>
         <Style TargetType="TabItem">
             <Setter Property="FontSize" Value="14" />
-            <Setter Property="Foreground" Value="#6B6A62" />
+            <Setter Property="Foreground" Value="{DynamicResource Muted}" />
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="TabItem">
@@ -99,7 +117,7 @@
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsSelected" Value="True">
-                                <Setter TargetName="bd" Property="BorderBrush" Value="#85B7EB" />
+                                <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource AccentLine}" />
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -107,57 +125,57 @@
             </Setter>
             <Style.Triggers>
                 <Trigger Property="IsSelected" Value="True">
-                    <Setter Property="Foreground" Value="#185FA5" />
+                    <Setter Property="Foreground" Value="{DynamicResource Accent}" />
                     <Setter Property="FontWeight" Value="Medium" />
                 </Trigger>
             </Style.Triggers>
         </Style>
     </Window.Resources>
-    <DockPanel>
+    <DockPanel TextElement.Foreground="{DynamicResource Text}">
 
         <!-- Title bar -->
-        <Border DockPanel.Dock="Top" Background="#FFFFFF" BorderBrush="#E3E1D9" BorderThickness="0,0,0,1" Padding="14,10">
+        <Border DockPanel.Dock="Top" Background="{DynamicResource Surface}" BorderBrush="{DynamicResource Line}" BorderThickness="0,0,0,1" Padding="14,10">
             <StackPanel Orientation="Horizontal">
                 <Image Source="/Transom;component/Resources/Icons/RibbonIcon32.png" Width="20" Height="20" Margin="0,0,8,0" />
-                <TextBlock Text="Transom" FontSize="14" FontWeight="Medium" Foreground="#26251F" VerticalAlignment="Center" />
+                <TextBlock Text="Transom" FontSize="14" FontWeight="Medium" Foreground="{DynamicResource Text}" VerticalAlignment="Center" />
             </StackPanel>
         </Border>
 
         <!-- Footer -->
-        <Border DockPanel.Dock="Bottom" Background="#FFFFFF" BorderBrush="#E3E1D9" BorderThickness="0,1,0,0" Padding="14,12">
+        <Border DockPanel.Dock="Bottom" Background="{DynamicResource Surface}" BorderBrush="{DynamicResource Line}" BorderThickness="0,1,0,0" Padding="14,12">
             <Button Content="Close" Width="84" Height="34" HorizontalAlignment="Right" Click="Close_Click" />
         </Border>
 
         <!-- Tabs -->
         <TabControl Margin="12" Background="Transparent" BorderThickness="0">
             <TabItem Header="Export">
-                <Border Background="#FFFFFF" BorderBrush="#E3E1D9" BorderThickness="1" CornerRadius="6" Padding="16" Margin="0,10,0,0">
+                <Border Background="{DynamicResource Surface}" BorderBrush="{DynamicResource Line}" BorderThickness="1" CornerRadius="6" Padding="16" Margin="0,10,0,0">
                     <DockPanel>
-                        <TextBlock DockPanel.Dock="Top" Text="Export schedules → spreadsheet" FontSize="14" FontWeight="Medium" Foreground="#26251F" />
+                        <TextBlock DockPanel.Dock="Top" Text="Export schedules → spreadsheet" FontSize="14" FontWeight="Medium" Foreground="{DynamicResource Text}" />
                         <TextBlock DockPanel.Dock="Top" Text="Check schedules to export — each becomes a sheet (CSV writes one file per schedule)."
-                                   Foreground="#6B6A62" TextWrapping="Wrap" Margin="0,6,0,12" />
+                                   Foreground="{DynamicResource Muted}" TextWrapping="Wrap" Margin="0,6,0,12" />
 
                         <!-- Active schedule: pinned, always exported -->
                         <Border DockPanel.Dock="Top" Visibility="{Binding HasActive, Converter={StaticResource BoolToVis}}"
-                                Background="#E6F1FB" BorderBrush="#85B7EB" BorderThickness="1" CornerRadius="8" Padding="10,8" Margin="0,0,0,12">
+                                Background="{DynamicResource InfoBg}" BorderBrush="{DynamicResource AccentLine}" BorderThickness="1" CornerRadius="8" Padding="10,8" Margin="0,0,0,12">
                             <DockPanel>
-                                <TextBlock DockPanel.Dock="Right" Text="● current view" Foreground="#185FA5" FontSize="11" VerticalAlignment="Center" />
+                                <TextBlock DockPanel.Dock="Right" Text="● current view" Foreground="{DynamicResource Accent}" FontSize="11" VerticalAlignment="Center" />
                                 <CheckBox IsChecked="True" IsEnabled="False" VerticalAlignment="Center" />
-                                <TextBlock Text="{Binding ActiveSchedule.Name}" FontWeight="Medium" Foreground="#26251F" Margin="6,0,0,0" VerticalAlignment="Center" />
+                                <TextBlock Text="{Binding ActiveSchedule.Name}" FontWeight="Medium" Foreground="{DynamicResource Text}" Margin="6,0,0,0" VerticalAlignment="Center" />
                             </DockPanel>
                         </Border>
 
                         <DockPanel DockPanel.Dock="Top" Margin="0,0,0,6">
                             <Button DockPanel.Dock="Right" Content="Select all" Command="{Binding SelectAllSchedulesCommand}"
-                                    Background="Transparent" BorderThickness="0" Foreground="#185FA5" FontSize="12" Cursor="Hand" Padding="2" />
-                            <TextBlock Text="All schedules" Foreground="#6B6A62" FontSize="13" VerticalAlignment="Center" />
+                                    Background="Transparent" BorderThickness="0" Foreground="{DynamicResource Accent}" FontSize="12" Cursor="Hand" Padding="2" />
+                            <TextBlock Text="All schedules" Foreground="{DynamicResource Muted}" FontSize="13" VerticalAlignment="Center" />
                         </DockPanel>
 
                         <TextBox DockPanel.Dock="Top" Text="{Binding ScheduleFilter, UpdateSourceTrigger=PropertyChanged}" Height="30"
                                  VerticalContentAlignment="Center" Padding="6,0" Margin="0,0,0,8" />
 
                         <!-- status pinned to the bottom (always visible) -->
-                        <Border DockPanel.Dock="Bottom" Background="#E6F1FB" BorderBrush="#85B7EB" BorderThickness="1" CornerRadius="6" Padding="10" Margin="0,10,0,0">
+                        <Border DockPanel.Dock="Bottom" Background="{DynamicResource InfoBg}" BorderBrush="{DynamicResource AccentLine}" BorderThickness="1" CornerRadius="6" Padding="10" Margin="0,10,0,0">
                             <DockPanel>
                                 <Button DockPanel.Dock="Right" Command="{Binding CopyStatusCommand}"
                                         Width="26" Height="26" Margin="6,-2,-2,-2" Cursor="Hand"
@@ -169,21 +187,21 @@
                                                 <Grid Width="16" Height="16">
                                                     <Canvas x:Name="copyGlyph" Width="16" Height="16">
                                                         <Rectangle Canvas.Left="5" Canvas.Top="1" Width="9" Height="10"
-                                                                   RadiusX="2" RadiusY="2" Stroke="#185FA5"
-                                                                   StrokeThickness="1.3" Fill="White" />
+                                                                   RadiusX="2" RadiusY="2" Stroke="{DynamicResource Accent}"
+                                                                   StrokeThickness="1.3" Fill="{DynamicResource Surface}" />
                                                         <Rectangle Canvas.Left="2" Canvas.Top="4" Width="9" Height="10"
-                                                                   RadiusX="2" RadiusY="2" Stroke="#185FA5"
-                                                                   StrokeThickness="1.3" Fill="White" />
+                                                                   RadiusX="2" RadiusY="2" Stroke="{DynamicResource Accent}"
+                                                                   StrokeThickness="1.3" Fill="{DynamicResource Surface}" />
                                                     </Canvas>
                                                     <Path x:Name="checkGlyph" Visibility="Collapsed"
-                                                          Stroke="#0F6E56" StrokeThickness="1.8"
+                                                          Stroke="{DynamicResource Ok}" StrokeThickness="1.8"
                                                           StrokeStartLineCap="Round" StrokeEndLineCap="Round"
                                                           StrokeLineJoin="Round" Data="M3,8.5 L6.5,12 L13,4.5" />
                                                 </Grid>
                                             </Border>
                                             <ControlTemplate.Triggers>
                                                 <Trigger Property="IsMouseOver" Value="True">
-                                                    <Setter TargetName="bg" Property="Background" Value="#CFE2F4" />
+                                                    <Setter TargetName="bg" Property="Background" Value="{DynamicResource AccentHover}" />
                                                 </Trigger>
                                                 <DataTrigger Binding="{Binding Copied}" Value="True">
                                                     <Setter TargetName="copyGlyph" Property="Visibility" Value="Collapsed" />
@@ -193,22 +211,22 @@
                                         </ControlTemplate>
                                     </Button.Template>
                                 </Button>
-                                <TextBlock Text="{Binding Status}" Foreground="#185FA5" TextWrapping="Wrap"
+                                <TextBlock Text="{Binding Status}" Foreground="{DynamicResource Accent}" TextWrapping="Wrap"
                                            FontSize="12" VerticalAlignment="Center" />
                             </DockPanel>
                         </Border>
 
                         <DockPanel DockPanel.Dock="Bottom" Margin="0,8,0,0">
                             <Button DockPanel.Dock="Right" Content="Export…" Height="34" Padding="18,0"
-                                    Background="#185FA5" Foreground="White" BorderThickness="0" Command="{Binding ExportCommand}" />
+                                    Background="{DynamicResource Accent}" Foreground="White" BorderThickness="0" Command="{Binding ExportCommand}" />
                             <Button DockPanel.Dock="Right" Content="Finalize" Height="34" Padding="14,0" Margin="0,0,8,0"
-                                    Background="#0F6E56" Foreground="White" BorderThickness="0"
+                                    Background="{DynamicResource Ok}" Foreground="White" BorderThickness="0"
                                     Visibility="{Binding CanFinalize, Converter={StaticResource BoolToVis}}"
                                     Command="{Binding FinalizeExportCommand}" />
-                            <TextBlock Text="{Binding SelectionInfo}" Foreground="#9A988E" FontSize="11" VerticalAlignment="Center" />
+                            <TextBlock Text="{Binding SelectionInfo}" Foreground="{DynamicResource Hint}" FontSize="11" VerticalAlignment="Center" />
                         </DockPanel>
 
-                        <Border BorderBrush="#E3E1D9" BorderThickness="1" CornerRadius="6" MinHeight="120">
+                        <Border BorderBrush="{DynamicResource Line}" BorderThickness="1" CornerRadius="6" MinHeight="120">
                             <ListBox ItemsSource="{Binding FilteredSchedules}" BorderThickness="0" Background="Transparent">
                                 <ListBox.ItemTemplate>
                                     <DataTemplate>
@@ -226,19 +244,19 @@
                 </Border>
             </TabItem>
             <TabItem Header="Import">
-                <Border Background="#FFFFFF" BorderBrush="#E3E1D9" BorderThickness="1" CornerRadius="6" Padding="16" Margin="0,10,0,0">
+                <Border Background="{DynamicResource Surface}" BorderBrush="{DynamicResource Line}" BorderThickness="1" CornerRadius="6" Padding="16" Margin="0,10,0,0">
                     <DockPanel>
-                        <TextBlock DockPanel.Dock="Top" Text="Import spreadsheet → Revit" FontSize="14" FontWeight="Medium" Foreground="#26251F" />
+                        <TextBlock DockPanel.Dock="Top" Text="Import spreadsheet → Revit" FontSize="14" FontWeight="Medium" Foreground="{DynamicResource Text}" />
                         <TextBlock DockPanel.Dock="Top" Text="Pick a Transom workbook, preview the changes, then write edits back into the model."
-                                   Foreground="#6B6A62" TextWrapping="Wrap" Margin="0,6,0,12" />
+                                   Foreground="{DynamicResource Muted}" TextWrapping="Wrap" Margin="0,6,0,12" />
 
                         <Grid DockPanel.Dock="Top" Margin="0,0,0,8">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*" />
                                 <ColumnDefinition Width="Auto" />
                             </Grid.ColumnDefinitions>
-                            <Border Grid.Column="0" BorderBrush="#CFCCC2" BorderThickness="1" CornerRadius="4" Padding="8,0" Height="32">
-                                <TextBlock Text="{Binding WorkbookPath}" Foreground="#6B6A62" FontSize="12"
+                            <Border Grid.Column="0" BorderBrush="{DynamicResource Line2}" BorderThickness="1" CornerRadius="4" Padding="8,0" Height="32">
+                                <TextBlock Text="{Binding WorkbookPath}" Foreground="{DynamicResource Muted}" FontSize="12"
                                            VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
                             </Border>
                             <Button Grid.Column="1" Content="Browse…" Height="32" Padding="12,0" Margin="8,0,0,0"
@@ -249,7 +267,7 @@
                             <StackPanel Orientation="Horizontal" HorizontalAlignment="Left">
                                 <Button Content="Preview changes" Height="32" Padding="12,0" Command="{Binding PreviewCommand}" />
                                 <Button Content="Apply selected" Height="32" Padding="16,0" Margin="8,0,0,0"
-                                        Background="#185FA5" Foreground="White" BorderThickness="0" Command="{Binding ApplyCommand}" />
+                                        Background="{DynamicResource Accent}" Foreground="White" BorderThickness="0" Command="{Binding ApplyCommand}" />
                             </StackPanel>
                             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
                                 <Button Content="All" Height="32" Padding="12,0" Command="{Binding SelectAllCommand}" />
@@ -258,7 +276,7 @@
                         </Grid>
 
 
-                        <Border DockPanel.Dock="Bottom" Background="#E6F1FB" BorderBrush="#85B7EB" BorderThickness="1"
+                        <Border DockPanel.Dock="Bottom" Background="{DynamicResource InfoBg}" BorderBrush="{DynamicResource AccentLine}" BorderThickness="1"
                                 CornerRadius="6" Padding="10" Margin="0,8,0,0">
                             <DockPanel>
                                 <Button DockPanel.Dock="Right" Content="Open report" Command="{Binding OpenReportCommand}" Margin="8,0,0,0">
@@ -272,13 +290,13 @@
                                         </Style>
                                     </Button.Style>
                                 </Button>
-                                <TextBlock Text="{Binding ImportStatus}" Foreground="#185FA5" TextWrapping="Wrap"
+                                <TextBlock Text="{Binding ImportStatus}" Foreground="{DynamicResource Accent}" TextWrapping="Wrap"
                                            FontSize="12" VerticalAlignment="Center" />
                             </DockPanel>
                         </Border>
 
-                        <Border DockPanel.Dock="Bottom" BorderBrush="#F0D6A8" BorderThickness="1" CornerRadius="6"
-                                Background="#FBF3E4" Margin="0,8,0,0" MaxHeight="84">
+                        <Border DockPanel.Dock="Bottom" BorderBrush="{DynamicResource WarnLine}" BorderThickness="1" CornerRadius="6"
+                                Background="{DynamicResource WarnBg}" Margin="0,8,0,0" MaxHeight="84">
                             <Border.Style>
                                 <Style TargetType="Border">
                                     <Setter Property="Visibility" Value="Visible" />
@@ -292,7 +310,7 @@
                             <ListBox ItemsSource="{Binding Skipped}" BorderThickness="0" Background="Transparent" FontSize="11">
                                 <ListBox.ItemTemplate>
                                     <DataTemplate>
-                                        <TextBlock Foreground="#854F0B" TextWrapping="Wrap">
+                                        <TextBlock Foreground="{DynamicResource Warn}" TextWrapping="Wrap">
                                             <Run Text="skip [" /><Run Text="{Binding Reason}" /><Run Text="] " /><Run Text="{Binding Detail}" />
                                         </TextBlock>
                                     </DataTemplate>
@@ -301,9 +319,10 @@
                         </Border>
 
                         <DataGrid ItemsSource="{Binding Changes}" AutoGenerateColumns="False" CanUserAddRows="False"
-                                  HeadersVisibility="Column" GridLinesVisibility="Horizontal" BorderBrush="#E3E1D9"
+                                  HeadersVisibility="Column" GridLinesVisibility="Horizontal" BorderBrush="{DynamicResource Line}"
                                   BorderThickness="1" FontSize="11.5" RowHeight="24" ColumnHeaderHeight="26"
-                                  Background="White" RowBackground="White" AlternatingRowBackground="#F7F9FC">
+                                  Background="{DynamicResource Surface}" RowBackground="{DynamicResource Surface}"
+                                  AlternatingRowBackground="{DynamicResource AltRow}" Foreground="{DynamicResource Text}">
                             <DataGrid.Columns>
                                 <DataGridCheckBoxColumn Binding="{Binding Selected, UpdateSourceTrigger=PropertyChanged}" Width="Auto" MinWidth="28" />
                                 <DataGridTextColumn Header="Element" Binding="{Binding ElementName}" Width="Auto" MinWidth="90" MaxWidth="260" IsReadOnly="True">
@@ -324,34 +343,34 @@
                 </Border>
             </TabItem>
             <TabItem Header="Settings">
-                <Border Background="#FFFFFF" BorderBrush="#E3E1D9" BorderThickness="1" CornerRadius="6" Padding="16" Margin="0,10,0,0">
+                <Border Background="{DynamicResource Surface}" BorderBrush="{DynamicResource Line}" BorderThickness="1" CornerRadius="6" Padding="16" Margin="0,10,0,0">
                     <StackPanel>
-                        <TextBlock Text="Claude QA settings" FontSize="14" FontWeight="Medium" Foreground="#26251F" />
+                        <TextBlock Text="Claude QA settings" FontSize="14" FontWeight="Medium" Foreground="{DynamicResource Text}" />
                         <TextBlock Text="Transom stages the workbook + a run-log to the exchange folder; you then ask Claude to review it against the live model over MCP."
-                                   Foreground="#6B6A62" TextWrapping="Wrap" Margin="0,6,0,16" />
+                                   Foreground="{DynamicResource Muted}" TextWrapping="Wrap" Margin="0,6,0,16" />
 
-                        <TextBlock Text="Claude mode" Foreground="#6B6A62" FontSize="13" Margin="0,0,0,4" />
+                        <TextBlock Text="Claude mode" Foreground="{DynamicResource Muted}" FontSize="13" Margin="0,0,0,4" />
                         <ComboBox ItemsSource="{Binding ClaudeModes}" SelectedItem="{Binding ClaudeMode}" Height="32" />
                         <TextBlock Text="Verify = Claude reads the model to reconcile (read-only, no write bridge needed).  Assist = Claude can also apply / colour-flag in the model (uses the write bridge below)."
-                                   Foreground="#9A988E" FontSize="11" TextWrapping="Wrap" Margin="0,4,0,16" />
+                                   Foreground="{DynamicResource Hint}" FontSize="11" TextWrapping="Wrap" Margin="0,4,0,16" />
 
-                        <TextBlock Text="Write bridge port (for Assist)" Foreground="#6B6A62" FontSize="13" Margin="0,0,0,4" />
+                        <TextBlock Text="Write bridge port (for Assist)" Foreground="{DynamicResource Muted}" FontSize="13" Margin="0,0,0,4" />
                         <DockPanel Margin="0,0,0,14">
                             <Button DockPanel.Dock="Right" Content="Refresh" Command="{Binding RefreshBridgeCommand}" Margin="8,0,0,0" />
                             <TextBox Text="{Binding BridgePort, UpdateSourceTrigger=PropertyChanged}" Width="110" HorizontalAlignment="Left" />
                         </DockPanel>
 
-                        <TextBlock Text="Claude exchange folder" Foreground="#6B6A62" FontSize="13" Margin="0,0,0,4" />
+                        <TextBlock Text="Claude exchange folder" Foreground="{DynamicResource Muted}" FontSize="13" Margin="0,0,0,4" />
                         <DockPanel Margin="0,0,0,16">
                             <Button DockPanel.Dock="Right" Content="Browse…" Command="{Binding ChooseExchangeFolderCommand}" Margin="8,0,0,0" />
-                            <Border BorderBrush="#CFCCC2" BorderThickness="1" CornerRadius="8" Padding="8,0" Height="32">
-                                <TextBlock Text="{Binding ExchangeFolder}" Foreground="#6B6A62" FontSize="12"
+                            <Border BorderBrush="{DynamicResource Line2}" BorderThickness="1" CornerRadius="8" Padding="8,0" Height="32">
+                                <TextBlock Text="{Binding ExchangeFolder}" Foreground="{DynamicResource Muted}" FontSize="12"
                                            VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
                             </Border>
                         </DockPanel>
 
-                        <Border Background="#E6F1FB" BorderBrush="#85B7EB" BorderThickness="1" CornerRadius="6" Padding="10">
-                            <TextBlock Text="{Binding BridgeStatus}" Foreground="#185FA5" FontSize="12" TextWrapping="Wrap" />
+                        <Border Background="{DynamicResource InfoBg}" BorderBrush="{DynamicResource AccentLine}" BorderThickness="1" CornerRadius="6" Padding="10">
+                            <TextBlock Text="{Binding BridgeStatus}" Foreground="{DynamicResource Accent}" FontSize="12" TextWrapping="Wrap" />
                         </Border>
                     </StackPanel>
                 </Border>
