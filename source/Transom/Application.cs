@@ -24,5 +24,17 @@ public class Application : ExternalApplication
             .SetImage("/Transom;component/Resources/Icons/RibbonIcon16.png")
             .SetLargeImage("/Transom;component/Resources/Icons/RibbonIcon32.png")
             .SetToolTip("Export schedules to spreadsheets with full fidelity, and import edits back into the model.");
+
+        panel.AddSeparator();
+
+        panel.AddPushButton<UpdateCommand>("Check for\nUpdates")
+            .SetImage("/Transom;component/Resources/Icons/RibbonIcon16.png")
+            .SetLargeImage("/Transom;component/Resources/Icons/RibbonIcon32.png")
+            .SetToolTip("Check GitHub for a newer Transom release and install it (no admin required).");
+
+        panel.AddPushButton<HelpCommand>("Help")
+            .SetImage("/Transom;component/Resources/Icons/RibbonIcon16.png")
+            .SetLargeImage("/Transom;component/Resources/Icons/RibbonIcon32.png")
+            .SetToolTip("Transom help & support — how to use it, report an issue, and documentation.");
     }
 }
