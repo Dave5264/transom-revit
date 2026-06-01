@@ -24,6 +24,7 @@ public sealed class ScheduleReader
         {
             ScheduleName = vs.Name,
             ScheduleUniqueId = vs.UniqueId,
+            Category = (int)def.CategoryId.Value,
             SourceModelGuid = _doc.CreationGUID.ToString(),
             SourceModelTitle = _doc.Title,
             // Round-trippable only where each visible row maps to one writable element.
@@ -83,6 +84,8 @@ public sealed class ScheduleReader
         {
             Col = col,
             FieldName = f.GetName(),
+            Header = f.ColumnHeading ?? "",
+            Hidden = f.IsHidden,
             ParameterId = (int)f.ParameterId.Value,
         };
 

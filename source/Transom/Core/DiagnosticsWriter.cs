@@ -33,15 +33,13 @@ public static class DiagnosticsWriter
         foreach (var sheet in wb.Sheets)
         {
             var ws = book.CreateSheet(SafeName(sheet.SheetTabName, usedNames));
-            var cols = sheet.Columns.OrderBy(c => c.Col).ToList();
-            var colPos = new Dictionary<int, int>();
-            for (int i = 0; i < cols.Count; i++) colPos[cols[i].Col] = i;
+            int ncol = sheet.CurrentHeaders.Length;
 
             var h = ws.CreateRow(0);
-            for (int i = 0; i < cols.Count; i++)
+            for (int i = 0; i < ncol; i++)
             {
                 var c = h.CreateCell(i);
-                c.SetCellValue(cols[i].FieldName);
+                c.SetCellValue(sheet.CurrentHeaders[i]);
                 c.CellStyle = header;
             }
 
@@ -51,22 +49,19 @@ public static class DiagnosticsWriter
             {
                 rowPos[row.ExcelRow] = rr;
                 var wr = ws.CreateRow(rr);
-                for (int i = 0; i < cols.Count; i++)
-                {
-                    var v = cols[i].Col < row.Cells.Length ? row.Cells[cols[i].Col] : "";
-                    wr.CreateCell(i).SetCellValue(v);
-                }
+                for (int i = 0; i < ncol; i++)
+                    wr.CreateCell(i).SetCellValue(i < row.Cells.Length ? row.Cells[i] : "");
                 rr++;
             }
 
             foreach (var d in diags.Where(x => x.SheetTabName == sheet.SheetTabName))
-                if (rowPos.TryGetValue(d.ExcelRow, out var ri) && colPos.TryGetValue(d.Col, out var ci))
+                if (rowPos.TryGetValue(d.ExcelRow, out var ri) && d.Col >= 0 && d.Col < ncol)
                 {
-                    var cell = ws.GetRow(ri)?.GetCell(ci);
+                    var cell = ws.GetRow(ri)?.GetCell(d.Col);
                     if (cell != null) cell.CellStyle = d.Severity == "yellow" ? yellow : red;
                 }
 
-            for (int i = 0; i < cols.Count; i++) ws.AutoSizeColumn(i);
+            for (int i = 0; i < ncol; i++) ws.AutoSizeColumn(i);
         }
 
         if (diags.Count > 0)

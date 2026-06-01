@@ -37,9 +37,11 @@ public sealed class ColumnMeta
 {
     public int Col;
     public string FieldName = "";
+    public string Header = "";           // the displayed column heading (for header-based matching on import)
     public int ParameterId;
     public string Binding = "instance"; // instance | type | none
     public bool Writable;
+    public bool Hidden;
     public string? SpecTypeId;          // null when not measurable
 }
 
@@ -55,6 +57,7 @@ public sealed class ScheduleTable
 {
     public string ScheduleName = "";
     public string ScheduleUniqueId = "";
+    public int Category;
     public string SourceModelGuid = "";
     public string SourceModelTitle = "";
     public bool RoundTrippable = true;

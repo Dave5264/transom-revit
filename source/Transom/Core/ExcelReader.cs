@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Text.Json;
 using NPOI.SS.UserModel;
 
@@ -7,12 +8,18 @@ namespace Transom.Core;
 
 public sealed class ImportColumn
 {
-    public int Col;
+    public int Col;                 // column index at export time
     public string FieldName = "";
+    public string Header = "";       // exported column heading
     public int ParameterId;
     public string Binding = "instance";
     public bool Writable;
+    public bool Hidden;
     public string? SpecTypeId;
+
+    // Resolved against the current sheet (matched by header so reorder is safe):
+    public int ExcelCol = -1;
+    public bool Matched;
 }
 
 public sealed class ImportRow
@@ -27,8 +34,11 @@ public sealed class ImportSheet
     public string ScheduleUniqueId = "";
     public string ScheduleName = "";
     public string SheetTabName = "";
+    public int Category = -1;
     public bool RoundTrippable;
     public int AnchorCol = -1;
+    public string[] CurrentHeaders = System.Array.Empty<string>();
+    public bool FormattingChanged;   // headers renamed or reordered vs the exported metadata
     public List<ImportColumn> Columns = new();
     public List<ImportRow> Rows = new();
 
@@ -76,6 +86,7 @@ public sealed class ExcelReader
                 ScheduleUniqueId = sheetMeta.GetProperty("scheduleUniqueId").GetString() ?? "",
                 ScheduleName = sheetMeta.GetProperty("scheduleName").GetString() ?? "",
                 SheetTabName = sheetMeta.GetProperty("sheetName").GetString() ?? "",
+                Category = sheetMeta.TryGetProperty("category", out var cat) ? cat.GetInt32() : -1,
                 RoundTrippable = sheetMeta.TryGetProperty("roundTrippable", out var rt) && rt.GetBoolean(),
             };
 
@@ -85,9 +96,11 @@ public sealed class ExcelReader
                 {
                     Col = col.GetProperty("col").GetInt32(),
                     FieldName = col.GetProperty("fieldName").GetString() ?? "",
+                    Header = col.TryGetProperty("header", out var hh) ? hh.GetString() ?? "" : "",
                     ParameterId = col.GetProperty("parameterId").GetInt32(),
                     Binding = col.GetProperty("binding").GetString() ?? "instance",
                     Writable = col.GetProperty("writable").GetBoolean(),
+                    Hidden = col.TryGetProperty("hidden", out var hd) && hd.GetBoolean(),
                     SpecTypeId = col.TryGetProperty("specTypeId", out var s) && s.ValueKind == JsonValueKind.String
                         ? s.GetString()
                         : null,
@@ -130,6 +143,31 @@ public sealed class ExcelReader
             throw new System.InvalidOperationException(
                 $"Sheet '{imp.ScheduleName}': anchor column '{ScheduleReader.AnchorSentinel}' not found — cannot import safely.");
         imp.AnchorCol = anchorCol;
+
+        // Current header row (the user may have renamed/reordered these columns).
+        var headers = new string[anchorCol];
+        for (int c = 0; c < anchorCol; c++)
+            headers[c] = header?.GetCell(c)?.ToString() ?? "";
+        imp.CurrentHeaders = headers;
+
+        // Match each metadata column to its current position by header text (so reorder is safe).
+        var used = new bool[anchorCol];
+        foreach (var col in imp.Columns)
+        {
+            if (!string.IsNullOrEmpty(col.Header))
+            {
+                for (int c = 0; c < anchorCol; c++)
+                    if (!used[c] && headers[c] == col.Header) { col.ExcelCol = c; col.Matched = true; used[c] = true; break; }
+            }
+            else if (col.Col < anchorCol && !used[col.Col]) // legacy workbook (no stored header) -> position
+            {
+                col.ExcelCol = col.Col;
+                col.Matched = true;
+                used[col.Col] = true;
+            }
+        }
+
+        imp.FormattingChanged = imp.Columns.Any(c => !c.Matched || c.ExcelCol != c.Col);
 
         for (int r = 1; r <= ws.LastRowNum; r++)
         {

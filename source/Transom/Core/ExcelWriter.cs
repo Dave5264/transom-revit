@@ -266,12 +266,13 @@ public sealed class ExcelWriter
                 sheetName = p.name,
                 scheduleUniqueId = p.t.ScheduleUniqueId,
                 scheduleName = p.t.ScheduleName,
+                category = p.t.Category,
                 roundTrippable = p.t.RoundTrippable,
                 anchorColumnHeader = ScheduleReader.AnchorSentinel,
                 columns = p.t.Columns.Select(c => new
                 {
-                    col = c.Col, fieldName = c.FieldName, parameterId = c.ParameterId,
-                    binding = c.Binding, writable = c.Writable, specTypeId = c.SpecTypeId,
+                    col = c.Col, fieldName = c.FieldName, header = c.Header, parameterId = c.ParameterId,
+                    binding = c.Binding, writable = c.Writable, hidden = c.Hidden, specTypeId = c.SpecTypeId,
                 }).ToArray(),
                 rows = p.t.Rows.Select(r => new
                 {

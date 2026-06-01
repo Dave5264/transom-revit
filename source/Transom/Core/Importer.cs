@@ -110,6 +110,13 @@ public sealed class Importer
                 continue;
             }
 
+            foreach (var unmatched in sheet.Columns.Where(c => c.Writable && !c.Matched))
+                cs.Skipped.Add(new SkippedItem
+                {
+                    Reason = "column not in spreadsheet",
+                    Detail = $"'{(string.IsNullOrEmpty(unmatched.Header) ? unmatched.FieldName : unmatched.Header)}' (renamed or removed)",
+                });
+
             var typeGroups = new Dictionary<(long, int), TypeCandidate>();
 
             foreach (var row in sheet.Rows)
@@ -119,8 +126,8 @@ public sealed class Importer
                 if (el == null)
                 {
                     cs.Skipped.Add(new SkippedItem { Reason = "element deleted", Detail = label });
-                    foreach (var col in sheet.Columns.Where(c => c.Writable && c.Col < row.Cells.Length))
-                        cs.Diagnostics.Add(Diag(sheet, row, col, label, "red", "element no longer exists", row.Cells[col.Col]));
+                    foreach (var col in sheet.Columns.Where(c => c.Writable && c.Matched && c.ExcelCol < row.Cells.Length))
+                        cs.Diagnostics.Add(Diag(sheet, row, col, label, "red", "element no longer exists", row.Cells[col.ExcelCol]));
                     continue;
                 }
 
@@ -128,8 +135,8 @@ public sealed class Importer
 
                 foreach (var col in sheet.Columns)
                 {
-                    if (!col.Writable || col.Col >= row.Cells.Length) continue;
-                    var cellText = row.Cells[col.Col] ?? "";
+                    if (!col.Writable || !col.Matched || col.ExcelCol >= row.Cells.Length) continue;
+                    var cellText = row.Cells[col.ExcelCol] ?? "";
                     var baseline = baseRow != null && baseRow.TryGetValue(col.Col, out var bv) ? bv : null;
 
                     var host = col.Binding == "type"
@@ -256,7 +263,7 @@ public sealed class Importer
                 foreach (var cell in tc.Cells)
                     cs.Diagnostics.Add(new CellDiagnostic
                     {
-                        SheetTabName = tc.SheetTab, ExcelRow = cell.excelRow, Col = tc.Col.Col, FieldName = tc.Col.FieldName,
+                        SheetTabName = tc.SheetTab, ExcelRow = cell.excelRow, Col = tc.Col.ExcelCol, FieldName = tc.Col.FieldName,
                         ElementLabel = cell.label, Severity = "red", Reason = "type conflict — pick a value", Value = cell.value,
                     });
                 continue;
@@ -334,7 +341,7 @@ public sealed class Importer
     private static CellDiagnostic Diag(ImportSheet sheet, ImportRow row, ImportColumn col, string label,
         string severity, string reason, string value) => new()
     {
-        SheetTabName = sheet.SheetTabName, ExcelRow = row.ExcelRow, Col = col.Col, FieldName = col.FieldName,
+        SheetTabName = sheet.SheetTabName, ExcelRow = row.ExcelRow, Col = col.ExcelCol, FieldName = col.FieldName,
         ElementLabel = label, Severity = severity, Reason = reason, Value = value,
     };
 
