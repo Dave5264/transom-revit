@@ -156,7 +156,6 @@ public sealed class Importer
                 }
 
                 sheet.Baseline.TryGetValue(row.UniqueId, out var baseRow);
-                sheet.RowBindings.TryGetValue(row.UniqueId, out var rowBindings);
                 var (elInGroup, elGroupName) = GroupInfo(doc, el);
 
                 foreach (var col in sheet.Columns)
@@ -165,10 +164,8 @@ public sealed class Importer
                     var cellText = row.Cells[col.ExcelCol] ?? "";
                     var baseline = baseRow != null && baseRow.TryGetValue(col.Col, out var bv) ? bv : null;
 
-                    // Per-element binding wins (a shared param can be instance on one family, type on
-                    // another within a multi-category schedule); fall back to the schedule-level field type.
-                    var binding = rowBindings != null && rowBindings.TryGetValue(col.Col, out var rbv)
-                        ? rbv : col.Binding;
+                    // Resolve against the live model so a stale/wrong exported binding can't misroute the write.
+                    var binding = ResolveBindingLive(doc, el, col.ParameterId, col.Binding);
 
                     var host = binding == "type"
                         ? (el.GetTypeId() != ElementId.InvalidElementId ? doc.GetElement(el.GetTypeId()) : null)
@@ -258,12 +255,17 @@ public sealed class Importer
             return;
         }
 
+        // Resolve bindings against a live instance of this type rather than the binding frozen at export.
+        Element? reprInst = row.InstanceIds is { Count: > 0 } ? doc.GetElement(row.InstanceIds[0]) : null;
+
         foreach (var col in sheet.Columns)
         {
             if (!col.Writable || !col.Matched || col.ExcelCol >= row.Cells.Length) continue;
             var cellText = row.Cells[col.ExcelCol] ?? "";
             var baseline = baseRow != null && baseRow.TryGetValue(col.Col, out var bv) ? bv : null;
-            var binding = rowBindings != null && rowBindings.TryGetValue(col.Col, out var rbv) ? rbv : col.Binding;
+            var binding = reprInst != null
+                ? ResolveBindingLive(doc, reprInst, col.ParameterId, col.Binding)
+                : (rowBindings != null && rowBindings.TryGetValue(col.Col, out var rbv) ? rbv : col.Binding);
 
             if (binding == "type")
             {
@@ -599,6 +601,30 @@ public sealed class Importer
         foreach (Parameter p in host.Parameters)
             if (p.Id.Value == parameterId) return p;
         return null;
+    }
+
+    /// <summary>
+    ///     Resolves where to write a parameter for this element against the LIVE model (not the binding frozen
+    ///     at export, which can be stale or wrong). Honours the schedule field's classification when that host
+    ///     carries the parameter — a window's Height/Width are type params even though the instance exposes a
+    ///     read-only mirror — falling back to wherever the parameter actually lives (the multi-category case).
+    /// </summary>
+    private static string ResolveBindingLive(Document doc, Element instance, int parameterId, string scheduleBinding)
+    {
+        bool onInstance = GetParam(instance, parameterId) != null;
+        bool onType = false;
+        var tid = instance.GetTypeId();
+        if (tid != ElementId.InvalidElementId)
+        {
+            var t = doc.GetElement(tid);
+            onType = t != null && GetParam(t, parameterId) != null;
+        }
+
+        if (scheduleBinding == "type" && onType) return "type";
+        if (scheduleBinding == "instance" && onInstance) return "instance";
+        if (onInstance) return "instance";
+        if (onType) return "type";
+        return "none";
     }
 
     private static string SafeName(Element e)
