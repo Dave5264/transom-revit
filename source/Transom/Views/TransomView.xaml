@@ -189,7 +189,10 @@
                     <DockPanel>
                         <TextBlock DockPanel.Dock="Top" Text="Export schedules → spreadsheet" FontSize="14" FontWeight="Medium" Foreground="{DynamicResource Text}" />
                         <TextBlock DockPanel.Dock="Top" Text="Check schedules to export — each becomes a sheet (CSV writes one file per schedule)."
-                                   Foreground="{DynamicResource Muted}" TextWrapping="Wrap" Margin="0,6,0,12" />
+                                   Foreground="{DynamicResource Muted}" TextWrapping="Wrap" Margin="0,6,0,6" />
+                        <TextBlock DockPanel.Dock="Top" TextWrapping="Wrap" Foreground="{DynamicResource Hint}" FontSize="11" Margin="0,0,0,12">
+                            <Run Text="⊘ " /><Run Text="Greyed cells in the exported file can't be written back on import — they're read-only, driven by the family/type, or on elements inside a group. Leave them as-is." />
+                        </TextBlock>
 
                         <!-- Active schedule: pinned, always exported -->
                         <Border DockPanel.Dock="Top" Visibility="{Binding HasActive, Converter={StaticResource BoolToVis}}"

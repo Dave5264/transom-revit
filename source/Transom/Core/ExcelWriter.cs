@@ -55,12 +55,15 @@ public sealed class ExcelWriter
         for (int r = 0; r < table.RowCount; r++)
         {
             var row = sheet.CreateRow(r);
+            // Cells that can't be written on import are greyed (round-trippable schedules only).
+            var frozen = table.RoundTrippable && r < table.Rows.Count ? table.Rows[r].FrozenCols : null;
             for (int c = 0; c < table.ColCount; c++)
             {
                 var tc = table.Cells[r][c];
                 var cell = row.CreateCell(c);
                 cell.SetCellValue(tc.Text);
-                cell.CellStyle = GetStyle(wb, cache, tc.Style, xls);
+                var style = frozen != null && frozen.Contains(c) ? GreyOf(tc.Style) : tc.Style;
+                cell.CellStyle = GetStyle(wb, cache, style, xls);
             }
 
             var anchorCell = row.CreateCell(anchorCol);
@@ -93,6 +96,14 @@ public sealed class ExcelWriter
 
         sheet.SetColumnHidden(anchorCol, true);
     }
+
+    /// <summary>A greyed copy of a cell style (grey text on light-grey fill) for cells that can't be imported.</summary>
+    private static CellStyleInfo GreyOf(CellStyleInfo s) => new()
+    {
+        FontName = s.FontName, TextSize = s.TextSize, Bold = s.Bold, Italic = s.Italic, Underline = s.Underline,
+        HAlign = s.HAlign, VAlign = s.VAlign, TextColor = 0x9A9A9A, BackColor = 0xE6E6E6,
+        BorderTop = s.BorderTop, BorderBottom = s.BorderBottom, BorderLeft = s.BorderLeft, BorderRight = s.BorderRight,
+    };
 
     // --- styling -----------------------------------------------------------
 

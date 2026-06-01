@@ -43,6 +43,7 @@ public sealed class ColumnMeta
     public bool Writable;
     public bool Hidden;
     public string? SpecTypeId;          // null when not measurable
+    public bool ImportEditable = true;  // false = can't be written back on import (read-only / family-type / unsupported) -> greyed on export
 }
 
 public sealed class RowMeta
@@ -54,6 +55,9 @@ public sealed class RowMeta
 
     /// <summary>For grouped "type" rows: the instances this row represents (bulk instance write-back). Null when itemized or ambiguous.</summary>
     public List<string>? InstanceIds;
+
+    /// <summary>Column indices that can't be written on import for this row's element (greyed on export).</summary>
+    public HashSet<int>? FrozenCols;
 }
 
 /// <summary>In-memory model of one rendered schedule: the visible grid plus round-trip metadata.</summary>

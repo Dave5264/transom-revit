@@ -217,6 +217,8 @@ public sealed class ScheduleReader
             // Nothing could be anchored (empty / linked / un-anchorable / not groupable) -> display-only.
             if (anchors.All(a => a == null))
                 table.RoundTrippable = false;
+
+            DetermineEditability(table, els); // mark columns that can't be written on import (greyed on export)
         }
 
         // A grouped row is bulk-safe only when its key maps to exactly one row; a key split across rows
@@ -230,6 +232,11 @@ public sealed class ScheduleReader
             if (anchors[r] != null && uidToElement.TryGetValue(anchors[r]!, out var host))
             {
                 meta.Kind = fieldGrouped ? "group" : grouped ? "type" : "element";
+
+                // Itemized rows map to one element: a group member can't have its instance params written
+                // in a normal import, so those cells are greyed on export (per-element, not per-column).
+                bool inGroup = !grouped && host.GroupId != null && host.GroupId != ElementId.InvalidElementId;
+
                 if (grouped)
                 {
                     if (typeRowCount[anchors[r]!] == 1 && typeToInstances.TryGetValue(anchors[r]!, out var insts))
@@ -241,8 +248,17 @@ public sealed class ScheduleReader
                 if (host != null)
                 {
                     var b = new Dictionary<int, string>();
-                    foreach (var col in writable) b[col.Col] = ResolveBinding(host, col.ParameterId, col.Binding);
+                    var frozen = new HashSet<int>();
+                    foreach (var col in table.Columns)
+                    {
+                        if (!col.Writable) { frozen.Add(col.Col); continue; } // calculated/combined -> can't edit
+                        var bind = ResolveBinding(host, col.ParameterId, col.Binding);
+                        b[col.Col] = bind;
+                        bool editable = col.ImportEditable && !(inGroup && bind == "instance");
+                        if (!editable) frozen.Add(col.Col);
+                    }
                     meta.Bindings = b;
+                    if (frozen.Count > 0) meta.FrozenCols = frozen;
                 }
             }
             else if (r == 0) meta.Kind = "columnHeader";
@@ -250,6 +266,31 @@ public sealed class ScheduleReader
             table.Rows.Add(meta);
         }
     }
+
+    /// <summary>
+    ///     Marks each writable column import-editable or not, by checking a representative element's parameter:
+    ///     read-only, or an unsupported storage type (ElementId / family-or-type-driven, or a Double with no
+    ///     measurable spec) can't be written on import. Per-element nuances (group membership) are layered on
+    ///     per row during classification.
+    /// </summary>
+    private void DetermineEditability(ScheduleTable table, System.Collections.Generic.IList<Element> els)
+    {
+        var sample = els.Count > 0 ? els[0] : null;
+        foreach (var col in table.Columns)
+        {
+            if (!col.Writable) { col.ImportEditable = false; continue; }
+            if (sample == null) continue; // can't tell -> leave editable
+
+            var type = sample.GetTypeId() != ElementId.InvalidElementId ? _doc.GetElement(sample.GetTypeId()) : null;
+            var p = GetParamOn(sample, col.ParameterId) ?? (type != null ? GetParamOn(type, col.ParameterId) : null);
+            col.ImportEditable = p != null && !p.IsReadOnly && SupportedStorage(p, col.SpecTypeId);
+        }
+    }
+
+    private static bool SupportedStorage(Parameter p, string? spec) =>
+        p.StorageType == StorageType.String
+        || p.StorageType == StorageType.Integer
+        || (p.StorageType == StorageType.Double && spec != null);
 
     /// <summary>Itemized schedules: anchor each row to its element via a rolled-back UID stamp.</summary>
     private void ReadInstanceAnchors(ViewSchedule vs, ScheduleTable table, System.Collections.Generic.IList<Element> els, string?[] anchors)
