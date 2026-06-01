@@ -313,10 +313,18 @@ public sealed partial class TransomViewModel : ObservableObject
             }
             if (decision == GroupDecision.ClaudeHandle)
             {
-                var staged = StageGroupEdits(grouped);
-                groupNote = staged != null
-                    ? $"{prompt.InstanceCount} grouped edit(s) staged for Claude → {staged}"
-                    : $"{prompt.InstanceCount} grouped edit(s) could not be staged";
+                var path = ChooseArtifactPath();
+                if (path == null)
+                {
+                    groupNote = $"{prompt.InstanceCount} grouped edit(s) not staged (no file chosen)";
+                }
+                else
+                {
+                    var staged = StageGroupEdits(grouped, path);
+                    groupNote = staged != null
+                        ? $"{prompt.InstanceCount} grouped edit(s) staged for Claude → {staged}"
+                        : $"{prompt.InstanceCount} grouped edit(s) could not be staged";
+                }
             }
             else
             {
@@ -349,15 +357,28 @@ public sealed partial class TransomViewModel : ObservableObject
         _importEvent.Raise();
     }
 
+    /// <summary>Prompts the user for where to save the Claude group-edits artifact (defaults to the exchange folder).</summary>
+    private string? ChooseArtifactPath()
+    {
+        var dir = !string.IsNullOrWhiteSpace(ExchangeFolder) ? ExchangeFolder
+            : Path.GetDirectoryName(WorkbookPath) ?? "";
+        var dlg = new SaveFileDialog
+        {
+            Title = "Save Claude group-edits artifact",
+            Filter = "JSON (*.json)|*.json",
+            FileName = "transom_group_edits.json",
+            InitialDirectory = Directory.Exists(dir) ? dir : "",
+        };
+        return dlg.ShowDialog() == true ? dlg.FileName : null;
+    }
+
     /// <summary>Writes the group-blocked edits to a JSON file Claude can act on (open groups + apply over the write bridge).</summary>
-    private string? StageGroupEdits(List<ProposedChange> grouped)
+    private string? StageGroupEdits(List<ProposedChange> grouped, string path)
     {
         try
         {
-            var dir = !string.IsNullOrWhiteSpace(ExchangeFolder) ? ExchangeFolder
-                : Path.GetDirectoryName(WorkbookPath) ?? ".";
-            Directory.CreateDirectory(dir);
-            var path = Path.Combine(dir, "transom_group_edits.json");
+            var dir = Path.GetDirectoryName(path);
+            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
 
             var edits = grouped.Select(g => new
             {

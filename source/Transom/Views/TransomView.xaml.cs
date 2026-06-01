@@ -34,6 +34,11 @@ public sealed partial class TransomView
 
     private void Close_Click(object sender, System.Windows.RoutedEventArgs e) => Close();
 
+    private void ClaudeHelp_Click(object sender, System.Windows.RoutedEventArgs e)
+    {
+        new ClaudeAssistHelpDialog { Owner = this }.ShowDialog();
+    }
+
     /// <summary>Matches Revit's UI theme — swaps the palette brushes to dark when Revit is dark.</summary>
     private void ApplyTheme()
     {
