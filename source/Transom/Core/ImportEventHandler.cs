@@ -33,12 +33,15 @@ public sealed class ImportEventHandler : IExternalEventHandler
             {
                 var wb = new ExcelReader().Read(WorkbookPath);
 
-                // Apply any user-supplied fixes for previously-unparseable cells (validates + writes them
-                // back into the workbook), then diff the corrected workbook.
+                // Apply any user-supplied fixes for previously-unparseable cells. Values already in the
+                // schedule's unit format are written back into the workbook; values that parse but differ
+                // come back as reformat suggestions to confirm.
+                System.Collections.Generic.List<ReformatSuggestion> reformats = new();
                 if (Corrections != null && Corrections.Count > 0)
-                    ExcelCorrector.Apply(WorkbookPath, wb, Corrections, doc.GetUnits());
+                    reformats = ExcelCorrector.Apply(WorkbookPath, wb, Corrections, doc.GetUnits()).Reformats;
 
                 var cs = new Importer().BuildChangeSet(doc, wb);
+                cs.Reformats = reformats;
                 if (cs.Diagnostics.Count > 0)
                 {
                     var dir = System.IO.Path.GetDirectoryName(WorkbookPath) ?? ".";

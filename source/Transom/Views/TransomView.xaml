@@ -398,18 +398,32 @@
                                     <ItemsControl ItemsSource="{Binding Fixes}">
                                         <ItemsControl.ItemTemplate>
                                             <DataTemplate>
-                                                <Grid Margin="0,3">
-                                                    <Grid.ColumnDefinitions>
-                                                        <ColumnDefinition Width="*" />
-                                                        <ColumnDefinition Width="136" />
-                                                    </Grid.ColumnDefinitions>
-                                                    <TextBlock Grid.Column="0" VerticalAlignment="Center" Foreground="{DynamicResource Text}"
-                                                               FontSize="11.5" TextTrimming="CharacterEllipsis" Margin="0,0,8,0">
-                                                        <Run Text="{Binding FieldName, Mode=OneWay}" FontWeight="SemiBold" /><Run Text=" · " /><Run Text="{Binding ElementLabel, Mode=OneWay}" /><Run Text="   was “" /><Run Text="{Binding BadValue, Mode=OneWay}" /><Run Text="”" />
-                                                    </TextBlock>
-                                                    <TextBox Grid.Column="1" Height="26" FontSize="11.5"
-                                                             Text="{Binding NewValue, UpdateSourceTrigger=PropertyChanged}" />
-                                                </Grid>
+                                                <StackPanel Margin="0,3">
+                                                    <Grid>
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="*" />
+                                                            <ColumnDefinition Width="136" />
+                                                        </Grid.ColumnDefinitions>
+                                                        <TextBlock Grid.Column="0" VerticalAlignment="Center" Foreground="{DynamicResource Text}"
+                                                                   FontSize="11.5" TextTrimming="CharacterEllipsis" Margin="0,0,8,0">
+                                                            <Run Text="{Binding FieldName, Mode=OneWay}" FontWeight="SemiBold" /><Run Text=" · " /><Run Text="{Binding ElementLabel, Mode=OneWay}" /><Run Text="   was “" /><Run Text="{Binding BadValue, Mode=OneWay}" /><Run Text="”" />
+                                                        </TextBlock>
+                                                        <TextBox Grid.Column="1" Height="26" FontSize="11.5"
+                                                                 Text="{Binding NewValue, UpdateSourceTrigger=PropertyChanged}" />
+                                                    </Grid>
+                                                    <!-- Reformat-confirm row: shown when the entry parses but isn't in the schedule's format -->
+                                                    <DockPanel Margin="0,4,0,0"
+                                                               Visibility="{Binding HasSuggestion, Converter={StaticResource BoolToVis}}">
+                                                        <Button DockPanel.Dock="Right" Content="Confirm" Height="24" Padding="12,0"
+                                                                Background="{DynamicResource Accent}" Foreground="White" BorderThickness="0" FontSize="11"
+                                                                Command="{Binding DataContext.ConfirmFixCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                                CommandParameter="{Binding}" />
+                                                        <TextBlock Foreground="{DynamicResource Accent}" FontSize="11" VerticalAlignment="Center"
+                                                                   TextTrimming="CharacterEllipsis">
+                                                            <Run Text="interpreted as “" /><Run Text="{Binding Suggested, Mode=OneWay}" FontWeight="SemiBold" /><Run Text="” — confirm to use the schedule's format" />
+                                                        </TextBlock>
+                                                    </DockPanel>
+                                                </StackPanel>
                                             </DataTemplate>
                                         </ItemsControl.ItemTemplate>
                                     </ItemsControl>

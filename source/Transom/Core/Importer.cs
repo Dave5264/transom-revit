@@ -81,6 +81,7 @@ public sealed class ChangeSet
     public List<SkippedItem> Skipped = new();
     public List<TypeConflict> Conflicts = new();
     public List<CellDiagnostic> Diagnostics = new();
+    public List<ReformatSuggestion> Reformats = new();
     public string ReportPath = "";
 }
 

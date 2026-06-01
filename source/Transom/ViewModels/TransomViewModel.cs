@@ -43,6 +43,10 @@ public sealed partial class UnparseableFix : ObservableObject
     public string ElementLabel = "";
     public string BadValue = "";
 
+    /// <summary>Set when the entry parsed but isn't in the schedule's format — the canonical value to confirm.</summary>
+    public string Suggested = "";
+    public bool HasSuggestion => !string.IsNullOrEmpty(Suggested);
+
     [ObservableProperty] private string _newValue = "";
 }
 
@@ -276,6 +280,14 @@ public sealed partial class TransomViewModel : ObservableObject
     }
 
     [RelayCommand]
+    private void ConfirmFix(UnparseableFix? fix)
+    {
+        if (fix == null || string.IsNullOrEmpty(fix.Suggested)) return;
+        fix.NewValue = fix.Suggested;   // accept the reformatted value
+        Preview();                      // re-validate; it now matches the expected format and applies
+    }
+
+    [RelayCommand]
     private void Apply()
     {
         var selected = Changes.Where(c => c.Selected).ToList();
@@ -407,16 +419,34 @@ public sealed partial class TransomViewModel : ObservableObject
                 Skipped.Add(new SkippedItem { Reason = "conflict — unresolved", Detail = $"{conflict.Field} on '{conflict.TypeName}'" });
         }
 
-        // Rebuild the fix pane from the unparseable cells, preserving any value the user already typed.
+        // Rebuild the fix pane, preserving any value the user already typed. Reformat suggestions (parses but
+        // wrong format → confirm) take precedence over the matching unparseable diagnostic for the same cell.
         var prior = Fixes.ToDictionary(f => (f.SheetTabName, f.ExcelRow, f.ExcelCol), f => f.NewValue);
         Fixes.Clear();
+        var seen = new HashSet<(string, int, int)>();
+        foreach (var rf in cs.Reformats)
+        {
+            var key = (rf.SheetTabName, rf.ExcelRow, rf.ExcelCol);
+            seen.Add(key);
+            Fixes.Add(new UnparseableFix
+            {
+                SheetTabName = rf.SheetTabName, ExcelRow = rf.ExcelRow, ExcelCol = rf.ExcelCol,
+                FieldName = rf.FieldName, ElementLabel = rf.ElementLabel, BadValue = rf.Entered,
+                Suggested = rf.Canonical,
+                NewValue = prior.TryGetValue(key, out var pv) ? pv : rf.Entered,
+            });
+        }
         foreach (var d in cs.Diagnostics.Where(d => d.Reason == "value can't be parsed"))
+        {
+            var key = (d.SheetTabName, d.ExcelRow, d.Col);
+            if (!seen.Add(key)) continue;
             Fixes.Add(new UnparseableFix
             {
                 SheetTabName = d.SheetTabName, ExcelRow = d.ExcelRow, ExcelCol = d.Col,
                 FieldName = d.FieldName, ElementLabel = d.ElementLabel, BadValue = d.Value,
-                NewValue = prior.TryGetValue((d.SheetTabName, d.ExcelRow, d.Col), out var v) ? v : "",
+                NewValue = prior.TryGetValue(key, out var v) ? v : "",
             });
+        }
 
         ReportPath = cs.ReportPath ?? "";
         int red = cs.Diagnostics.Count(d => d.Severity == "red");
