@@ -231,7 +231,7 @@ public sealed class ScheduleReader
                 if (host != null)
                 {
                     var b = new Dictionary<int, string>();
-                    foreach (var col in writable) b[col.Col] = ResolveBinding(host, col.ParameterId);
+                    foreach (var col in writable) b[col.Col] = ResolveBinding(host, col.ParameterId, col.Binding);
                     meta.Bindings = b;
                 }
             }
@@ -342,16 +342,28 @@ public sealed class ScheduleReader
         finally { tx.RollBack(); }
     }
 
-    /// <summary>Where the parameter actually lives for this element — "instance", "type", or "none".</summary>
-    private string ResolveBinding(Element e, int parameterId)
+    /// <summary>
+    ///     Where to write this parameter for this element — "instance", "type", or "none". The schedule field's
+    ///     own classification wins when that host actually has the parameter: a window's Height/Width are type
+    ///     parameters even though the instance also exposes a read-only mirror that lies about IsReadOnly (Set
+    ///     silently fails). Only fall back to the other host when the scheduled one doesn't carry the parameter
+    ///     (the multi-category case a shared param can be instance in one family, type in another).
+    /// </summary>
+    private string ResolveBinding(Element e, int parameterId, string scheduleBinding)
     {
-        if (GetParamOn(e, parameterId) != null) return "instance";
+        bool onInstance = GetParamOn(e, parameterId) != null;
+        bool onType = false;
         var typeId = e.GetTypeId();
         if (typeId != ElementId.InvalidElementId)
         {
             var type = _doc.GetElement(typeId);
-            if (type != null && GetParamOn(type, parameterId) != null) return "type";
+            onType = type != null && GetParamOn(type, parameterId) != null;
         }
+
+        if (scheduleBinding == "type" && onType) return "type";
+        if (scheduleBinding == "instance" && onInstance) return "instance";
+        if (onInstance) return "instance";
+        if (onType) return "type";
         return "none";
     }
 
