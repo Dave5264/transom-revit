@@ -56,8 +56,11 @@ public sealed class RowMeta
     /// <summary>For grouped "type" rows: the instances this row represents (bulk instance write-back). Null when itemized or ambiguous.</summary>
     public List<string>? InstanceIds;
 
-    /// <summary>Column indices that can't be written on import for this row's element (greyed on export).</summary>
+    /// <summary>Column indices that can never be written on import for this row's element (greyed on export).</summary>
     public HashSet<int>? FrozenCols;
+
+    /// <summary>Column indices writable only via Claude-assist (instance params on a grouped element) — blue on export.</summary>
+    public HashSet<int>? GroupCols;
 }
 
 /// <summary>In-memory model of one rendered schedule: the visible grid plus round-trip metadata.</summary>

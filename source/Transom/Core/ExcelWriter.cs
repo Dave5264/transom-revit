@@ -55,14 +55,18 @@ public sealed class ExcelWriter
         for (int r = 0; r < table.RowCount; r++)
         {
             var row = sheet.CreateRow(r);
-            // Cells that can't be written on import are greyed (round-trippable schedules only).
+            // Export hint colours (round-trippable schedules only): grey = never importable,
+            // blue = group-member instance param (importable via Claude-assist only).
             var frozen = table.RoundTrippable && r < table.Rows.Count ? table.Rows[r].FrozenCols : null;
+            var groupCols = table.RoundTrippable && r < table.Rows.Count ? table.Rows[r].GroupCols : null;
             for (int c = 0; c < table.ColCount; c++)
             {
                 var tc = table.Cells[r][c];
                 var cell = row.CreateCell(c);
                 cell.SetCellValue(tc.Text);
-                var style = frozen != null && frozen.Contains(c) ? GreyOf(tc.Style) : tc.Style;
+                var style = frozen != null && frozen.Contains(c) ? GreyOf(tc.Style)
+                    : groupCols != null && groupCols.Contains(c) ? BlueOf(tc.Style)
+                    : tc.Style;
                 cell.CellStyle = GetStyle(wb, cache, style, xls);
             }
 
@@ -102,6 +106,14 @@ public sealed class ExcelWriter
     {
         FontName = s.FontName, TextSize = s.TextSize, Bold = s.Bold, Italic = s.Italic, Underline = s.Underline,
         HAlign = s.HAlign, VAlign = s.VAlign, TextColor = 0x9A9A9A, BackColor = 0xE6E6E6,
+        BorderTop = s.BorderTop, BorderBottom = s.BorderBottom, BorderLeft = s.BorderLeft, BorderRight = s.BorderRight,
+    };
+
+    /// <summary>A blue-tinted copy of a cell style for cells writable only via Claude-assist (group members).</summary>
+    private static CellStyleInfo BlueOf(CellStyleInfo s) => new()
+    {
+        FontName = s.FontName, TextSize = s.TextSize, Bold = s.Bold, Italic = s.Italic, Underline = s.Underline,
+        HAlign = s.HAlign, VAlign = s.VAlign, TextColor = 0x2E6CA8, BackColor = 0xDDEBF7,
         BorderTop = s.BorderTop, BorderBottom = s.BorderBottom, BorderLeft = s.BorderLeft, BorderRight = s.BorderRight,
     };
 

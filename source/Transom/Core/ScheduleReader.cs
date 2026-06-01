@@ -248,17 +248,19 @@ public sealed class ScheduleReader
                 if (host != null)
                 {
                     var b = new Dictionary<int, string>();
-                    var frozen = new HashSet<int>();
+                    var frozen = new HashSet<int>();    // grey: never importable
+                    var groupCols = new HashSet<int>(); // blue: group-member instance param, Claude-assist only
                     foreach (var col in table.Columns)
                     {
                         if (!col.Writable) { frozen.Add(col.Col); continue; } // calculated/combined -> can't edit
                         var bind = ResolveBinding(host, col.ParameterId, col.Binding);
                         b[col.Col] = bind;
-                        bool editable = col.ImportEditable && !(inGroup && bind == "instance");
-                        if (!editable) frozen.Add(col.Col);
+                        if (!col.ImportEditable) { frozen.Add(col.Col); continue; }      // read-only / family-type
+                        if (inGroup && bind == "instance") groupCols.Add(col.Col);       // editable via Claude only
                     }
                     meta.Bindings = b;
                     if (frozen.Count > 0) meta.FrozenCols = frozen;
+                    if (groupCols.Count > 0) meta.GroupCols = groupCols;
                 }
             }
             else if (r == 0) meta.Kind = "columnHeader";
