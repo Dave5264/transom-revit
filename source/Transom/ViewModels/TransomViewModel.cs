@@ -49,6 +49,7 @@ public sealed partial class TransomViewModel : ObservableObject
     private ChangeSet? _lastChangeSet;
     private string _stagedPath = "";
     private string _finalDestination = "";
+    private string _pendingGroupNote = "";
 
     [ObservableProperty] private string _status = "Pick schedules and export.";
     [ObservableProperty] private bool _copied;
@@ -90,7 +91,8 @@ public sealed partial class TransomViewModel : ObservableObject
         _importHandler.OnPreview = cs => _ui.BeginInvoke(() => ShowPreview(cs));
         _importHandler.OnApplied = s => _ui.Invoke(() =>
         {
-            ImportStatus = s;
+            ImportStatus = s + _pendingGroupNote;
+            _pendingGroupNote = "";
             Changes.Clear();
             Skipped.Clear();
             _lastChangeSet = null;
@@ -142,6 +144,9 @@ public sealed partial class TransomViewModel : ObservableObject
 
     /// <summary>Set by the view: shows a modal resolver for one type-param conflict, returns the chosen value (or null = skip).</summary>
     public Func<TypeConflict, ConflictOption?>? ConflictResolver;
+
+    /// <summary>Set by the view: asks how to handle edits that target group members (skip / abort / hand to Claude).</summary>
+    public Func<GroupPrompt, GroupDecision>? GroupResolver;
 
     // --- Export ---
 
@@ -255,18 +260,96 @@ public sealed partial class TransomViewModel : ObservableObject
             ImportStatus = "Nothing selected to apply.";
             return;
         }
+
+        // Edits that land on group members can't be written in the normal import — ask how to handle them.
+        var grouped = selected.Where(c => c.InGroup).ToList();
+        string groupNote = "";
+        if (grouped.Count > 0)
+        {
+            var prompt = new GroupPrompt { Grouped = grouped, AssistEnabled = ClaudeMode.StartsWith("Assist") };
+            var decision = GroupResolver?.Invoke(prompt) ?? GroupDecision.SkipGrouped;
+            if (decision == GroupDecision.Abort)
+            {
+                ImportStatus = $"Cancelled — {prompt.InstanceCount} edit(s) target elements in group(s).";
+                return;
+            }
+            if (decision == GroupDecision.ClaudeHandle)
+            {
+                var staged = StageGroupEdits(grouped);
+                groupNote = staged != null
+                    ? $"{prompt.InstanceCount} grouped edit(s) staged for Claude → {staged}"
+                    : $"{prompt.InstanceCount} grouped edit(s) could not be staged";
+            }
+            else
+            {
+                groupNote = $"{prompt.InstanceCount} grouped edit(s) skipped";
+            }
+        }
+
+        var toApplyList = selected.Where(c => !c.InGroup).ToList();
+        if (toApplyList.Count == 0)
+        {
+            ImportStatus = groupNote.Length > 0 ? groupNote : "Nothing to apply.";
+            Changes.Clear();
+            Skipped.Clear();
+            _lastChangeSet = null;
+            return;
+        }
+
+        _pendingGroupNote = groupNote.Length > 0 ? "  ·  " + groupNote : "";
         var toApply = new ChangeSet
         {
             ScheduleName = _lastChangeSet?.ScheduleName ?? "",
             Skipped = _lastChangeSet?.Skipped ?? new List<SkippedItem>(),
         };
-        toApply.Changes.AddRange(selected);
+        toApply.Changes.AddRange(toApplyList);
 
         _importHandler.RequestedMode = ImportEventHandler.Mode.Apply;
         _importHandler.PendingChangeSet = toApply;
         _importHandler.DocTitle = SelectedProject;
-        ImportStatus = $"Applying {selected.Count} selected change(s)…";
+        ImportStatus = $"Applying {toApplyList.Count} selected change(s)…";
         _importEvent.Raise();
+    }
+
+    /// <summary>Writes the group-blocked edits to a JSON file Claude can act on (open groups + apply over the write bridge).</summary>
+    private string? StageGroupEdits(List<ProposedChange> grouped)
+    {
+        try
+        {
+            var dir = !string.IsNullOrWhiteSpace(ExchangeFolder) ? ExchangeFolder
+                : Path.GetDirectoryName(WorkbookPath) ?? ".";
+            Directory.CreateDirectory(dir);
+            var path = Path.Combine(dir, "transom_group_edits.json");
+
+            var edits = grouped.Select(g => new
+            {
+                field = g.Field,
+                group = g.GroupName,
+                elementName = g.ElementName,
+                parameterId = g.ParameterId,
+                isString = g.IsString,
+                valueString = g.NewString,
+                valueDouble = g.NewDouble,
+                newDisplay = g.NewValue,
+                instanceUniqueIds = g.BulkInstanceIds ?? new List<string> { g.UniqueId },
+            }).ToArray();
+
+            var payload = new
+            {
+                tool = "Transom",
+                kind = "group-edits",
+                schedule = _lastChangeSet?.ScheduleName ?? "",
+                project = SelectedProject,
+                note = "Elements are inside Revit groups. For each entry, set the parameter (by parameterId; " +
+                       "negative ids are BuiltInParameter) on each listed instance UniqueId. Group members can't be " +
+                       "edited in place — ungroup the affected instances (or use group-edit mode), apply, then restore grouping.",
+                edits,
+            };
+            File.WriteAllText(path, System.Text.Json.JsonSerializer.Serialize(payload,
+                new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
+            return path;
+        }
+        catch { return null; }
     }
 
     [RelayCommand]

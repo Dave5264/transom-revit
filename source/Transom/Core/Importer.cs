@@ -15,14 +15,19 @@ public sealed class ProposedChange
     /// <summary>When set, this is a bulk instance write: NewValue is applied to each of these instance UniqueIds.</summary>
     public List<string>? BulkInstanceIds;
 
+    /// <summary>True when this change targets element(s) inside a Revit group (can't be written directly).</summary>
+    public bool InGroup;
+    public string GroupName = "";
+
     public bool Selected { get; set; } = true;
     public string ElementName { get; set; } = "";
     public string Field { get; set; } = "";
     public string OldValue { get; set; } = "";
     public string NewValue { get; set; } = "";
     public int InstancesAffected { get; set; } = 1;
-    public string Scope => BulkInstanceIds != null ? $"all {InstancesAffected} inst"
-        : Binding == "type" ? $"type · {InstancesAffected} inst" : "instance";
+    public string Scope => (InGroup ? "⚠ group · " : "")
+        + (BulkInstanceIds != null ? $"all {InstancesAffected} inst"
+            : Binding == "type" ? $"type · {InstancesAffected} inst" : "instance");
 
     public bool IsString;
     public string NewString = "";
@@ -151,6 +156,7 @@ public sealed class Importer
 
                 sheet.Baseline.TryGetValue(row.UniqueId, out var baseRow);
                 sheet.RowBindings.TryGetValue(row.UniqueId, out var rowBindings);
+                var (elInGroup, elGroupName) = GroupInfo(doc, el);
 
                 foreach (var col in sheet.Columns)
                 {
@@ -203,7 +209,7 @@ public sealed class Importer
                         if (binding == "type")
                             RecordType(typeGroups, sheet, col, host!, param, label, row.ExcelRow, cellText);
                         else if ((param.AsString() ?? "") != cellText)
-                            cs.Changes.Add(InstanceChange(el, col, param.AsString() ?? "", cellText, true, cellText, 0));
+                            cs.Changes.Add(Mark(InstanceChange(el, col, param.AsString() ?? "", cellText, true, cellText, 0), elInGroup, elGroupName));
                     }
                     else if (param.StorageType == StorageType.Double && col.SpecTypeId != null)
                     {
@@ -216,7 +222,7 @@ public sealed class Importer
                         if (binding == "type")
                             RecordType(typeGroups, sheet, col, host!, param, label, row.ExcelRow, cellText);
                         else if (Math.Abs(param.AsDouble() - parsed) >= 1e-9)
-                            cs.Changes.Add(InstanceChange(el, col, param.AsValueString() ?? "", cellText, false, "", parsed));
+                            cs.Changes.Add(Mark(InstanceChange(el, col, param.AsValueString() ?? "", cellText, false, "", parsed), elInGroup, elGroupName));
                     }
                     else
                     {
@@ -344,23 +350,43 @@ public sealed class Importer
                 }
 
                 var oldDisp = string.IsNullOrEmpty(baseline) ? "(varies)" : baseline;
-                if (rparam.StorageType == StorageType.String)
-                    cs.Changes.Add(BulkChange(typeEl, col, ids, oldDisp, cellText, true, cellText, 0));
+                bool isString;
+                string str = "";
+                double dbl = 0;
+                if (rparam.StorageType == StorageType.String) { isString = true; str = cellText; }
                 else if (rparam.StorageType == StorageType.Double && col.SpecTypeId != null)
                 {
+                    isString = false;
                     if (!UnitFormatUtils.TryParse(units, new ForgeTypeId(col.SpecTypeId), cellText, out double parsed))
                     {
                         cs.Skipped.Add(new SkippedItem { Reason = "unparseable", Detail = $"{col.FieldName} = '{cellText}'" });
                         cs.Diagnostics.Add(Diag(sheet, row, col, label, "red", "value can't be parsed", cellText));
                         continue;
                     }
-                    cs.Changes.Add(BulkChange(typeEl, col, ids, oldDisp, cellText, false, "", parsed));
+                    dbl = parsed;
                 }
                 else
                 {
                     cs.Skipped.Add(new SkippedItem { Reason = "unsupported parameter type", Detail = $"{col.FieldName} ({label})" });
                     cs.Diagnostics.Add(Diag(sheet, row, col, label, "red", "unsupported parameter type", cellText));
+                    continue;
                 }
+
+                // Group members can't be written directly — split them out so the rest still applies.
+                var ungrouped = new List<string>();
+                var grouped = new List<string>();
+                string gName = "";
+                foreach (var uid in ids)
+                {
+                    var inst = doc.GetElement(uid);
+                    var (gi, gn) = inst == null ? (false, "") : GroupInfo(doc, inst);
+                    if (gi) { grouped.Add(uid); if (gName == "") gName = gn; }
+                    else ungrouped.Add(uid);
+                }
+                if (ungrouped.Count > 0)
+                    cs.Changes.Add(BulkChange(typeEl, col, ungrouped, oldDisp, cellText, isString, str, dbl));
+                if (grouped.Count > 0)
+                    cs.Changes.Add(Mark(BulkChange(typeEl, col, grouped, oldDisp, cellText, isString, str, dbl), true, gName));
             }
             // binding == "none" -> parameter lives on neither host for this type; nothing to write.
         }
@@ -578,5 +604,21 @@ public sealed class Importer
     {
         try { return e.Name; }
         catch { return e.Id.ToString(); }
+    }
+
+    /// <summary>Whether an element is a member of a Revit group (its instance params can't be written directly), and the group's name.</summary>
+    private static (bool inGroup, string name) GroupInfo(Document doc, Element e)
+    {
+        var gid = e.GroupId;
+        if (gid == null || gid == ElementId.InvalidElementId) return (false, "");
+        var g = doc.GetElement(gid);
+        return (true, g != null ? SafeName(g) : "Group");
+    }
+
+    private static ProposedChange Mark(ProposedChange ch, bool inGroup, string groupName)
+    {
+        ch.InGroup = inGroup;
+        ch.GroupName = groupName;
+        return ch;
     }
 }

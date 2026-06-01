@@ -22,6 +22,14 @@ public sealed partial class TransomView
             dlg.ShowDialog();
             return dlg.Result;
         };
+
+        // Ask how to handle edits that target group members (skip / abort / hand to Claude).
+        viewModel.GroupResolver = prompt =>
+        {
+            var dlg = new GroupConflictDialog(prompt) { Owner = this };
+            dlg.ShowDialog();
+            return dlg.Decision;
+        };
     }
 
     private void Close_Click(object sender, System.Windows.RoutedEventArgs e) => Close();
