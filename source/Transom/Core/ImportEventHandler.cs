@@ -17,6 +17,7 @@ public sealed class ImportEventHandler : IExternalEventHandler
     public bool WriteRunLog;
     public string ExchangeFolder = "";
     public string DocTitle = "";
+    public System.Collections.Generic.List<CellCorrection>? Corrections;
 
     public Action<ChangeSet> OnPreview = _ => { };
     public Action<string> OnApplied = _ => { };
@@ -31,6 +32,12 @@ public sealed class ImportEventHandler : IExternalEventHandler
             if (RequestedMode == Mode.Preview)
             {
                 var wb = new ExcelReader().Read(WorkbookPath);
+
+                // Apply any user-supplied fixes for previously-unparseable cells (validates + writes them
+                // back into the workbook), then diff the corrected workbook.
+                if (Corrections != null && Corrections.Count > 0)
+                    ExcelCorrector.Apply(WorkbookPath, wb, Corrections, doc.GetUnits());
+
                 var cs = new Importer().BuildChangeSet(doc, wb);
                 if (cs.Diagnostics.Count > 0)
                 {

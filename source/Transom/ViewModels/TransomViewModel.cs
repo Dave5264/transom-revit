@@ -33,6 +33,19 @@ public sealed partial class ScheduleEntry : ObservableObject
     partial void OnIsCheckedChanged(bool value) => CheckedChanged?.Invoke();
 }
 
+/// <summary>One unparseable import cell, with an input box for a corrected value.</summary>
+public sealed partial class UnparseableFix : ObservableObject
+{
+    public string SheetTabName = "";
+    public int ExcelRow;
+    public int ExcelCol;
+    public string FieldName = "";
+    public string ElementLabel = "";
+    public string BadValue = "";
+
+    [ObservableProperty] private string _newValue = "";
+}
+
 public sealed partial class TransomViewModel : ObservableObject
 {
     private readonly ExternalEvent _exportEvent;
@@ -95,6 +108,7 @@ public sealed partial class TransomViewModel : ObservableObject
             _pendingGroupNote = "";
             Changes.Clear();
             Skipped.Clear();
+            Fixes.Clear();
             _lastChangeSet = null;
         });
         _importHandler.OnError = s => _ui.Invoke(() => ImportStatus = "Error: " + s);
@@ -141,6 +155,7 @@ public sealed partial class TransomViewModel : ObservableObject
     public ObservableCollection<ScheduleEntry> FilteredSchedules { get; } = new();
     public ObservableCollection<ProposedChange> Changes { get; } = new();
     public ObservableCollection<SkippedItem> Skipped { get; } = new();
+    public ObservableCollection<UnparseableFix> Fixes { get; } = new();
 
     /// <summary>Set by the view: shows a modal resolver for one type-param conflict, returns the chosen value (or null = skip).</summary>
     public Func<TypeConflict, ConflictOption?>? ConflictResolver;
@@ -231,6 +246,7 @@ public sealed partial class TransomViewModel : ObservableObject
         ImportStatus = "Ready — click Preview.";
         Changes.Clear();
         Skipped.Clear();
+        Fixes.Clear();
         _lastChangeSet = null;
     }
 
@@ -247,6 +263,14 @@ public sealed partial class TransomViewModel : ObservableObject
         _importHandler.DocTitle = SelectedProject;
         _importHandler.WriteRunLog = ClaudeMode != "Off";
         _importHandler.ExchangeFolder = ExchangeFolder;
+        // Carry any typed-in corrections for previously-unparseable cells into this re-preview.
+        _importHandler.Corrections = Fixes
+            .Where(f => !string.IsNullOrWhiteSpace(f.NewValue))
+            .Select(f => new CellCorrection
+            {
+                SheetTabName = f.SheetTabName, ExcelRow = f.ExcelRow, ExcelCol = f.ExcelCol, NewValue = f.NewValue.Trim(),
+            })
+            .ToList();
         ImportStatus = "Analyzing…";
         _importEvent.Raise();
     }
@@ -383,12 +407,24 @@ public sealed partial class TransomViewModel : ObservableObject
                 Skipped.Add(new SkippedItem { Reason = "conflict — unresolved", Detail = $"{conflict.Field} on '{conflict.TypeName}'" });
         }
 
+        // Rebuild the fix pane from the unparseable cells, preserving any value the user already typed.
+        var prior = Fixes.ToDictionary(f => (f.SheetTabName, f.ExcelRow, f.ExcelCol), f => f.NewValue);
+        Fixes.Clear();
+        foreach (var d in cs.Diagnostics.Where(d => d.Reason == "value can't be parsed"))
+            Fixes.Add(new UnparseableFix
+            {
+                SheetTabName = d.SheetTabName, ExcelRow = d.ExcelRow, ExcelCol = d.Col,
+                FieldName = d.FieldName, ElementLabel = d.ElementLabel, BadValue = d.Value,
+                NewValue = prior.TryGetValue((d.SheetTabName, d.ExcelRow, d.Col), out var v) ? v : "",
+            });
+
         ReportPath = cs.ReportPath ?? "";
         int red = cs.Diagnostics.Count(d => d.Severity == "red");
         int yellow = cs.Diagnostics.Count(d => d.Severity == "yellow");
         ImportStatus = $"{Changes.Count} change(s), {Skipped.Count} skipped"
                        + (cs.Conflicts.Count > 0 ? $", {cs.Conflicts.Count} conflict(s) reviewed" : "")
                        + (red + yellow > 0 ? $"  —  {red} can't-write · {yellow} drift (see report)" : "")
+                       + (Fixes.Count > 0 ? $"  ·  {Fixes.Count} fixable below" : "")
                        + (cs.CrossModel ? "  — ⚠ different source model" : "");
     }
 
