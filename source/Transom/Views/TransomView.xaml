@@ -305,11 +305,18 @@
                                   BorderThickness="1" FontSize="11.5" RowHeight="24" ColumnHeaderHeight="26"
                                   Background="White" RowBackground="White" AlternatingRowBackground="#F7F9FC">
                             <DataGrid.Columns>
-                                <DataGridCheckBoxColumn Binding="{Binding Selected, UpdateSourceTrigger=PropertyChanged}" Width="30" />
-                                <DataGridTextColumn Header="Element" Binding="{Binding ElementName}" Width="*" IsReadOnly="True" />
-                                <DataGridTextColumn Header="Field" Binding="{Binding Field}" Width="Auto" IsReadOnly="True" />
-                                <DataGridTextColumn Header="Old" Binding="{Binding OldValue}" Width="Auto" IsReadOnly="True" />
-                                <DataGridTextColumn Header="New" Binding="{Binding NewValue}" Width="Auto" IsReadOnly="True" />
+                                <DataGridCheckBoxColumn Binding="{Binding Selected, UpdateSourceTrigger=PropertyChanged}" Width="Auto" MinWidth="28" />
+                                <DataGridTextColumn Header="Element" Binding="{Binding ElementName}" Width="Auto" MinWidth="90" MaxWidth="260" IsReadOnly="True">
+                                    <DataGridTextColumn.ElementStyle>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+                                            <Setter Property="ToolTip" Value="{Binding ElementName}" />
+                                        </Style>
+                                    </DataGridTextColumn.ElementStyle>
+                                </DataGridTextColumn>
+                                <DataGridTextColumn Header="Field" Binding="{Binding Field}" Width="Auto" MinWidth="50" IsReadOnly="True" />
+                                <DataGridTextColumn Header="Old" Binding="{Binding OldValue}" Width="Auto" MinWidth="50" IsReadOnly="True" />
+                                <DataGridTextColumn Header="New" Binding="{Binding NewValue}" Width="Auto" MinWidth="50" IsReadOnly="True" />
                                 <DataGridTextColumn Header="Scope" Binding="{Binding Scope}" Width="Auto" IsReadOnly="True" />
                             </DataGrid.Columns>
                         </DataGrid>
