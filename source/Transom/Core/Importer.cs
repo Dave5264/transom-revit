@@ -144,7 +144,7 @@ public sealed class Importer
 
             foreach (var row in sheet.Rows)
             {
-                if (row.Kind == "type")
+                if (row.Kind == "type" || row.Kind == "group")
                 {
                     sheet.Baseline.TryGetValue(row.UniqueId, out var baseRowT);
                     sheet.RowBindings.TryGetValue(row.UniqueId, out var rbT);
@@ -271,17 +271,26 @@ public sealed class Importer
         Dictionary<int, string>? rowBindings, Dictionary<int, string>? baseRow)
     {
         var label = row.Cells.FirstOrDefault(c => !string.IsNullOrEmpty(c)) ?? row.UniqueId;
-        var typeEl = doc.GetElement(row.UniqueId);
-        if (typeEl == null)
+        bool isGroup = row.Kind == "group";   // field-grouped row: no type, every column is an instance-bulk write
+        var typeEl = isGroup ? null : doc.GetElement(row.UniqueId);
+
+        // Resolve bindings against a live instance (also the write host for field-group rows, which have no type).
+        Element? reprInst = row.InstanceIds is { Count: > 0 } ? doc.GetElement(row.InstanceIds[0]) : null;
+
+        if (!isGroup && typeEl == null)
         {
             cs.Skipped.Add(new SkippedItem { Reason = "type deleted", Detail = label });
             foreach (var col in sheet.Columns.Where(c => c.Writable && c.Matched && c.ExcelCol < row.Cells.Length))
                 cs.Diagnostics.Add(Diag(sheet, row, col, label, "red", "type no longer exists", row.Cells[col.ExcelCol]));
             return;
         }
+        if (isGroup && reprInst == null)
+        {
+            cs.Skipped.Add(new SkippedItem { Reason = "group elements deleted", Detail = label });
+            return;
+        }
 
-        // Resolve bindings against a live instance of this type rather than the binding frozen at export.
-        Element? reprInst = row.InstanceIds is { Count: > 0 } ? doc.GetElement(row.InstanceIds[0]) : null;
+        var nameEl = (typeEl ?? reprInst)!;   // non-null: type rows have a type, group rows have a live instance
 
         foreach (var col in sheet.Columns)
         {
@@ -291,10 +300,12 @@ public sealed class Importer
             var binding = reprInst != null
                 ? ResolveBindingLive(doc, reprInst, col.ParameterId, col.Binding)
                 : (rowBindings != null && rowBindings.TryGetValue(col.Col, out var rbv) ? rbv : col.Binding);
+            if (isGroup) binding = "instance"; // field-group rows have no type; everything is instance-bulk
 
             if (binding == "type")
             {
-                var param = GetParam(typeEl, col.ParameterId);
+                // binding is never "type" for group rows (forced to instance), so typeEl is non-null here.
+                var param = GetParam(typeEl!, col.ParameterId);
                 if (param == null)
                 {
                     if (baseline == null || cellText != baseline)
@@ -310,7 +321,7 @@ public sealed class Importer
                 {
                     if (edited)
                     {
-                        cs.Changes.Add(FrozenChange(SafeName(typeEl), col, current, cellText, "read-only — driven by the family or type"));
+                        cs.Changes.Add(FrozenChange(SafeName(typeEl!), col, current, cellText, "read-only — driven by the family or type"));
                         cs.Diagnostics.Add(Diag(sheet, row, col, label, "blue", "frozen — read-only (family/type driven)", cellText));
                     }
                     continue;
@@ -321,7 +332,7 @@ public sealed class Importer
                 if (!edited) continue;
 
                 if (param.StorageType == StorageType.String)
-                    RecordType(typeGroups, sheet, col, typeEl, param, label, row.ExcelRow, cellText);
+                    RecordType(typeGroups, sheet, col, typeEl!, param, label, row.ExcelRow, cellText);
                 else if (param.StorageType == StorageType.Double && col.SpecTypeId != null)
                 {
                     if (!UnitFormatUtils.TryParse(units, new ForgeTypeId(col.SpecTypeId), cellText, out _))
@@ -330,11 +341,11 @@ public sealed class Importer
                         cs.Diagnostics.Add(Diag(sheet, row, col, label, "red", "value can't be parsed", cellText));
                         continue;
                     }
-                    RecordType(typeGroups, sheet, col, typeEl, param, label, row.ExcelRow, cellText);
+                    RecordType(typeGroups, sheet, col, typeEl!, param, label, row.ExcelRow, cellText);
                 }
                 else
                 {
-                    cs.Changes.Add(FrozenChange(SafeName(typeEl), col, current, cellText, "set by a family/type selection, not by text"));
+                    cs.Changes.Add(FrozenChange(SafeName(typeEl!), col, current, cellText, "set by a family/type selection, not by text"));
                     cs.Diagnostics.Add(Diag(sheet, row, col, label, "blue", "frozen — set by family/type (can't import)", cellText));
                 }
             }
@@ -372,7 +383,7 @@ public sealed class Importer
                 }
                 if (rparam.IsReadOnly)
                 {
-                    cs.Changes.Add(FrozenChange(SafeName(typeEl), col, "(varies)", cellText, "read-only — driven by the family or type"));
+                    cs.Changes.Add(FrozenChange(SafeName(nameEl), col, "(varies)", cellText, "read-only — driven by the family or type"));
                     cs.Diagnostics.Add(Diag(sheet, row, col, label, "blue", "frozen — read-only (family/type driven)", cellText));
                     continue;
                 }
@@ -411,7 +422,7 @@ public sealed class Importer
                 }
                 else
                 {
-                    cs.Changes.Add(FrozenChange(SafeName(typeEl), col, oldDisp, cellText, "set by a family/type selection, not by text"));
+                    cs.Changes.Add(FrozenChange(SafeName(nameEl), col, oldDisp, cellText, "set by a family/type selection, not by text"));
                     cs.Diagnostics.Add(Diag(sheet, row, col, label, "blue", "frozen — set by family/type (can't import)", cellText));
                     continue;
                 }
@@ -428,9 +439,9 @@ public sealed class Importer
                     else ungrouped.Add(uid);
                 }
                 if (ungrouped.Count > 0)
-                    cs.Changes.Add(BulkChange(typeEl, col, ungrouped, oldDisp, cellText, isString, str, dbl, isInt, iv));
+                    cs.Changes.Add(BulkChange(nameEl, col, ungrouped, oldDisp, cellText, isString, str, dbl, isInt, iv));
                 if (grouped.Count > 0)
-                    cs.Changes.Add(Mark(BulkChange(typeEl, col, grouped, oldDisp, cellText, isString, str, dbl, isInt, iv), true, gName));
+                    cs.Changes.Add(Mark(BulkChange(nameEl, col, grouped, oldDisp, cellText, isString, str, dbl, isInt, iv), true, gName));
             }
             // binding == "none" -> parameter lives on neither host for this type; nothing to write.
         }

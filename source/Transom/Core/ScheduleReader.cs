@@ -193,6 +193,7 @@ public sealed class ScheduleReader
         var typeToInstances = new Dictionary<string, List<string>>(); // grouped: type uid -> instance uids it owns
         var representative = new Dictionary<string, Element>();        // grouped: type uid -> one instance (binding resolution)
 
+        bool fieldGrouped = false;
         if (table.RoundTrippable)
         {
             var els = new FilteredElementCollector(_doc, vs.Id)
@@ -200,17 +201,26 @@ public sealed class ScheduleReader
             foreach (var e in els) uidToElement[e.UniqueId] = e;
 
             if (grouped)
+            {
                 ReadTypeAnchors(vs, table, els, anchors, uidToElement, typeToInstances, representative);
+                if (anchors.All(a => a == null))
+                {
+                    // Not type-based (areas, rooms): anchor each row to the set of instances sharing its
+                    // group-field values (read-only value matching).
+                    ReadFieldGroupAnchors(vs, table, els, anchors, uidToElement, typeToInstances, representative);
+                    fieldGrouped = anchors.Any(a => a != null);
+                }
+            }
             else
                 ReadInstanceAnchors(vs, table, els, anchors);
 
-            // Nothing could be anchored (empty / linked / un-anchorable / not type-groupable) -> display-only.
+            // Nothing could be anchored (empty / linked / un-anchorable / not groupable) -> display-only.
             if (anchors.All(a => a == null))
                 table.RoundTrippable = false;
         }
 
-        // Grouped rows are bulk-instance-safe only when their type maps to exactly one row; a type split
-        // across rows (multi-field grouping) leaves instance scope ambiguous -> type params only.
+        // A grouped row is bulk-safe only when its key maps to exactly one row; a key split across rows
+        // (multi-field grouping) leaves instance scope ambiguous -> skip those rows' instance writes.
         var typeRowCount = anchors.Where(a => a != null).GroupBy(a => a!).ToDictionary(g => g.Key, g => g.Count());
 
         var writable = table.Columns.Where(c => c.Writable).ToList();
@@ -219,7 +229,7 @@ public sealed class ScheduleReader
             var meta = new RowMeta { ExcelRow = r, UniqueId = anchors[r] };
             if (anchors[r] != null && uidToElement.TryGetValue(anchors[r]!, out var host))
             {
-                meta.Kind = grouped ? "type" : "element";
+                meta.Kind = fieldGrouped ? "group" : grouped ? "type" : "element";
                 if (grouped)
                 {
                     if (typeRowCount[anchors[r]!] == 1 && typeToInstances.TryGetValue(anchors[r]!, out var insts))
@@ -381,6 +391,100 @@ public sealed class ScheduleReader
         var validTypeUids = new HashSet<string>(typeElements.Keys);
         ReadAnchorColumn(vs, table, typeElements.Values.ToList(), anchors, validTypeUids,
             (int)BuiltInParameter.ALL_MODEL_TYPE_COMMENTS);
+    }
+
+    /// <summary>
+    ///     Grouped schedules with no type (areas, rooms): anchor each row to the set of instances sharing its
+    ///     group-field values. Reads the rendered row's group-column values and matches them to the elements'
+    ///     group-field parameter values (read-only). Only works when every group field is a visible column;
+    ///     hierarchical grouping with hidden group fields is left display-only.
+    /// </summary>
+    private void ReadFieldGroupAnchors(ViewSchedule vs, ScheduleTable table, System.Collections.Generic.IList<Element> els,
+        string?[] anchors, Dictionary<string, Element> uidToElement,
+        Dictionary<string, List<string>> groupToInstances, Dictionary<string, Element> representative)
+    {
+        const string sep = "";
+        var def = vs.Definition;
+
+        var gpids = new List<int>();
+        foreach (var sg in def.GetSortGroupFields())
+        {
+            var f = def.GetField(sg.FieldId);
+            if (f != null) gpids.Add((int)f.ParameterId.Value);
+        }
+        if (gpids.Count == 0) return;
+
+        // Element group key = its group-field values, joined in field order.
+        string ElemKey(Element e)
+        {
+            var parts = new string[gpids.Count];
+            for (int i = 0; i < gpids.Count; i++)
+            {
+                var p = GetParamOn(e, gpids[i]);
+                parts[i] = p == null ? "" : p.StorageType == StorageType.String ? p.AsString() ?? "" : p.AsValueString() ?? "";
+            }
+            return string.Join(sep, parts);
+        }
+
+        var groups = new Dictionary<string, List<string>>();
+        var groupRepr = new Dictionary<string, Element>();
+        var groupIndex = new Dictionary<string, int>();
+        foreach (var e in els)
+        {
+            var k = ElemKey(e);
+            if (!groups.TryGetValue(k, out var list))
+            {
+                list = new List<string>();
+                groups[k] = list;
+                groupRepr[k] = e;
+                groupIndex[k] = groupIndex.Count;
+            }
+            list.Add(e.UniqueId);
+        }
+
+        // Visible column index of each group field (in field order). Bail if any group field is hidden.
+        var pidToCol = new Dictionary<int, int>();
+        int vc = 0;
+        foreach (var fid in def.GetFieldOrder())
+        {
+            var f = def.GetField(fid);
+            if (f == null || f.IsHidden) continue;
+            int pid = (int)f.ParameterId.Value;
+            if (!pidToCol.ContainsKey(pid)) pidToCol[pid] = vc;
+            vc++;
+        }
+        var gcols = new List<int>();
+        foreach (var pid in gpids)
+        {
+            if (!pidToCol.TryGetValue(pid, out var c)) return; // a group field isn't a visible column -> bail
+            gcols.Add(c);
+        }
+
+        var sec = vs.GetTableData().GetSectionData(SectionType.Body);
+        int nr = sec.NumberOfRows;
+        for (int r = 0; r < table.RowCount && r < nr; r++)
+        {
+            var parts = new string[gcols.Count];
+            bool any = false;
+            for (int i = 0; i < gcols.Count; i++)
+            {
+                var t = vs.GetCellText(SectionType.Body, r, gcols[i]) ?? "";
+                if (t.Length > 0) any = true;
+                parts[i] = t;
+            }
+            if (!any) continue;
+            var key = string.Join(sep, parts);
+            if (!groups.TryGetValue(key, out var insts)) continue; // header / non-matching row
+
+            var synth = "grp::" + groupIndex[key]; // XML-safe anchor id (the raw key may hold control chars)
+            anchors[r] = synth;
+            if (!groupToInstances.ContainsKey(synth))
+            {
+                groupToInstances[synth] = insts;
+                representative[synth] = groupRepr[key];
+                uidToElement[synth] = groupRepr[key];
+            }
+        }
     }
 
     /// <summary>

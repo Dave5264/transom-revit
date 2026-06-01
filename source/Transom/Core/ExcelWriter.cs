@@ -293,7 +293,7 @@ public sealed class ExcelWriter
         for (int i = 0; i < t.Rows.Count && i < t.RowCount; i++)
         {
             var rm = t.Rows[i];
-            if ((rm.Kind != "element" && rm.Kind != "type") || string.IsNullOrEmpty(rm.UniqueId)) continue;
+            if ((rm.Kind != "element" && rm.Kind != "type" && rm.Kind != "group") || string.IsNullOrEmpty(rm.UniqueId)) continue;
             var map = new Dictionary<string, string>();
             foreach (var col in writableCols)
                 if (col < t.ColCount)
