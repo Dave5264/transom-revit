@@ -85,6 +85,7 @@ public sealed partial class TransomViewModel : ObservableObject
     [ObservableProperty] private string _reportPath = "";
     [ObservableProperty] private bool _copiedImport;
     [ObservableProperty] private bool _produceReport;   // off by default — report only on request
+    [ObservableProperty] private bool _hasFrozen;       // any greyed (un-writable) rows in the preview
 
     [ObservableProperty] private bool _claudeAvailable;
     [ObservableProperty] private string _claudeMode = "Off"; // Off | Verify (read-only) | Assist (write)
@@ -421,7 +422,7 @@ public sealed partial class TransomViewModel : ObservableObject
     }
 
     [RelayCommand]
-    private void SelectAll() { foreach (var c in Changes) c.Selected = true; RefreshChanges(); }
+    private void SelectAll() { foreach (var c in Changes) if (c.Selectable) c.Selected = true; RefreshChanges(); }
 
     [RelayCommand]
     private void SelectNone() { foreach (var c in Changes) c.Selected = false; RefreshChanges(); }
@@ -480,10 +481,15 @@ public sealed partial class TransomViewModel : ObservableObject
             });
         }
 
+        HasFrozen = Changes.Any(c => c.Frozen);
+        int frozen = Changes.Count(c => c.Frozen);
+        int applyable = Changes.Count - frozen;
+
         ReportPath = cs.ReportPath ?? "";
         int red = cs.Diagnostics.Count(d => d.Severity == "red");
         int yellow = cs.Diagnostics.Count(d => d.Severity == "yellow");
-        ImportStatus = $"{Changes.Count} change(s), {Skipped.Count} skipped"
+        ImportStatus = $"{applyable} change(s), {Skipped.Count} skipped"
+                       + (frozen > 0 ? $", {frozen} frozen" : "")
                        + (cs.Conflicts.Count > 0 ? $", {cs.Conflicts.Count} conflict(s) reviewed" : "")
                        + (red + yellow > 0 ? $"  —  {red} can't-write · {yellow} drift (see report)" : "")
                        + (Fixes.Count > 0 ? $"  ·  {Fixes.Count} fixable below" : "")

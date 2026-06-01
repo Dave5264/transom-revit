@@ -19,6 +19,11 @@ public sealed class ProposedChange
     public bool InGroup;
     public string GroupName = "";
 
+    /// <summary>True when the field can't be changed by import (read-only / driven by the family or type selection). Shown greyed, not applied.</summary>
+    public bool Frozen;
+    public string FrozenReason = "";
+    public bool Selectable => !Frozen;
+
     public bool Selected { get; set; } = true;
     public string ElementName { get; set; } = "";
     public string Field { get; set; } = "";
@@ -189,8 +194,8 @@ public sealed class Importer
                     {
                         if (edited)
                         {
-                            cs.Skipped.Add(new SkippedItem { Reason = "read-only", Detail = $"{col.FieldName} ({label})" });
-                            cs.Diagnostics.Add(Diag(sheet, row, col, label, "red", "parameter is read-only", cellText));
+                            cs.Changes.Add(FrozenChange(SafeName(el), col, current, cellText, "read-only — driven by the family or type"));
+                            cs.Diagnostics.Add(Diag(sheet, row, col, label, "blue", "frozen — read-only (family/type driven)", cellText));
                         }
                         continue;
                     }
@@ -224,8 +229,9 @@ public sealed class Importer
                     }
                     else
                     {
-                        cs.Skipped.Add(new SkippedItem { Reason = "unsupported parameter type", Detail = $"{col.FieldName} ({label})" });
-                        cs.Diagnostics.Add(Diag(sheet, row, col, label, "red", "unsupported parameter type", cellText));
+                        // Non-text, non-numeric (e.g. an ElementId / family-or-type selection) — can't be set from a cell.
+                        cs.Changes.Add(FrozenChange(SafeName(el), col, current, cellText, "set by a family/type selection, not by text"));
+                        cs.Diagnostics.Add(Diag(sheet, row, col, label, "blue", "frozen — set by family/type (can't import)", cellText));
                     }
                 }
             }
@@ -285,8 +291,8 @@ public sealed class Importer
                 {
                     if (edited)
                     {
-                        cs.Skipped.Add(new SkippedItem { Reason = "read-only", Detail = $"{col.FieldName} ({label})" });
-                        cs.Diagnostics.Add(Diag(sheet, row, col, label, "red", "parameter is read-only", cellText));
+                        cs.Changes.Add(FrozenChange(SafeName(typeEl), col, current, cellText, "read-only — driven by the family or type"));
+                        cs.Diagnostics.Add(Diag(sheet, row, col, label, "blue", "frozen — read-only (family/type driven)", cellText));
                     }
                     continue;
                 }
@@ -309,8 +315,8 @@ public sealed class Importer
                 }
                 else
                 {
-                    cs.Skipped.Add(new SkippedItem { Reason = "unsupported parameter type", Detail = $"{col.FieldName} ({label})" });
-                    cs.Diagnostics.Add(Diag(sheet, row, col, label, "red", "unsupported parameter type", cellText));
+                    cs.Changes.Add(FrozenChange(SafeName(typeEl), col, current, cellText, "set by a family/type selection, not by text"));
+                    cs.Diagnostics.Add(Diag(sheet, row, col, label, "blue", "frozen — set by family/type (can't import)", cellText));
                 }
             }
             else if (binding == "instance")
@@ -499,6 +505,8 @@ public sealed class Importer
         {
             foreach (var ch in cs.Changes)
             {
+                if (ch.Frozen) continue; // can't be written — shown greyed in the preview only
+
                 // Bulk instance write (grouped schedule): apply to every instance the row represented.
                 if (ch.BulkInstanceIds != null)
                 {
@@ -561,6 +569,13 @@ public sealed class Importer
     {
         UniqueId = el.UniqueId, ParameterId = col.ParameterId, Binding = "instance", ElementName = SafeName(el),
         Field = col.FieldName, OldValue = oldDisp, NewValue = newDisp, IsString = isString, NewString = str, NewDouble = dbl,
+    };
+
+    /// <summary>An edited cell whose field can't be written by import (read-only / family- or type-driven). Shown greyed, never applied.</summary>
+    private static ProposedChange FrozenChange(string elementName, ImportColumn col, string oldDisp, string attempted, string reason) => new()
+    {
+        ParameterId = col.ParameterId, Binding = "instance", ElementName = elementName,
+        Field = col.FieldName, OldValue = oldDisp, NewValue = attempted, Frozen = true, FrozenReason = reason, Selected = false,
     };
 
     private static ProposedChange TypeChange((long, int) key, TypeCandidate tc, string newDisp,

@@ -157,6 +157,10 @@
                     <Setter Property="Background" Value="{DynamicResource AccentHover}" />
                     <Setter Property="Foreground" Value="{DynamicResource Text}" />
                 </Trigger>
+                <!-- Frozen rows (un-writable, family/type-driven) render greyed. -->
+                <DataTrigger Binding="{Binding Frozen}" Value="True">
+                    <Setter Property="Foreground" Value="{DynamicResource Hint}" />
+                </DataTrigger>
             </Style.Triggers>
         </Style>
     </Window.Resources>
@@ -441,13 +445,28 @@
                             </DockPanel>
                         </Border>
 
+                        <!-- Frozen-cells note: shown when any preview row is un-writable (family/type-driven) -->
+                        <Border DockPanel.Dock="Bottom" Margin="0,8,0,0"
+                                Visibility="{Binding HasFrozen, Converter={StaticResource BoolToVis}}">
+                            <TextBlock Foreground="{DynamicResource Muted}" FontSize="11" TextWrapping="Wrap">
+                                <Run Text="⊘ " Foreground="{DynamicResource Hint}" /><Run Text="Greyed rows can't be changed by import — those values are driven by the element's family or type. Set them by picking an option on the element or editing the family/type, not in the spreadsheet." />
+                            </TextBlock>
+                        </Border>
+
                         <DataGrid ItemsSource="{Binding Changes}" AutoGenerateColumns="False" CanUserAddRows="False"
                                   HeadersVisibility="Column" GridLinesVisibility="Horizontal" BorderBrush="{DynamicResource Line}"
                                   BorderThickness="1" FontSize="11.5" RowHeight="24" ColumnHeaderHeight="26"
                                   Background="{DynamicResource Surface}" RowBackground="{DynamicResource Surface}"
                                   AlternatingRowBackground="{DynamicResource AltRow}" Foreground="{DynamicResource Text}">
                             <DataGrid.Columns>
-                                <DataGridCheckBoxColumn Binding="{Binding Selected, UpdateSourceTrigger=PropertyChanged}" Width="Auto" MinWidth="28" />
+                                <DataGridTemplateColumn Width="Auto" MinWidth="28">
+                                    <DataGridTemplateColumn.CellTemplate>
+                                        <DataTemplate>
+                                            <CheckBox IsChecked="{Binding Selected, UpdateSourceTrigger=PropertyChanged, Mode=TwoWay}"
+                                                      IsEnabled="{Binding Selectable}" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                        </DataTemplate>
+                                    </DataGridTemplateColumn.CellTemplate>
+                                </DataGridTemplateColumn>
                                 <DataGridTextColumn Header="Element" Binding="{Binding ElementName}" Width="Auto" MinWidth="90" MaxWidth="260" IsReadOnly="True">
                                     <DataGridTextColumn.ElementStyle>
                                         <Style TargetType="TextBlock">
