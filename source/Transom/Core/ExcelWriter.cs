@@ -277,8 +277,27 @@ public sealed class ExcelWriter
                 {
                     excelRow = r.ExcelRow, uniqueId = r.UniqueId, kind = r.Kind,
                 }).ToArray(),
+                baseline = BuildBaseline(p.t),
             }).ToArray(),
         };
         return System.Text.Json.JsonSerializer.Serialize(meta);
+    }
+
+    /// <summary>Exported value per element for writable columns: uniqueId -> (col -> value), for three-way import diff.</summary>
+    private static Dictionary<string, Dictionary<string, string>> BuildBaseline(ScheduleTable t)
+    {
+        var writableCols = t.Columns.Where(c => c.Writable).Select(c => c.Col).ToHashSet();
+        var baseline = new Dictionary<string, Dictionary<string, string>>();
+        for (int i = 0; i < t.Rows.Count && i < t.RowCount; i++)
+        {
+            var rm = t.Rows[i];
+            if (rm.Kind != "element" || string.IsNullOrEmpty(rm.UniqueId)) continue;
+            var map = new Dictionary<string, string>();
+            foreach (var col in writableCols)
+                if (col < t.ColCount)
+                    map[col.ToString()] = t.Cells[i][col].Text;
+            baseline[rm.UniqueId!] = map;
+        }
+        return baseline;
     }
 }

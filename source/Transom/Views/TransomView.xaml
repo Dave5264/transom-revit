@@ -264,7 +264,21 @@
 
                         <Border DockPanel.Dock="Bottom" Background="#E6F1FB" BorderBrush="#85B7EB" BorderThickness="1"
                                 CornerRadius="6" Padding="10" Margin="0,8,0,0">
-                            <TextBlock Text="{Binding ImportStatus}" Foreground="#185FA5" TextWrapping="Wrap" FontSize="12" />
+                            <DockPanel>
+                                <Button DockPanel.Dock="Right" Content="Open report" Command="{Binding OpenReportCommand}" Margin="8,0,0,0">
+                                    <Button.Style>
+                                        <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding ReportPath}" Value="">
+                                                    <Setter Property="Visibility" Value="Collapsed" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Button.Style>
+                                </Button>
+                                <TextBlock Text="{Binding ImportStatus}" Foreground="#185FA5" TextWrapping="Wrap"
+                                           FontSize="12" VerticalAlignment="Center" />
+                            </DockPanel>
                         </Border>
 
                         <Border DockPanel.Dock="Bottom" BorderBrush="#F0D6A8" BorderThickness="1" CornerRadius="6"

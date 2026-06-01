@@ -7,12 +7,11 @@ namespace Transom.Core;
 
 public sealed class ProposedChange
 {
-    public string UniqueId = "";   // instance writes
-    public long TypeId;            // type writes (0 = instance)
+    public string UniqueId = "";
+    public long TypeId;
     public int ParameterId;
     public string Binding = "instance";
 
-    // Bound in the preview grid -> must be properties.
     public bool Selected { get; set; } = true;
     public string ElementName { get; set; } = "";
     public string Field { get; set; } = "";
@@ -28,24 +27,19 @@ public sealed class ProposedChange
 
 public sealed class SkippedItem
 {
-    public string Reason { get; set; } = "";   // unparseable | conflict | unmatched | notRoundtrippable
+    public string Reason { get; set; } = "";
     public string Detail { get; set; } = "";
 }
 
-/// <summary>One candidate value for a type-parameter conflict (pre-parsed in API context).</summary>
 public sealed class ConflictOption
 {
     public string Display = "";
     public bool IsString;
     public string NewString = "";
     public double NewDouble;
-    public bool Parseable = true; // false when a measurable value couldn't be parsed
+    public bool Parseable = true;
 }
 
-/// <summary>
-///     A type parameter whose rows disagree. Surfaced for interactive resolution (pick one value to
-///     apply to all instances of the type) rather than silently skipped.
-/// </summary>
 public sealed class TypeConflict
 {
     public long TypeId;
@@ -57,6 +51,19 @@ public sealed class TypeConflict
     public List<ConflictOption> Options = new();
 }
 
+/// <summary>A flagged cell for the colour-coded import report. Severity: "red" (can't write) or "yellow" (changed since export).</summary>
+public sealed class CellDiagnostic
+{
+    public string SheetTabName = "";
+    public int ExcelRow;
+    public int Col;
+    public string FieldName = "";
+    public string ElementLabel = "";
+    public string Severity = "";   // red | yellow
+    public string Reason = "";
+    public string Value = "";
+}
+
 public sealed class ChangeSet
 {
     public string ScheduleName = "";
@@ -64,25 +71,29 @@ public sealed class ChangeSet
     public List<ProposedChange> Changes = new();
     public List<SkippedItem> Skipped = new();
     public List<TypeConflict> Conflicts = new();
+    public List<CellDiagnostic> Diagnostics = new();
+    public string ReportPath = "";
 }
 
 /// <summary>
-///     Diffs an imported workbook against the live model (read-only) to produce a change set, and applies
-///     a confirmed change set inside one transaction. Type params are conflict-checked across ALL rows of
-///     a type (not just edited ones) and written once.
+///     Diffs an imported workbook against the live model (read-only) into a change set + diagnostics, and
+///     applies a confirmed change set in one transaction. Uses a three-way compare (exported baseline vs
+///     current model vs spreadsheet): only cells you actually edited (spreadsheet ≠ baseline) become writes;
+///     model drift (current ≠ baseline) is flagged "changed since export"; unwritable cells are flagged red.
 /// </summary>
 public sealed class Importer
 {
     private sealed class TypeCandidate
     {
         public ImportColumn Col = null!;
+        public string SheetTab = "";
         public string TypeName = "";
         public bool IsString;
         public string? SpecTypeId;
         public string CurString = "";
         public double CurDouble;
         public string CurDisplay = "";
-        public readonly List<string> CellValues = new(); // every instance row's cell for this type+param
+        public readonly List<(int excelRow, string value, string label)> Cells = new();
     }
 
     public ChangeSet BuildChangeSet(Document doc, ImportWorkbook wb)
@@ -95,7 +106,7 @@ public sealed class Importer
             cs.ScheduleName = sheet.ScheduleName;
             if (!sheet.RoundTrippable)
             {
-                cs.Skipped.Add(new SkippedItem { Reason = "notRoundtrippable", Detail = sheet.ScheduleName });
+                cs.Skipped.Add(new SkippedItem { Reason = "display-only schedule", Detail = sheet.ScheduleName });
                 continue;
             }
 
@@ -103,69 +114,83 @@ public sealed class Importer
 
             foreach (var row in sheet.Rows)
             {
+                var label = row.Cells.FirstOrDefault(c => !string.IsNullOrEmpty(c)) ?? row.UniqueId;
                 var el = doc.GetElement(row.UniqueId);
                 if (el == null)
                 {
-                    cs.Skipped.Add(new SkippedItem { Reason = "unmatched", Detail = row.UniqueId });
+                    cs.Skipped.Add(new SkippedItem { Reason = "element deleted", Detail = label });
+                    foreach (var col in sheet.Columns.Where(c => c.Writable && c.Col < row.Cells.Length))
+                        cs.Diagnostics.Add(Diag(sheet, row, col, label, "red", "element no longer exists", row.Cells[col.Col]));
                     continue;
                 }
+
+                sheet.Baseline.TryGetValue(row.UniqueId, out var baseRow);
 
                 foreach (var col in sheet.Columns)
                 {
                     if (!col.Writable || col.Col >= row.Cells.Length) continue;
                     var cellText = row.Cells[col.Col] ?? "";
+                    var baseline = baseRow != null && baseRow.TryGetValue(col.Col, out var bv) ? bv : null;
 
                     var host = col.Binding == "type"
                         ? (el.GetTypeId() != ElementId.InvalidElementId ? doc.GetElement(el.GetTypeId()) : null)
                         : el;
-                    if (host == null) continue;
+                    var param = host == null ? null : GetParam(host, col.ParameterId);
 
-                    var param = GetParam(host, col.ParameterId);
-                    if (param == null || param.IsReadOnly) continue; // read-only (e.g. computed Length) skipped silently
-
-                    bool measurableDouble = param.StorageType == StorageType.Double && col.SpecTypeId != null;
-                    if (param.StorageType != StorageType.String && !measurableDouble) continue; // unsupported storage
-
-                    if (col.Binding == "type")
+                    if (param == null)
                     {
-                        var key = (host.Id.Value, col.ParameterId);
-                        if (!typeGroups.TryGetValue(key, out var tc))
+                        if (baseline == null || cellText != baseline)
                         {
-                            tc = new TypeCandidate { Col = col, TypeName = SafeName(host), SpecTypeId = col.SpecTypeId };
-                            if (param.StorageType == StorageType.String)
-                            {
-                                tc.IsString = true;
-                                tc.CurString = param.AsString() ?? "";
-                                tc.CurDisplay = tc.CurString;
-                            }
-                            else
-                            {
-                                tc.IsString = false;
-                                tc.CurDouble = param.AsDouble();
-                                tc.CurDisplay = param.AsValueString() ?? "";
-                            }
-                            typeGroups[key] = tc;
+                            cs.Skipped.Add(new SkippedItem { Reason = "parameter not found", Detail = $"{col.FieldName} ({label})" });
+                            cs.Diagnostics.Add(Diag(sheet, row, col, label, "red", "parameter not found", cellText));
                         }
-                        tc.CellValues.Add(cellText); // record EVERY row, changed or not
                         continue;
                     }
 
-                    // instance binding
+                    var current = CurrentDisplay(param);
+                    bool edited = baseline != null ? cellText != baseline : cellText != current;
+
+                    if (param.IsReadOnly)
+                    {
+                        if (edited)
+                        {
+                            cs.Skipped.Add(new SkippedItem { Reason = "read-only", Detail = $"{col.FieldName} ({label})" });
+                            cs.Diagnostics.Add(Diag(sheet, row, col, label, "red", "parameter is read-only", cellText));
+                        }
+                        continue;
+                    }
+
+                    // Drift: current model value differs from what was exported (only knowable with a baseline).
+                    if (baseline != null && Drifted(param, baseline, units, col.SpecTypeId))
+                        cs.Diagnostics.Add(Diag(sheet, row, col, label, "yellow",
+                            $"changed since export (was '{baseline}', now '{current}')", cellText));
+
+                    if (!edited) continue; // not edited -> no write (never revert model drift)
+
                     if (param.StorageType == StorageType.String)
                     {
-                        var cur = param.AsString() ?? "";
-                        if (cur == cellText) continue;
-                        cs.Changes.Add(InstanceChange(el, col, cur, cellText, isString: true, str: cellText, dbl: 0));
+                        if (col.Binding == "type")
+                            RecordType(typeGroups, sheet, col, host!, param, label, row.ExcelRow, cellText);
+                        else if ((param.AsString() ?? "") != cellText)
+                            cs.Changes.Add(InstanceChange(el, col, param.AsString() ?? "", cellText, true, cellText, 0));
+                    }
+                    else if (param.StorageType == StorageType.Double && col.SpecTypeId != null)
+                    {
+                        if (!UnitFormatUtils.TryParse(units, new ForgeTypeId(col.SpecTypeId), cellText, out double parsed))
+                        {
+                            cs.Skipped.Add(new SkippedItem { Reason = "unparseable", Detail = $"{col.FieldName} = '{cellText}'" });
+                            cs.Diagnostics.Add(Diag(sheet, row, col, label, "red", "value can't be parsed", cellText));
+                            continue;
+                        }
+                        if (col.Binding == "type")
+                            RecordType(typeGroups, sheet, col, host!, param, label, row.ExcelRow, cellText);
+                        else if (Math.Abs(param.AsDouble() - parsed) >= 1e-9)
+                            cs.Changes.Add(InstanceChange(el, col, param.AsValueString() ?? "", cellText, false, "", parsed));
                     }
                     else
                     {
-                        if (!UnitFormatUtils.TryParse(units, new ForgeTypeId(col.SpecTypeId!), cellText, out double parsed))
-                        {
-                            cs.Skipped.Add(new SkippedItem { Reason = "unparseable", Detail = $"{col.FieldName} = '{cellText}'" });
-                            continue;
-                        }
-                        if (Math.Abs(param.AsDouble() - parsed) < 1e-9) continue;
-                        cs.Changes.Add(InstanceChange(el, col, param.AsValueString() ?? "", cellText, isString: false, str: "", dbl: parsed));
+                        cs.Skipped.Add(new SkippedItem { Reason = "unsupported parameter type", Detail = $"{col.FieldName} ({label})" });
+                        cs.Diagnostics.Add(Diag(sheet, row, col, label, "red", "unsupported parameter type", cellText));
                     }
                 }
             }
@@ -176,15 +201,38 @@ public sealed class Importer
         return cs;
     }
 
+    private static void RecordType(Dictionary<(long, int), TypeCandidate> typeGroups, ImportSheet sheet,
+        ImportColumn col, Element host, Parameter param, string label, int excelRow, string cellText)
+    {
+        var key = (host.Id.Value, col.ParameterId);
+        if (!typeGroups.TryGetValue(key, out var tc))
+        {
+            tc = new TypeCandidate { Col = col, SheetTab = sheet.SheetTabName, TypeName = SafeName(host), SpecTypeId = col.SpecTypeId };
+            if (param.StorageType == StorageType.String)
+            {
+                tc.IsString = true;
+                tc.CurString = param.AsString() ?? "";
+                tc.CurDisplay = tc.CurString;
+            }
+            else
+            {
+                tc.IsString = false;
+                tc.CurDouble = param.AsDouble();
+                tc.CurDisplay = param.AsValueString() ?? "";
+            }
+            typeGroups[key] = tc;
+        }
+        tc.Cells.Add((excelRow, cellText, label));
+    }
+
     private static void ResolveTypeGroups(ChangeSet cs, Dictionary<(long, int), TypeCandidate> typeGroups, Units units)
     {
         foreach (var kv in typeGroups)
         {
             var tc = kv.Value;
-            var distinct = tc.CellValues.Distinct().ToList();
+            var distinct = tc.Cells.Select(c => c.value).Distinct().ToList();
             if (distinct.Count > 1)
             {
-                // Disagreement -> surface for interactive resolution (pre-parse each candidate now).
                 var conflict = new TypeConflict
                 {
                     TypeId = kv.Key.Item1,
@@ -192,7 +240,7 @@ public sealed class Importer
                     Field = tc.Col.FieldName,
                     TypeName = tc.TypeName,
                     CurrentDisplay = tc.CurDisplay,
-                    InstancesAffected = tc.CellValues.Count,
+                    InstancesAffected = tc.Cells.Count,
                 };
                 foreach (var v in distinct)
                 {
@@ -205,15 +253,20 @@ public sealed class Importer
                     conflict.Options.Add(opt);
                 }
                 cs.Conflicts.Add(conflict);
+                foreach (var cell in tc.Cells)
+                    cs.Diagnostics.Add(new CellDiagnostic
+                    {
+                        SheetTabName = tc.SheetTab, ExcelRow = cell.excelRow, Col = tc.Col.Col, FieldName = tc.Col.FieldName,
+                        ElementLabel = cell.label, Severity = "red", Reason = "type conflict — pick a value", Value = cell.value,
+                    });
                 continue;
             }
 
-            var value = distinct.Count == 1 ? distinct[0] : tc.CurDisplay;
-
+            var value = distinct[0];
             if (tc.IsString)
             {
-                if (value == tc.CurString) continue; // no change
-                cs.Changes.Add(TypeChange(kv.Key, tc, value, isString: true, str: value, dbl: 0));
+                if (value == tc.CurString) continue;
+                cs.Changes.Add(TypeChange(kv.Key, tc, value, true, value, 0));
             }
             else
             {
@@ -222,60 +275,19 @@ public sealed class Importer
                     cs.Skipped.Add(new SkippedItem { Reason = "unparseable", Detail = $"{tc.Col.FieldName} = '{value}'" });
                     continue;
                 }
-                if (Math.Abs(parsed - tc.CurDouble) < 1e-9) continue; // no change
-                cs.Changes.Add(TypeChange(kv.Key, tc, value, isString: false, str: "", dbl: parsed));
+                if (Math.Abs(parsed - tc.CurDouble) < 1e-9) continue;
+                cs.Changes.Add(TypeChange(kv.Key, tc, value, false, "", parsed));
             }
         }
     }
 
-    private static ProposedChange InstanceChange(Element el, ImportColumn col, string oldDisp, string newDisp,
-        bool isString, string str, double dbl) => new()
-    {
-        UniqueId = el.UniqueId,
-        ParameterId = col.ParameterId,
-        Binding = "instance",
-        ElementName = SafeName(el),
-        Field = col.FieldName,
-        OldValue = oldDisp,
-        NewValue = newDisp,
-        IsString = isString,
-        NewString = str,
-        NewDouble = dbl,
-    };
-
-    private static ProposedChange TypeChange((long, int) key, TypeCandidate tc, string newDisp,
-        bool isString, string str, double dbl) => new()
-    {
-        TypeId = key.Item1,
-        ParameterId = key.Item2,
-        Binding = "type",
-        ElementName = tc.TypeName,
-        Field = tc.Col.FieldName,
-        OldValue = tc.CurDisplay,
-        NewValue = newDisp,
-        InstancesAffected = tc.CellValues.Count,
-        IsString = isString,
-        NewString = str,
-        NewDouble = dbl,
-    };
-
-    /// <summary>Builds a type-write change from a user-resolved conflict choice.</summary>
     public static ProposedChange ResolveToChange(TypeConflict c, ConflictOption opt) => new()
     {
-        TypeId = c.TypeId,
-        ParameterId = c.ParameterId,
-        Binding = "type",
-        ElementName = c.TypeName,
-        Field = c.Field,
-        OldValue = c.CurrentDisplay,
-        NewValue = opt.Display,
-        InstancesAffected = c.InstancesAffected,
-        IsString = opt.IsString,
-        NewString = opt.NewString,
-        NewDouble = opt.NewDouble,
+        TypeId = c.TypeId, ParameterId = c.ParameterId, Binding = "type", ElementName = c.TypeName,
+        Field = c.Field, OldValue = c.CurrentDisplay, NewValue = opt.Display, InstancesAffected = c.InstancesAffected,
+        IsString = opt.IsString, NewString = opt.NewString, NewDouble = opt.NewDouble,
     };
 
-    /// <summary>Applies a confirmed change set inside one transaction. Returns a summary line.</summary>
     public string Apply(Document doc, ChangeSet cs)
     {
         int applied = 0, failed = 0;
@@ -285,12 +297,9 @@ public sealed class Importer
         {
             foreach (var ch in cs.Changes)
             {
-                var host = ch.Binding == "type"
-                    ? doc.GetElement(new ElementId(ch.TypeId))
-                    : doc.GetElement(ch.UniqueId);
+                var host = ch.Binding == "type" ? doc.GetElement(new ElementId(ch.TypeId)) : doc.GetElement(ch.UniqueId);
                 var param = host == null ? null : GetParam(host, ch.ParameterId);
                 if (param == null || param.IsReadOnly) { failed++; continue; }
-
                 bool ok = ch.IsString ? param.Set(ch.NewString) : param.Set(ch.NewDouble);
                 if (ok) applied++; else failed++;
             }
@@ -302,8 +311,47 @@ public sealed class Importer
             return "Apply failed (rolled back): " + ex.Message;
         }
 
-        return $"Applied {applied} change(s)" + (failed > 0 ? $", {failed} failed" : "") +
-               $". {cs.Skipped.Count} skipped.";
+        return $"Applied {applied} change(s)" + (failed > 0 ? $", {failed} failed" : "") + $". {cs.Skipped.Count} skipped.";
+    }
+
+    // --- helpers ---
+
+    private static ProposedChange InstanceChange(Element el, ImportColumn col, string oldDisp, string newDisp,
+        bool isString, string str, double dbl) => new()
+    {
+        UniqueId = el.UniqueId, ParameterId = col.ParameterId, Binding = "instance", ElementName = SafeName(el),
+        Field = col.FieldName, OldValue = oldDisp, NewValue = newDisp, IsString = isString, NewString = str, NewDouble = dbl,
+    };
+
+    private static ProposedChange TypeChange((long, int) key, TypeCandidate tc, string newDisp,
+        bool isString, string str, double dbl) => new()
+    {
+        TypeId = key.Item1, ParameterId = key.Item2, Binding = "type", ElementName = tc.TypeName,
+        Field = tc.Col.FieldName, OldValue = tc.CurDisplay, NewValue = newDisp, InstancesAffected = tc.Cells.Count,
+        IsString = isString, NewString = str, NewDouble = dbl,
+    };
+
+    private static CellDiagnostic Diag(ImportSheet sheet, ImportRow row, ImportColumn col, string label,
+        string severity, string reason, string value) => new()
+    {
+        SheetTabName = sheet.SheetTabName, ExcelRow = row.ExcelRow, Col = col.Col, FieldName = col.FieldName,
+        ElementLabel = label, Severity = severity, Reason = reason, Value = value,
+    };
+
+    private static string CurrentDisplay(Parameter param) =>
+        param.StorageType == StorageType.String ? (param.AsString() ?? "") : (param.AsValueString() ?? "");
+
+    private static bool Drifted(Parameter param, string baseline, Units units, string? spec)
+    {
+        if (param.StorageType == StorageType.String)
+            return (param.AsString() ?? "") != baseline;
+        if (param.StorageType == StorageType.Double && spec != null)
+        {
+            if (UnitFormatUtils.TryParse(units, new ForgeTypeId(spec), baseline, out double b))
+                return Math.Abs(param.AsDouble() - b) > 1e-9;
+            return (param.AsValueString() ?? "") != baseline;
+        }
+        return false;
     }
 
     private static Parameter? GetParam(Element host, int parameterId)

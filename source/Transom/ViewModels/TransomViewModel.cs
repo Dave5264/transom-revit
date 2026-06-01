@@ -54,6 +54,7 @@ public sealed partial class TransomViewModel : ObservableObject
 
     [ObservableProperty] private string _workbookPath = "";
     [ObservableProperty] private string _importStatus = "Choose a Transom workbook to import.";
+    [ObservableProperty] private string _reportPath = "";
 
     [ObservableProperty] private bool _claudeAvailable;
     [ObservableProperty] private bool _claudeAssistExport;
@@ -273,9 +274,21 @@ public sealed partial class TransomViewModel : ObservableObject
                 Skipped.Add(new SkippedItem { Reason = "conflict — unresolved", Detail = $"{conflict.Field} on '{conflict.TypeName}'" });
         }
 
+        ReportPath = cs.ReportPath ?? "";
+        int red = cs.Diagnostics.Count(d => d.Severity == "red");
+        int yellow = cs.Diagnostics.Count(d => d.Severity == "yellow");
         ImportStatus = $"{Changes.Count} change(s), {Skipped.Count} skipped"
                        + (cs.Conflicts.Count > 0 ? $", {cs.Conflicts.Count} conflict(s) reviewed" : "")
+                       + (red + yellow > 0 ? $"  —  {red} can't-write · {yellow} drift (see report)" : "")
                        + (cs.CrossModel ? "  — ⚠ different source model" : "");
+    }
+
+    [RelayCommand]
+    private void OpenReport()
+    {
+        if (string.IsNullOrEmpty(ReportPath)) return;
+        try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(ReportPath) { UseShellExecute = true }); }
+        catch { /* nothing to open */ }
     }
 
     // --- Claude-assist ---

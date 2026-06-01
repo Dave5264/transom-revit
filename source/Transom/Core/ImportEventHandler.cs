@@ -30,6 +30,14 @@ public sealed class ImportEventHandler : IExternalEventHandler
             {
                 var wb = new ExcelReader().Read(WorkbookPath);
                 var cs = new Importer().BuildChangeSet(doc, wb);
+                if (cs.Diagnostics.Count > 0)
+                {
+                    var dir = System.IO.Path.GetDirectoryName(WorkbookPath) ?? ".";
+                    var name = System.IO.Path.GetFileNameWithoutExtension(WorkbookPath);
+                    var reportPath = System.IO.Path.Combine(dir, name + "_import-report.xlsx");
+                    try { DiagnosticsWriter.Write(wb, cs.Diagnostics, reportPath); cs.ReportPath = reportPath; }
+                    catch { /* report is best-effort */ }
+                }
                 if (WriteRunLog) RunLog.WriteImport(ExchangeFolder, WorkbookPath, cs);
                 OnPreview(cs);
             }

@@ -17,6 +17,7 @@ public sealed class ImportColumn
 
 public sealed class ImportRow
 {
+    public int ExcelRow;       // 0-based sheet row (for report coloring)
     public string UniqueId = "";
     public string[] Cells = System.Array.Empty<string>();
 }
@@ -25,20 +26,27 @@ public sealed class ImportSheet
 {
     public string ScheduleUniqueId = "";
     public string ScheduleName = "";
+    public string SheetTabName = "";
     public bool RoundTrippable;
+    public int AnchorCol = -1;
     public List<ImportColumn> Columns = new();
     public List<ImportRow> Rows = new();
+
+    /// <summary>Exported value per element: uniqueId -> (column -> value at export time).</summary>
+    public Dictionary<string, Dictionary<int, string>> Baseline = new();
 }
 
 public sealed class ImportWorkbook
 {
+    public string Path = "";
     public string SourceModelGuid = "";
     public List<ImportSheet> Sheets = new();
 }
 
 /// <summary>
-///     Reads a Transom-exported workbook back: parses the hidden cowork_meta and, for each data sheet,
-///     locates the anchor column by its sentinel header (not by index) and reads per-row UniqueId + cells.
+///     Reads a Transom-exported workbook back: parses cowork_meta (columns + per-element baseline values)
+///     and, for each data sheet, locates the anchor column by its sentinel header (not index) and reads
+///     per-row UniqueId + cells.
 /// </summary>
 public sealed class ExcelReader
 {
@@ -57,6 +65,7 @@ public sealed class ExcelReader
 
         var result = new ImportWorkbook
         {
+            Path = path,
             SourceModelGuid = root.GetProperty("sourceModel").GetProperty("guid").GetString() ?? "",
         };
 
@@ -66,6 +75,7 @@ public sealed class ExcelReader
             {
                 ScheduleUniqueId = sheetMeta.GetProperty("scheduleUniqueId").GetString() ?? "",
                 ScheduleName = sheetMeta.GetProperty("scheduleName").GetString() ?? "",
+                SheetTabName = sheetMeta.GetProperty("sheetName").GetString() ?? "",
                 RoundTrippable = sheetMeta.TryGetProperty("roundTrippable", out var rt) && rt.GetBoolean(),
             };
 
@@ -84,7 +94,17 @@ public sealed class ExcelReader
                 });
             }
 
-            var ws = wb.GetSheet(sheetMeta.GetProperty("sheetName").GetString());
+            if (sheetMeta.TryGetProperty("baseline", out var baseEl) && baseEl.ValueKind == JsonValueKind.Object)
+                foreach (var uidProp in baseEl.EnumerateObject())
+                {
+                    var map = new Dictionary<int, string>();
+                    foreach (var colProp in uidProp.Value.EnumerateObject())
+                        if (int.TryParse(colProp.Name, out var ci))
+                            map[ci] = colProp.Value.GetString() ?? "";
+                    imp.Baseline[uidProp.Name] = map;
+                }
+
+            var ws = wb.GetSheet(imp.SheetTabName);
             if (ws != null)
                 ReadRows(ws, imp);
 
@@ -96,23 +116,20 @@ public sealed class ExcelReader
 
     private static void ReadRows(ISheet ws, ImportSheet imp)
     {
-        // Locate the anchor column by its sentinel header (durable against column moves).
         int anchorCol = -1;
         var header = ws.GetRow(0);
         if (header != null)
-        {
             for (int c = 0; c <= header.LastCellNum; c++)
-            {
                 if (header.GetCell(c)?.ToString() == ScheduleReader.AnchorSentinel)
                 {
                     anchorCol = c;
                     break;
                 }
-            }
-        }
+
         if (anchorCol < 0)
             throw new System.InvalidOperationException(
                 $"Sheet '{imp.ScheduleName}': anchor column '{ScheduleReader.AnchorSentinel}' not found — cannot import safely.");
+        imp.AnchorCol = anchorCol;
 
         for (int r = 1; r <= ws.LastRowNum; r++)
         {
@@ -125,7 +142,7 @@ public sealed class ExcelReader
             for (int c = 0; c < anchorCol; c++)
                 cells[c] = row.GetCell(c)?.ToString() ?? "";
 
-            imp.Rows.Add(new ImportRow { UniqueId = uid, Cells = cells });
+            imp.Rows.Add(new ImportRow { ExcelRow = r, UniqueId = uid, Cells = cells });
         }
     }
 }
