@@ -39,12 +39,14 @@ public sealed partial class UnparseableFix : ObservableObject
     public string SheetTabName = "";
     public int ExcelRow;
     public int ExcelCol;
-    public string FieldName = "";
-    public string ElementLabel = "";
-    public string BadValue = "";
+
+    // These are bound in XAML, so they must be properties (WPF {Binding} ignores public fields).
+    public string FieldName { get; set; } = "";
+    public string ElementLabel { get; set; } = "";
+    public string BadValue { get; set; } = "";
 
     /// <summary>Set when the entry parsed but isn't in the schedule's format — the canonical value to confirm.</summary>
-    public string Suggested = "";
+    public string Suggested { get; set; } = "";
     public bool HasSuggestion => !string.IsNullOrEmpty(Suggested);
 
     [ObservableProperty] private string _newValue = "";
