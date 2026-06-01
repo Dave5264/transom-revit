@@ -130,6 +130,35 @@
                 </Trigger>
             </Style.Triggers>
         </Style>
+
+        <!-- Checkboxes inherit the theme text colour (WPF's default CheckBox foreground is hard black,
+             which is unreadable on the dark surface — this is the export schedule-list fix). -->
+        <Style TargetType="CheckBox">
+            <Setter Property="Foreground" Value="{DynamicResource Text}" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
+        </Style>
+
+        <!-- DataGrid headers + cells follow the theme (the WPF defaults are light-on-light in dark mode,
+             which is why the import column headers were nearly invisible). -->
+        <Style TargetType="DataGridColumnHeader">
+            <Setter Property="Background" Value="{DynamicResource Surface}" />
+            <Setter Property="Foreground" Value="{DynamicResource Muted}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource Line}" />
+            <Setter Property="BorderThickness" Value="0,0,1,1" />
+            <Setter Property="Padding" Value="6,3" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="HorizontalContentAlignment" Value="Left" />
+        </Style>
+        <Style TargetType="DataGridCell">
+            <Setter Property="Foreground" Value="{DynamicResource Text}" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Style.Triggers>
+                <Trigger Property="IsSelected" Value="True">
+                    <Setter Property="Background" Value="{DynamicResource AccentHover}" />
+                    <Setter Property="Foreground" Value="{DynamicResource Text}" />
+                </Trigger>
+            </Style.Triggers>
+        </Style>
     </Window.Resources>
     <DockPanel TextElement.Foreground="{DynamicResource Text}">
 

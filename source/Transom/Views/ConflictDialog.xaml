@@ -17,6 +17,12 @@
         <SolidColorBrush x:Key="Muted" Color="#6B6A62" />
         <SolidColorBrush x:Key="Line" Color="#E3E1D9" />
         <SolidColorBrush x:Key="Accent" Color="#185FA5" />
+
+        <!-- Conflict options are RadioButtons added in code-behind; WPF defaults their text to black,
+             unreadable on the dark surface, so bind their foreground to the theme. -->
+        <Style TargetType="RadioButton">
+            <Setter Property="Foreground" Value="{DynamicResource Text}" />
+        </Style>
     </Window.Resources>
     <StackPanel Margin="18" TextElement.Foreground="{DynamicResource Text}">
         <TextBlock x:Name="HeadingText" FontSize="14" FontWeight="Medium" Foreground="{DynamicResource Text}" TextWrapping="Wrap" />

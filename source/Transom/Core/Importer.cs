@@ -106,7 +106,13 @@ public sealed class Importer
             cs.ScheduleName = sheet.ScheduleName;
             if (!sheet.RoundTrippable)
             {
-                cs.Skipped.Add(new SkippedItem { Reason = "display-only schedule", Detail = sheet.ScheduleName });
+                cs.Skipped.Add(new SkippedItem
+                {
+                    Reason = "display-only schedule",
+                    Detail = $"{sheet.ScheduleName} — not itemized, so rows don't map to individual elements and " +
+                             "values can't be written back. Turn on 'Itemize every instance' (the schedule's " +
+                             "Sorting/Grouping tab) and re-export to round-trip.",
+                });
                 continue;
             }
 
