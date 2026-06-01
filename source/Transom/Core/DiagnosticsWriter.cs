@@ -15,19 +15,25 @@ public static class DiagnosticsWriter
     public static void Write(ImportWorkbook wb, List<CellDiagnostic> diags, string path)
     {
         var book = new XSSFWorkbook();
+        var blue = Fill(book, 189, 215, 238);
         var yellow = Fill(book, 255, 235, 156);
         var red = Fill(book, 255, 199, 199);
         var header = HeaderStyle(book);
 
         var legend = book.CreateSheet("Legend");
         legend.CreateRow(0).CreateCell(0).SetCellValue("Transom import report — flagged cells");
-        var ly = legend.CreateRow(2);
+        var lb = legend.CreateRow(2);
+        lb.CreateCell(0).SetCellValue("skipped");
+        lb.GetCell(0).CellStyle = blue;
+        var ly = legend.CreateRow(3);
         ly.CreateCell(0).SetCellValue("changed since export");
         ly.GetCell(0).CellStyle = yellow;
-        var lr = legend.CreateRow(3);
+        var lr = legend.CreateRow(4);
         lr.CreateCell(0).SetCellValue("unable to write");
         lr.GetCell(0).CellStyle = red;
         legend.SetColumnWidth(0, 40 * 256);
+
+        ICellStyle Color(string sev) => sev == "blue" ? blue : sev == "yellow" ? yellow : red;
 
         var usedNames = new HashSet<string> { "Legend", "Issues" };
         foreach (var sheet in wb.Sheets)
@@ -58,7 +64,7 @@ public static class DiagnosticsWriter
                 if (rowPos.TryGetValue(d.ExcelRow, out var ri) && d.Col >= 0 && d.Col < ncol)
                 {
                     var cell = ws.GetRow(ri)?.GetCell(d.Col);
-                    if (cell != null) cell.CellStyle = d.Severity == "yellow" ? yellow : red;
+                    if (cell != null) cell.CellStyle = Color(d.Severity);
                 }
 
             for (int i = 0; i < ncol; i++) ws.AutoSizeColumn(i);
@@ -85,7 +91,7 @@ public static class DiagnosticsWriter
                 wr.CreateCell(3).SetCellValue(d.Value);
                 var rc = wr.CreateCell(4);
                 rc.SetCellValue(d.Reason);
-                rc.CellStyle = d.Severity == "yellow" ? yellow : red;
+                rc.CellStyle = Color(d.Severity);
             }
             for (int i = 0; i < heads.Length; i++) iss.AutoSizeColumn(i);
         }

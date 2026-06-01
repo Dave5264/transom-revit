@@ -17,6 +17,7 @@ public sealed class ImportEventHandler : IExternalEventHandler
     public bool WriteRunLog;
     public string ExchangeFolder = "";
     public string DocTitle = "";
+    public bool ProduceReport;
     public System.Collections.Generic.List<CellCorrection>? Corrections;
 
     public Action<ChangeSet> OnPreview = _ => { };
@@ -42,7 +43,7 @@ public sealed class ImportEventHandler : IExternalEventHandler
 
                 var cs = new Importer().BuildChangeSet(doc, wb);
                 cs.Reformats = reformats;
-                if (cs.Diagnostics.Count > 0)
+                if (ProduceReport && cs.Diagnostics.Count > 0)
                 {
                     var dir = System.IO.Path.GetDirectoryName(WorkbookPath) ?? ".";
                     var name = System.IO.Path.GetFileNameWithoutExtension(WorkbookPath);

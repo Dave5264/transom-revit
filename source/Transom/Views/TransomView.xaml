@@ -198,8 +198,13 @@
                         </Border>
 
                         <DockPanel DockPanel.Dock="Top" Margin="0,0,0,6">
-                            <Button DockPanel.Dock="Right" Content="Select all" Command="{Binding SelectAllSchedulesCommand}"
-                                    Background="Transparent" BorderThickness="0" Foreground="{DynamicResource Accent}" FontSize="12" Cursor="Hand" Padding="2" />
+                            <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                                <Button Content="Select all" Command="{Binding SelectAllSchedulesCommand}"
+                                        Background="Transparent" BorderThickness="0" Foreground="{DynamicResource Accent}" FontSize="12" Cursor="Hand" Padding="2" />
+                                <TextBlock Text="·" Foreground="{DynamicResource Hint}" Margin="6,0" VerticalAlignment="Center" />
+                                <Button Content="Select none" Command="{Binding SelectNoneSchedulesCommand}"
+                                        Background="Transparent" BorderThickness="0" Foreground="{DynamicResource Accent}" FontSize="12" Cursor="Hand" Padding="2" />
+                            </StackPanel>
                             <TextBlock Text="All schedules" Foreground="{DynamicResource Muted}" FontSize="13" VerticalAlignment="Center" />
                         </DockPanel>
 
@@ -306,6 +311,11 @@
                                 <Button Content="None" Height="32" Padding="12,0" Margin="6,0,0,0" Command="{Binding SelectNoneCommand}" />
                             </StackPanel>
                         </Grid>
+
+                        <CheckBox DockPanel.Dock="Top" Content="Create colour-coded error report (.xlsx) on Preview"
+                                  IsChecked="{Binding ProduceReport}" Foreground="{DynamicResource Muted}"
+                                  FontSize="12" Margin="0,0,0,10"
+                                  ToolTip="Writes &lt;workbook&gt;_import-report.xlsx — blue = skipped, yellow = changed since export, red = unable to write" />
 
 
                         <Border DockPanel.Dock="Bottom" Background="{DynamicResource InfoBg}" BorderBrush="{DynamicResource AccentLine}" BorderThickness="1"

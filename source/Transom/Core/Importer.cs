@@ -321,7 +321,7 @@ public sealed class Importer
                 if (row.InstanceIds == null || row.InstanceIds.Count == 0)
                 {
                     cs.Skipped.Add(new SkippedItem { Reason = "ambiguous instance scope", Detail = $"{col.FieldName} ({label}) — type spans multiple rows" });
-                    cs.Diagnostics.Add(Diag(sheet, row, col, label, "red", "instance scope ambiguous (type spans rows)", cellText));
+                    cs.Diagnostics.Add(Diag(sheet, row, col, label, "blue", "skipped — instance scope ambiguous (type spans rows)", cellText));
                     continue;
                 }
 

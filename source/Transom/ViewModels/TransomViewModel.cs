@@ -84,6 +84,7 @@ public sealed partial class TransomViewModel : ObservableObject
     [ObservableProperty] private string _importStatus = "Choose a Transom workbook to import.";
     [ObservableProperty] private string _reportPath = "";
     [ObservableProperty] private bool _copiedImport;
+    [ObservableProperty] private bool _produceReport;   // off by default — report only on request
 
     [ObservableProperty] private bool _claudeAvailable;
     [ObservableProperty] private string _claudeMode = "Off"; // Off | Verify (read-only) | Assist (write)
@@ -196,6 +197,12 @@ public sealed partial class TransomViewModel : ObservableObject
     }
 
     [RelayCommand]
+    private void SelectNoneSchedules()
+    {
+        foreach (var e in FilteredSchedules) e.IsChecked = false;
+    }
+
+    [RelayCommand]
     private void Export()
     {
         var ids = new List<long>();
@@ -269,6 +276,7 @@ public sealed partial class TransomViewModel : ObservableObject
         _importHandler.DocTitle = SelectedProject;
         _importHandler.WriteRunLog = ClaudeMode != "Off";
         _importHandler.ExchangeFolder = ExchangeFolder;
+        _importHandler.ProduceReport = ProduceReport;
         // Carry any typed-in corrections for previously-unparseable cells into this re-preview.
         _importHandler.Corrections = Fixes
             .Where(f => !string.IsNullOrWhiteSpace(f.NewValue))
