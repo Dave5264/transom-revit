@@ -241,43 +241,115 @@ public sealed class ScheduleReader
         }
     }
 
-    /// <summary>Itemized schedules: stamp each element's UniqueId into Comments (rolled back) and read it per row.</summary>
+    /// <summary>Itemized schedules: anchor each row to its element via a rolled-back UID stamp.</summary>
     private void ReadInstanceAnchors(ViewSchedule vs, ScheduleTable table, System.Collections.Generic.IList<Element> els, string?[] anchors)
     {
-        const int commentsId = (int)BuiltInParameter.ALL_MODEL_INSTANCE_COMMENTS;
         var validUids = new HashSet<string>(els.Select(e => e.UniqueId));
+        ReadAnchorColumn(vs, table, els, anchors, validUids, (int)BuiltInParameter.ALL_MODEL_INSTANCE_COMMENTS);
+    }
+
+    /// <summary>
+    ///     Stamps each host's UniqueId into a carrier text parameter (rolled back), renders it, and reads the
+    ///     per-row UID. The carrier is Comments / Type Comments when available; otherwise any writable string
+    ///     parameter that ISN'T a sort/group field (so stamping it can't reorder rows) — hijacking a visible
+    ///     column or appending a schedulable spare. This lets annotation/device families (which lack a Comments
+    ///     parameter) round-trip too.
+    /// </summary>
+    private void ReadAnchorColumn(ViewSchedule vs, ScheduleTable table,
+        System.Collections.Generic.IList<Element> hosts, string?[] anchors, HashSet<string> validUids, int preferredBuiltIn)
+    {
+        var def = vs.Definition;
+        var sample = hosts.FirstOrDefault();
+        if (sample == null) return;
+
+        int? carrier = PickAnchorParam(def, sample, preferredBuiltIn);
+        if (carrier == null) return; // no usable carrier -> schedule stays display-only
+        int cpid = carrier.Value;
 
         var tx = new Transaction(_doc, "Transom: read row anchors (rolled back)");
         tx.Start();
         try
         {
-            foreach (var e in els)
+            foreach (var h in hosts)
             {
-                var p = e.get_Parameter(BuiltInParameter.ALL_MODEL_INSTANCE_COMMENTS);
+                var p = GetParamOn(h, cpid);
                 if (p != null && !p.IsReadOnly && p.StorageType == StorageType.String)
-                    p.Set(e.UniqueId);
+                    p.Set(h.UniqueId);
             }
 
-            var def = vs.Definition;
-            SchedulableField? sf = def.GetSchedulableFields().FirstOrDefault(s => SafeFieldName(s) == "Comments");
-            if (sf != null) { try { def.AddField(sf); } catch { /* already a field */ } }
+            // Append the carrier as a field if it isn't already a visible column.
+            if (VisibleColumnOf(def, cpid) < 0)
+            {
+                var sf = SchedulableFieldFor(def, cpid);
+                if (sf != null) { try { def.AddField(sf); } catch { /* already a field */ } }
+            }
 
             _doc.Regenerate();
 
-            // Locate the Comments field by parameter id (appended last, or its existing position if already shown).
-            int uidCol = VisibleColumnOf(def, commentsId);
+            int col = VisibleColumnOf(def, cpid);
             var sec = vs.GetTableData().GetSectionData(SectionType.Body);
-            if (uidCol >= 0 && uidCol < sec.NumberOfColumns)
+            if (col >= 0 && col < sec.NumberOfColumns)
             {
                 int nr = sec.NumberOfRows;
                 for (int r = 0; r < table.RowCount && r < nr; r++)
                 {
-                    var uid = vs.GetCellText(SectionType.Body, r, uidCol) ?? "";
+                    var uid = vs.GetCellText(SectionType.Body, r, col) ?? "";
                     anchors[r] = validUids.Contains(uid) ? uid : null;
                 }
             }
         }
         finally { tx.RollBack(); }
+    }
+
+    /// <summary>
+    ///     Picks the parameter to carry the rolled-back UID anchor: the preferred built-in (Comments / Type
+    ///     Comments) when writable + present, else any writable string parameter that isn't a sort/group field,
+    ///     preferring one already visible (hijack its column) over a schedulable spare to append.
+    /// </summary>
+    private int? PickAnchorParam(ScheduleDefinition def, Element sample, int preferredBuiltIn)
+    {
+        var sortGroup = SortGroupParamIds(def);
+
+        var pref = sample.get_Parameter((BuiltInParameter)preferredBuiltIn);
+        if (pref != null && !pref.IsReadOnly && pref.StorageType == StorageType.String
+            && !sortGroup.Contains(preferredBuiltIn))
+            return preferredBuiltIn;
+
+        int? visibleCand = null, addableCand = null;
+        foreach (Parameter p in sample.Parameters)
+        {
+            if (p.StorageType != StorageType.String || p.IsReadOnly) continue;
+            int pid = (int)p.Id.Value;
+            if (sortGroup.Contains(pid)) continue;
+            if (VisibleColumnOf(def, pid) >= 0) visibleCand ??= pid;
+            else if (SchedulableFieldFor(def, pid) != null) addableCand ??= pid;
+        }
+        return visibleCand ?? addableCand;
+    }
+
+    private static HashSet<int> SortGroupParamIds(ScheduleDefinition def)
+    {
+        var s = new HashSet<int>();
+        try
+        {
+            foreach (var sg in def.GetSortGroupFields())
+            {
+                var f = def.GetField(sg.FieldId);
+                if (f != null) s.Add((int)f.ParameterId.Value);
+            }
+        }
+        catch { /* not supported */ }
+        return s;
+    }
+
+    private static SchedulableField? SchedulableFieldFor(ScheduleDefinition def, int pid)
+    {
+        foreach (var s in def.GetSchedulableFields())
+        {
+            try { if ((int)s.ParameterId.Value == pid) return s; }
+            catch { /* skip */ }
+        }
+        return null;
     }
 
     /// <summary>
@@ -289,8 +361,6 @@ public sealed class ScheduleReader
         string?[] anchors, Dictionary<string, Element> uidToElement,
         Dictionary<string, List<string>> typeToInstances, Dictionary<string, Element> representative)
     {
-        const int typeCommentsId = (int)BuiltInParameter.ALL_MODEL_TYPE_COMMENTS;
-
         // Group the schedule's instances by their type (respects the schedule's category + filters).
         var typeElements = new Dictionary<string, Element>();
         foreach (var e in els)
@@ -309,37 +379,8 @@ public sealed class ScheduleReader
         if (typeElements.Count == 0) return; // nothing type-groupable (e.g. rooms, sheet lists) -> display-only
 
         var validTypeUids = new HashSet<string>(typeElements.Keys);
-
-        var tx = new Transaction(_doc, "Transom: read type anchors (rolled back)");
-        tx.Start();
-        try
-        {
-            foreach (var t in typeElements.Values)
-            {
-                var p = t.get_Parameter(BuiltInParameter.ALL_MODEL_TYPE_COMMENTS);
-                if (p != null && !p.IsReadOnly && p.StorageType == StorageType.String)
-                    p.Set(t.UniqueId);
-            }
-
-            var def = vs.Definition;
-            SchedulableField? sf = def.GetSchedulableFields().FirstOrDefault(s => SafeFieldName(s) == "Type Comments");
-            if (sf != null) { try { def.AddField(sf); } catch { /* already a field */ } }
-
-            _doc.Regenerate();
-
-            int uidCol = VisibleColumnOf(def, typeCommentsId);
-            var sec = vs.GetTableData().GetSectionData(SectionType.Body);
-            if (uidCol >= 0 && uidCol < sec.NumberOfColumns)
-            {
-                int nr = sec.NumberOfRows;
-                for (int r = 0; r < table.RowCount && r < nr; r++)
-                {
-                    var uid = vs.GetCellText(SectionType.Body, r, uidCol) ?? "";
-                    anchors[r] = validTypeUids.Contains(uid) ? uid : null;
-                }
-            }
-        }
-        finally { tx.RollBack(); }
+        ReadAnchorColumn(vs, table, typeElements.Values.ToList(), anchors, validTypeUids,
+            (int)BuiltInParameter.ALL_MODEL_TYPE_COMMENTS);
     }
 
     /// <summary>
