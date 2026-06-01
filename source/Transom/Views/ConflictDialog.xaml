@@ -8,19 +8,27 @@
     ResizeMode="NoResize"
     ShowInTaskbar="False"
     WindowStartupLocation="CenterOwner"
-    Background="#F4F3EE"
+    Background="{DynamicResource Bg}"
     FontFamily="Segoe UI">
-    <StackPanel Margin="18">
-        <TextBlock x:Name="HeadingText" FontSize="14" FontWeight="Medium" Foreground="#26251F" TextWrapping="Wrap" />
-        <TextBlock x:Name="SubText" Foreground="#6B6A62" FontSize="12" TextWrapping="Wrap" Margin="0,6,0,12" />
+    <Window.Resources>
+        <SolidColorBrush x:Key="Bg" Color="#F4F3EE" />
+        <SolidColorBrush x:Key="Surface" Color="#FFFFFF" />
+        <SolidColorBrush x:Key="Text" Color="#26251F" />
+        <SolidColorBrush x:Key="Muted" Color="#6B6A62" />
+        <SolidColorBrush x:Key="Line" Color="#E3E1D9" />
+        <SolidColorBrush x:Key="Accent" Color="#185FA5" />
+    </Window.Resources>
+    <StackPanel Margin="18" TextElement.Foreground="{DynamicResource Text}">
+        <TextBlock x:Name="HeadingText" FontSize="14" FontWeight="Medium" Foreground="{DynamicResource Text}" TextWrapping="Wrap" />
+        <TextBlock x:Name="SubText" Foreground="{DynamicResource Muted}" FontSize="12" TextWrapping="Wrap" Margin="0,6,0,12" />
 
-        <Border Background="#FFFFFF" BorderBrush="#E3E1D9" BorderThickness="1" CornerRadius="6" Padding="12">
+        <Border Background="{DynamicResource Surface}" BorderBrush="{DynamicResource Line}" BorderThickness="1" CornerRadius="6" Padding="12">
             <StackPanel x:Name="OptionsPanel" />
         </Border>
 
         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">
             <Button Content="Skip (leave unchanged)" Height="32" Padding="12,0" Margin="0,0,8,0" Click="Skip_Click" />
-            <Button Content="Apply value" Height="32" Padding="18,0" Background="#185FA5" Foreground="White"
+            <Button Content="Apply value" Height="32" Padding="18,0" Background="{DynamicResource Accent}" Foreground="White"
                     BorderThickness="0" Click="Apply_Click" />
         </StackPanel>
     </StackPanel>

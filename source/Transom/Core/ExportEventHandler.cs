@@ -16,6 +16,7 @@ public sealed class ExportEventHandler : IExternalEventHandler
 {
     public List<long> ScheduleIds = new();
     public string OutputPath = "";
+    public string DocTitle = "";
     public bool Stage;
     public string ExchangeFolder = "";
     public Action<string> ReportStatus = _ => { };
@@ -25,7 +26,8 @@ public sealed class ExportEventHandler : IExternalEventHandler
     {
         try
         {
-            var doc = app.ActiveUIDocument.Document;
+            var doc = DocUtil.Resolve(app, DocTitle);
+            if (doc == null) { ReportStatus("Export failed: project not found."); return; }
             var reader = new ScheduleReader(doc);
             var tables = new List<ScheduleTable>();
             foreach (var id in ScheduleIds.Distinct())

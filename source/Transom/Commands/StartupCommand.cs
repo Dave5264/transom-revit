@@ -1,3 +1,5 @@
+using System.Collections.Generic;
+using System.Linq;
 using System.Windows.Interop;
 using Autodesk.Revit.Attributes;
 using Autodesk.Revit.DB;
@@ -12,7 +14,7 @@ namespace Transom.Commands;
 /// <summary>
 ///     Opens the Transom Export/Import dialog as a modeless window owned by the Revit main window.
 ///     Modeless keeps Revit's main thread free so the dialog can stay open while the MCP bridge and
-///     Revit UI keep responding; model work is dispatched through an <see cref="ExternalEvent"/>.
+///     Revit UI keep responding; model work is dispatched through <see cref="ExternalEvent"/>s.
 /// </summary>
 [UsedImplicitly]
 [Transaction(TransactionMode.Manual)]
@@ -27,15 +29,32 @@ public class StartupCommand : ExternalCommand
         }
 
         var uiDoc = Application.ActiveUIDocument;
+        var doc = uiDoc.Document;
         var active = uiDoc.ActiveView as ViewSchedule;
+
+        var projects = new List<string>();
+        foreach (Document d in Application.Application.Documents)
+            if (!d.IsLinked && !d.IsFamilyDocument)
+                projects.Add(d.Title);
+
+        var schedules = new FilteredElementCollector(doc)
+            .OfClass(typeof(ViewSchedule))
+            .Cast<ViewSchedule>()
+            .Where(v => !v.IsTemplate && !v.IsTitleblockRevisionSchedule)
+            .OrderBy(v => v.Name)
+            .Select(v => (v.Id.Value, v.Name))
+            .ToList();
 
         var exportHandler = new ExportEventHandler();
         var exportEvent = Autodesk.Revit.UI.ExternalEvent.Create(exportHandler);
         var importHandler = new ImportEventHandler();
         var importEvent = Autodesk.Revit.UI.ExternalEvent.Create(importHandler);
+        var loadHandler = new ScheduleLoadEventHandler();
+        var loadEvent = Autodesk.Revit.UI.ExternalEvent.Create(loadHandler);
 
-        var viewModel = new TransomViewModel(uiDoc.Document, active,
-            exportEvent, exportHandler, importEvent, importHandler);
+        var viewModel = new TransomViewModel(
+            projects, doc.Title, active?.Id.Value ?? 0, schedules,
+            exportEvent, exportHandler, importEvent, importHandler, loadEvent, loadHandler);
         var view = new TransomView(viewModel);
         new WindowInteropHelper(view) { Owner = Application.MainWindowHandle };
         view.Show();

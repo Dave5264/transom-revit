@@ -16,6 +16,7 @@ public sealed class ImportEventHandler : IExternalEventHandler
     public ChangeSet? PendingChangeSet;
     public bool WriteRunLog;
     public string ExchangeFolder = "";
+    public string DocTitle = "";
 
     public Action<ChangeSet> OnPreview = _ => { };
     public Action<string> OnApplied = _ => { };
@@ -25,7 +26,8 @@ public sealed class ImportEventHandler : IExternalEventHandler
     {
         try
         {
-            var doc = app.ActiveUIDocument.Document;
+            var doc = DocUtil.Resolve(app, DocTitle);
+            if (doc == null) { OnError("project not found"); return; }
             if (RequestedMode == Mode.Preview)
             {
                 var wb = new ExcelReader().Read(WorkbookPath);

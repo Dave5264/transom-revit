@@ -16,10 +16,10 @@ namespace Transom.ViewModels;
 
 public sealed partial class ScheduleEntry : ObservableObject
 {
-    public ScheduleEntry(ViewSchedule vs, bool isActive)
+    public ScheduleEntry(long id, string name, bool isActive)
     {
-        Id = vs.Id.Value;
-        Name = vs.Name;
+        Id = id;
+        Name = name;
         IsActive = isActive;
     }
 
@@ -41,8 +41,11 @@ public sealed partial class TransomViewModel : ObservableObject
     private readonly ImportEventHandler _importHandler;
     private readonly Dispatcher _ui = Dispatcher.CurrentDispatcher;
     private readonly DispatcherTimer _copyResetTimer;
-    private readonly List<ScheduleEntry> _allOther; // non-active schedules
+    private readonly ExternalEvent _scheduleLoadEvent;
+    private readonly ScheduleLoadEventHandler _scheduleLoadHandler;
+    private List<ScheduleEntry> _allOther = new(); // non-active schedules
     private readonly TransomSettings _settings;
+    private bool _initialized;
     private ChangeSet? _lastChangeSet;
     private string _stagedPath = "";
     private string _finalDestination = "";
@@ -51,10 +54,16 @@ public sealed partial class TransomViewModel : ObservableObject
     [ObservableProperty] private bool _copied;
     [ObservableProperty] private string _scheduleFilter = "";
     [ObservableProperty] private string _selectionInfo = "";
+    [ObservableProperty] private string _selectedProject = "";
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasActive))]
+    private ScheduleEntry? _activeSchedule;
 
     [ObservableProperty] private string _workbookPath = "";
     [ObservableProperty] private string _importStatus = "Choose a Transom workbook to import.";
     [ObservableProperty] private string _reportPath = "";
+    [ObservableProperty] private bool _copiedImport;
 
     [ObservableProperty] private bool _claudeAvailable;
     [ObservableProperty] private string _claudeMode = "Off"; // Off | Verify (read-only) | Assist (write)
@@ -63,14 +72,19 @@ public sealed partial class TransomViewModel : ObservableObject
     [ObservableProperty] private string _exchangeFolder = "";
     [ObservableProperty] private string _bridgeStatus = "Checking bridge…";
 
-    public TransomViewModel(Document doc, ViewSchedule? active,
+    public TransomViewModel(
+        List<string> projects, string activeProjectTitle,
+        long activeScheduleId, List<(long id, string name)> schedules,
         ExternalEvent exportEvent, ExportEventHandler exportHandler,
-        ExternalEvent importEvent, ImportEventHandler importHandler)
+        ExternalEvent importEvent, ImportEventHandler importHandler,
+        ExternalEvent scheduleLoadEvent, ScheduleLoadEventHandler scheduleLoadHandler)
     {
         _exportEvent = exportEvent;
         _exportHandler = exportHandler;
         _importEvent = importEvent;
         _importHandler = importHandler;
+        _scheduleLoadEvent = scheduleLoadEvent;
+        _scheduleLoadHandler = scheduleLoadHandler;
 
         _exportHandler.ReportStatus = s => _ui.Invoke(() => Status = s);
         _importHandler.OnPreview = cs => _ui.BeginInvoke(() => ShowPreview(cs));
@@ -82,36 +96,45 @@ public sealed partial class TransomViewModel : ObservableObject
             _lastChangeSet = null;
         });
         _importHandler.OnError = s => _ui.Invoke(() => ImportStatus = "Error: " + s);
+        _exportHandler.OnStaged = p => _ui.Invoke(() => { _stagedPath = p; CanFinalize = true; });
+        _scheduleLoadHandler.OnLoaded = (activeId, scheds) => _ui.Invoke(() => SetSchedules(activeId, scheds));
 
         _settings = TransomSettings.Load();
         BridgePort = _settings.BridgePort;
         ExchangeFolder = _settings.ExchangeFolder;
-        _exportHandler.OnStaged = p => _ui.Invoke(() => { _stagedPath = p; CanFinalize = true; });
         _ = RefreshBridgeAsync();
 
         _copyResetTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1.4) };
-        _copyResetTimer.Tick += (_, _) => { Copied = false; _copyResetTimer.Stop(); };
+        _copyResetTimer.Tick += (_, _) => { Copied = false; CopiedImport = false; _copyResetTimer.Stop(); };
 
-        var schedules = new FilteredElementCollector(doc)
-            .OfClass(typeof(ViewSchedule))
-            .Cast<ViewSchedule>()
-            .Where(v => !v.IsTemplate && !v.IsTitleblockRevisionSchedule)
-            .OrderBy(v => v.Name)
-            .ToList();
+        foreach (var p in projects) Projects.Add(p);
+        _selectedProject = activeProjectTitle; // backing field: don't trigger a reload during construction
+        SetSchedules(activeScheduleId, schedules);
+        _initialized = true;
+    }
 
-        ActiveSchedule = active != null ? new ScheduleEntry(active, true) : null;
-        _allOther = schedules
-            .Where(v => active == null || v.Id.Value != active.Id.Value)
-            .Select(v => new ScheduleEntry(v, false))
-            .ToList();
+    private void SetSchedules(long activeId, List<(long id, string name)> schedules)
+    {
+        var activeName = schedules.FirstOrDefault(s => s.id == activeId).name;
+        ActiveSchedule = activeId != 0 && activeName != null
+            ? new ScheduleEntry(activeId, activeName, true) : null;
+        _allOther = schedules.Where(s => s.id != activeId)
+            .Select(s => new ScheduleEntry(s.id, s.name, false)).ToList();
         foreach (var e in _allOther) e.CheckedChanged = UpdateSelectionInfo;
-
         ApplyFilter();
         UpdateSelectionInfo();
     }
 
-    public ScheduleEntry? ActiveSchedule { get; }
+    partial void OnSelectedProjectChanged(string value)
+    {
+        if (!_initialized) return;
+        Status = $"Loading schedules for {value}…";
+        _scheduleLoadHandler.DocTitle = value;
+        _scheduleLoadEvent.Raise();
+    }
+
     public bool HasActive => ActiveSchedule != null;
+    public ObservableCollection<string> Projects { get; } = new();
     public string[] ClaudeModes { get; } = { "Off", "Verify (read-only)", "Assist (write)" };
     public ObservableCollection<ScheduleEntry> FilteredSchedules { get; } = new();
     public ObservableCollection<ProposedChange> Changes { get; } = new();
@@ -170,6 +193,7 @@ public sealed partial class TransomViewModel : ObservableObject
         bool stage = ClaudeMode != "Off" && !string.IsNullOrWhiteSpace(ExchangeFolder);
         _exportHandler.ScheduleIds = ids;
         _exportHandler.OutputPath = dlg.FileName;
+        _exportHandler.DocTitle = SelectedProject;
         _exportHandler.Stage = stage;
         _exportHandler.ExchangeFolder = ExchangeFolder;
         _finalDestination = dlg.FileName;
@@ -215,6 +239,7 @@ public sealed partial class TransomViewModel : ObservableObject
         }
         _importHandler.RequestedMode = ImportEventHandler.Mode.Preview;
         _importHandler.WorkbookPath = WorkbookPath;
+        _importHandler.DocTitle = SelectedProject;
         _importHandler.WriteRunLog = ClaudeMode != "Off";
         _importHandler.ExchangeFolder = ExchangeFolder;
         ImportStatus = "Analyzing…";
@@ -239,6 +264,7 @@ public sealed partial class TransomViewModel : ObservableObject
 
         _importHandler.RequestedMode = ImportEventHandler.Mode.Apply;
         _importHandler.PendingChangeSet = toApply;
+        _importHandler.DocTitle = SelectedProject;
         ImportStatus = $"Applying {selected.Count} selected change(s)…";
         _importEvent.Raise();
     }
@@ -281,6 +307,19 @@ public sealed partial class TransomViewModel : ObservableObject
                        + (cs.Conflicts.Count > 0 ? $", {cs.Conflicts.Count} conflict(s) reviewed" : "")
                        + (red + yellow > 0 ? $"  —  {red} can't-write · {yellow} drift (see report)" : "")
                        + (cs.CrossModel ? "  — ⚠ different source model" : "");
+    }
+
+    [RelayCommand]
+    private void CopyImportStatus()
+    {
+        try
+        {
+            System.Windows.Clipboard.SetText(ImportStatus ?? string.Empty);
+            CopiedImport = true;
+            _copyResetTimer.Stop();
+            _copyResetTimer.Start();
+        }
+        catch { /* clipboard busy */ }
     }
 
     [RelayCommand]

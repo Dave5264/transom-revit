@@ -14,6 +14,7 @@ public partial class ConflictDialog : Window
     public ConflictDialog(TypeConflict c)
     {
         InitializeComponent();
+        ApplyTheme();
 
         HeadingText.Text = $"“{c.Field}” conflict on type ‘{c.TypeName}’";
         SubText.Text = $"Different values were entered for this type parameter, which applies to all " +
@@ -49,5 +50,24 @@ public partial class ConflictDialog : Window
         Result = null;
         DialogResult = true;
         Close();
+    }
+
+    private void ApplyTheme()
+    {
+        bool dark;
+        try { dark = Autodesk.Revit.UI.UIThemeManager.CurrentTheme == Autodesk.Revit.UI.UITheme.Dark; }
+        catch { return; }
+        if (!dark) return;
+
+        void Set(string key, string hex) =>
+            Resources[key] = new System.Windows.Media.SolidColorBrush(
+                (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(hex));
+
+        Set("Bg", "#2D2D30");
+        Set("Surface", "#3A3A3D");
+        Set("Text", "#E8E8E8");
+        Set("Muted", "#B4B4B4");
+        Set("Line", "#4A4A4D");
+        Set("Accent", "#4C9DE0");
     }
 }

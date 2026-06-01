@@ -18,9 +18,9 @@ public static class BridgeProbe
         try
         {
             using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(600));
-            var resp = await Http.GetAsync($"http://localhost:{port}/revit_mcp/status/", cts.Token)
-                .ConfigureAwait(false);
-            return resp.IsSuccessStatusCode;
+            // 127.0.0.1 (not "localhost", which can resolve to IPv6 ::1). Any HTTP answer = listener is up.
+            await Http.GetAsync($"http://127.0.0.1:{port}/revit_mcp/status/", cts.Token).ConfigureAwait(false);
+            return true;
         }
         catch
         {
