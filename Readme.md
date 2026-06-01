@@ -6,10 +6,10 @@
 
 [![Latest release](https://img.shields.io/github/v/release/Dave5264/transom-revit?label=latest%20release&color=2ea44f&logo=github)](https://github.com/Dave5264/transom-revit/releases/latest)
 
-### ⬇ [Download the installer](https://github.com/Dave5264/transom-revit/releases/download/v1.1.0/Transom-1.1.0-SingleUser.msi)
+### ⬇ [Download the installer](https://github.com/Dave5264/transom-revit/releases/download/v1.2.0/Transom-1.2.0-SingleUser.msi)
 
 **One click, no admin rights** — installs into your per-user Revit add-ins folder.
-Double-click the `.msi`, then start Revit. Supports **Revit 2025 & 2027**.
+Double-click the `.msi`, then start Revit. Supports **Revit 2025, 2026 & 2027**.
 
 </div>
 
@@ -19,8 +19,8 @@ back into the model, **including type parameters**, safely and inside a single t
 Claude-assisted QA layer can reconcile exports and pre-flight imports against the live model over a local MCP
 bridge, but the add-in is fully standalone without it.
 
-> **Status:** v1.1.0 released — full export and round-trip import, including grouped (non-itemized)
-> schedules like window/door schedules. Requirements are locked in
+> **Status:** v1.2.0 released (Revit 2025/2026/2027) — full export and round-trip import, including grouped
+> schedules (by type or by field) and annotation/keyed-note schedules. Requirements are locked in
 > [`SPEC.md`](SPEC.md); the build approach is in [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md).
 
 ## Install
@@ -49,6 +49,7 @@ element; material-takeoff, embedded, linked-element and non-itemized schedules e
 | Revit | Runtime | Build configuration |
 |-------|---------|---------------------|
 | 2025  | .NET 8  | `Debug.R25` / `Release.R25` |
+| 2026  | .NET 8  | `Debug.R26` / `Release.R26` |
 | 2027  | .NET 10 | `Debug.R27` / `Release.R27` |
 
 Built on the [Nice3point Revit SDK](https://github.com/Nice3point/RevitTemplates) (multi-version + dynamic-
