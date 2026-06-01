@@ -132,6 +132,7 @@ public sealed class Importer
                 }
 
                 sheet.Baseline.TryGetValue(row.UniqueId, out var baseRow);
+                sheet.RowBindings.TryGetValue(row.UniqueId, out var rowBindings);
 
                 foreach (var col in sheet.Columns)
                 {
@@ -139,9 +140,14 @@ public sealed class Importer
                     var cellText = row.Cells[col.ExcelCol] ?? "";
                     var baseline = baseRow != null && baseRow.TryGetValue(col.Col, out var bv) ? bv : null;
 
-                    var host = col.Binding == "type"
+                    // Per-element binding wins (a shared param can be instance on one family, type on
+                    // another within a multi-category schedule); fall back to the schedule-level field type.
+                    var binding = rowBindings != null && rowBindings.TryGetValue(col.Col, out var rbv)
+                        ? rbv : col.Binding;
+
+                    var host = binding == "type"
                         ? (el.GetTypeId() != ElementId.InvalidElementId ? doc.GetElement(el.GetTypeId()) : null)
-                        : el;
+                        : binding == "instance" ? el : null;
                     var param = host == null ? null : GetParam(host, col.ParameterId);
 
                     if (param == null)
@@ -176,7 +182,7 @@ public sealed class Importer
 
                     if (param.StorageType == StorageType.String)
                     {
-                        if (col.Binding == "type")
+                        if (binding == "type")
                             RecordType(typeGroups, sheet, col, host!, param, label, row.ExcelRow, cellText);
                         else if ((param.AsString() ?? "") != cellText)
                             cs.Changes.Add(InstanceChange(el, col, param.AsString() ?? "", cellText, true, cellText, 0));
@@ -189,7 +195,7 @@ public sealed class Importer
                             cs.Diagnostics.Add(Diag(sheet, row, col, label, "red", "value can't be parsed", cellText));
                             continue;
                         }
-                        if (col.Binding == "type")
+                        if (binding == "type")
                             RecordType(typeGroups, sheet, col, host!, param, label, row.ExcelRow, cellText);
                         else if (Math.Abs(param.AsDouble() - parsed) >= 1e-9)
                             cs.Changes.Add(InstanceChange(el, col, param.AsValueString() ?? "", cellText, false, "", parsed));
@@ -297,7 +303,7 @@ public sealed class Importer
 
     public string Apply(Document doc, ChangeSet cs)
     {
-        int applied = 0, failed = 0;
+        int applied = 0, failed = 0, unverified = 0;
         using var tx = new Transaction(doc, "Transom: import edits");
         tx.Start();
         try
@@ -308,7 +314,12 @@ public sealed class Importer
                 var param = host == null ? null : GetParam(host, ch.ParameterId);
                 if (param == null || param.IsReadOnly) { failed++; continue; }
                 bool ok = ch.IsString ? param.Set(ch.NewString) : param.Set(ch.NewDouble);
-                if (ok) applied++; else failed++;
+                if (!ok) { failed++; continue; }
+
+                // H3: re-read the parameter and confirm the value actually landed (a Set can return
+                // true yet be coerced/clamped, or silently no-op on some derived parameters).
+                if (!VerifyWrite(param, ch)) { unverified++; continue; }
+                applied++;
             }
             tx.Commit();
         }
@@ -318,7 +329,24 @@ public sealed class Importer
             return "Apply failed (rolled back): " + ex.Message;
         }
 
-        return $"Applied {applied} change(s)" + (failed > 0 ? $", {failed} failed" : "") + $". {cs.Skipped.Count} skipped.";
+        var msg = $"Applied {applied} change(s)";
+        if (failed > 0) msg += $", {failed} failed";
+        if (unverified > 0) msg += $", {unverified} unverified (value didn't take)";
+        return msg + $". {cs.Skipped.Count} skipped.";
+    }
+
+    /// <summary>Re-reads a just-written parameter to confirm the new value persisted (within unit tolerance).</summary>
+    private static bool VerifyWrite(Parameter param, ProposedChange ch)
+    {
+        try
+        {
+            if (param.StorageType == StorageType.String)
+                return (param.AsString() ?? "") == (ch.NewString ?? "");
+            if (param.StorageType == StorageType.Double)
+                return Math.Abs(param.AsDouble() - ch.NewDouble) <= 1e-6;
+            return true; // other storage types aren't written by Transom
+        }
+        catch { return false; }
     }
 
     // --- helpers ---

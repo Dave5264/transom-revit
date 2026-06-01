@@ -50,6 +50,7 @@ public sealed class RowMeta
     public int ExcelRow;        // advisory only
     public string? UniqueId;    // element rows only; null for header/group/blank
     public string Kind = "";    // element | columnHeader | groupHeader | blank
+    public Dictionary<int, string>? Bindings; // col -> instance|type|none, resolved per element (multi-category)
 }
 
 /// <summary>In-memory model of one rendered schedule: the visible grid plus round-trip metadata.</summary>

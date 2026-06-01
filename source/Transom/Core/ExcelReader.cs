@@ -44,6 +44,9 @@ public sealed class ImportSheet
 
     /// <summary>Exported value per element: uniqueId -> (column -> value at export time).</summary>
     public Dictionary<string, Dictionary<int, string>> Baseline = new();
+
+    /// <summary>Resolved binding per element: uniqueId -> (column -> instance|type|none).</summary>
+    public Dictionary<string, Dictionary<int, string>> RowBindings = new();
 }
 
 public sealed class ImportWorkbook
@@ -115,6 +118,21 @@ public sealed class ExcelReader
                         if (int.TryParse(colProp.Name, out var ci))
                             map[ci] = colProp.Value.GetString() ?? "";
                     imp.Baseline[uidProp.Name] = map;
+                }
+
+            // Per-element resolved bindings (col -> instance|type|none), keyed by uniqueId.
+            if (sheetMeta.TryGetProperty("rows", out var rowsEl) && rowsEl.ValueKind == JsonValueKind.Array)
+                foreach (var rm in rowsEl.EnumerateArray())
+                {
+                    if (!rm.TryGetProperty("uniqueId", out var uidp) || uidp.ValueKind != JsonValueKind.String)
+                        continue;
+                    if (!rm.TryGetProperty("bindings", out var bel) || bel.ValueKind != JsonValueKind.Object)
+                        continue;
+                    var map = new Dictionary<int, string>();
+                    foreach (var bp in bel.EnumerateObject())
+                        if (int.TryParse(bp.Name, out var ci))
+                            map[ci] = bp.Value.GetString() ?? "";
+                    imp.RowBindings[uidp.GetString()!] = map;
                 }
 
             var ws = wb.GetSheet(imp.SheetTabName);

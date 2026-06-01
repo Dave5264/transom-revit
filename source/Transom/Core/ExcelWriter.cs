@@ -276,7 +276,7 @@ public sealed class ExcelWriter
                 }).ToArray(),
                 rows = p.t.Rows.Select(r => new
                 {
-                    excelRow = r.ExcelRow, uniqueId = r.UniqueId, kind = r.Kind,
+                    excelRow = r.ExcelRow, uniqueId = r.UniqueId, kind = r.Kind, bindings = r.Bindings,
                 }).ToArray(),
                 baseline = BuildBaseline(p.t),
             }).ToArray(),

@@ -184,13 +184,15 @@ public sealed class ScheduleReader
     private void ReadAnchorsAndClassify(ViewSchedule vs, ScheduleTable table)
     {
         var anchors = new string?[table.RowCount];
+        var uidToElement = new Dictionary<string, Element>();
 
         if (table.RoundTrippable)
         {
-            int uidCol = table.ColCount; // injected field appends as the new last visible column
+            const int commentsId = (int)BuiltInParameter.ALL_MODEL_INSTANCE_COMMENTS;
             var els = new FilteredElementCollector(_doc, vs.Id)
                 .WhereElementIsNotElementType().ToElements();
             var validUids = new HashSet<string>(els.Select(e => e.UniqueId));
+            foreach (var e in els) uidToElement[e.UniqueId] = e;
 
             var tx = new Transaction(_doc, "Transom: read row anchors (rolled back)");
             tx.Start();
@@ -214,8 +216,12 @@ public sealed class ScheduleReader
 
                 _doc.Regenerate();
 
+                // The injected UIDs render in whichever visible column the Comments field occupies — newly
+                // appended (last) when we added it, or its existing position if the schedule already showed
+                // Comments. Locate it by parameter id rather than assuming it's the last column (C1).
+                int uidCol = VisibleColumnOf(def, commentsId);
                 var sec = vs.GetTableData().GetSectionData(SectionType.Body);
-                if (uidCol < sec.NumberOfColumns)
+                if (uidCol >= 0 && uidCol < sec.NumberOfColumns)
                 {
                     int nr = sec.NumberOfRows;
                     for (int r = 0; r < table.RowCount && r < nr; r++)
@@ -229,16 +235,50 @@ public sealed class ScheduleReader
             {
                 tx.RollBack(); // model never persistently mutated
             }
+
+            // No element row could be anchored (empty / linked-element / un-anchorable) -> display-only.
+            if (anchors.All(a => a == null))
+                table.RoundTrippable = false;
         }
 
+        var writable = table.Columns.Where(c => c.Writable).ToList();
         for (int r = 0; r < table.RowCount; r++)
         {
             var meta = new RowMeta { ExcelRow = r, UniqueId = anchors[r] };
-            if (anchors[r] != null) meta.Kind = "element";
+            if (anchors[r] != null && uidToElement.TryGetValue(anchors[r]!, out var el))
+            {
+                meta.Kind = "element";
+                // Resolve binding per (element, field): a shared param can be instance in one
+                // family/category and type in another within a multi-category schedule.
+                var b = new Dictionary<int, string>();
+                foreach (var col in writable) b[col.Col] = ResolveBinding(el, col.ParameterId);
+                meta.Bindings = b;
+            }
             else if (r == 0) meta.Kind = "columnHeader";
             else meta.Kind = RowAllEmpty(table, r) ? "blank" : "groupHeader";
             table.Rows.Add(meta);
         }
+    }
+
+    /// <summary>Where the parameter actually lives for this element — "instance", "type", or "none".</summary>
+    private string ResolveBinding(Element e, int parameterId)
+    {
+        if (GetParamOn(e, parameterId) != null) return "instance";
+        var typeId = e.GetTypeId();
+        if (typeId != ElementId.InvalidElementId)
+        {
+            var type = _doc.GetElement(typeId);
+            if (type != null && GetParamOn(type, parameterId) != null) return "type";
+        }
+        return "none";
+    }
+
+    private static Parameter? GetParamOn(Element host, int parameterId)
+    {
+        if (parameterId < 0) return host.get_Parameter((BuiltInParameter)parameterId);
+        foreach (Parameter p in host.Parameters)
+            if (p.Id.Value == parameterId) return p;
+        return null;
     }
 
     private static bool RowAllEmpty(ScheduleTable table, int r)
@@ -247,6 +287,20 @@ public sealed class ScheduleReader
             if (!string.IsNullOrEmpty(table.Cells[r][c].Text))
                 return false;
         return true;
+    }
+
+    /// <summary>Visible (body) column index of the first non-hidden field with the given parameter id, or -1.</summary>
+    private static int VisibleColumnOf(ScheduleDefinition def, int parameterId)
+    {
+        int idx = 0;
+        foreach (var fid in def.GetFieldOrder())
+        {
+            var f = def.GetField(fid);
+            if (f == null || f.IsHidden) continue;
+            if ((int)f.ParameterId.Value == parameterId) return idx;
+            idx++;
+        }
+        return -1;
     }
 
     private string SafeFieldName(SchedulableField sf)
