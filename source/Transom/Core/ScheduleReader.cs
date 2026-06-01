@@ -27,8 +27,10 @@ public sealed class ScheduleReader
             Category = (int)def.CategoryId.Value,
             SourceModelGuid = _doc.CreationGUID.ToString(),
             SourceModelTitle = _doc.Title,
-            // Round-trippable only where each visible row maps to one writable element.
-            RoundTrippable = def.IsItemized && !def.IsMaterialTakeoff,
+            // Itemized schedules anchor per instance; grouped (non-itemized) schedules anchor per type
+            // (one row = one type). Material takeoffs are computed quantities — never round-trippable.
+            // The anchor pass downgrades this to false if no row can actually be anchored.
+            RoundTrippable = !def.IsMaterialTakeoff,
         };
 
         var sec = vs.GetTableData().GetSectionData(SectionType.Body);
@@ -183,81 +185,161 @@ public sealed class ScheduleReader
 
     private void ReadAnchorsAndClassify(ViewSchedule vs, ScheduleTable table)
     {
-        var anchors = new string?[table.RowCount];
-        var uidToElement = new Dictionary<string, Element>();
+        var def = vs.Definition;
+        bool grouped = !def.IsItemized;
+
+        var anchors = new string?[table.RowCount];           // instance uid (itemized) or type uid (grouped)
+        var uidToElement = new Dictionary<string, Element>(); // both instances and (for grouped) types
+        var typeToInstances = new Dictionary<string, List<string>>(); // grouped: type uid -> instance uids it owns
+        var representative = new Dictionary<string, Element>();        // grouped: type uid -> one instance (binding resolution)
 
         if (table.RoundTrippable)
         {
-            const int commentsId = (int)BuiltInParameter.ALL_MODEL_INSTANCE_COMMENTS;
             var els = new FilteredElementCollector(_doc, vs.Id)
                 .WhereElementIsNotElementType().ToElements();
-            var validUids = new HashSet<string>(els.Select(e => e.UniqueId));
             foreach (var e in els) uidToElement[e.UniqueId] = e;
 
-            var tx = new Transaction(_doc, "Transom: read row anchors (rolled back)");
-            tx.Start();
-            try
-            {
-                // Stamp each element's UniqueId into a transient text param (rolled back below).
-                foreach (var e in els)
-                {
-                    var p = e.get_Parameter(BuiltInParameter.ALL_MODEL_INSTANCE_COMMENTS);
-                    if (p != null && !p.IsReadOnly && p.StorageType == StorageType.String)
-                        p.Set(e.UniqueId);
-                }
+            if (grouped)
+                ReadTypeAnchors(vs, table, els, anchors, uidToElement, typeToInstances, representative);
+            else
+                ReadInstanceAnchors(vs, table, els, anchors);
 
-                var def = vs.Definition;
-                SchedulableField? sf = def.GetSchedulableFields()
-                    .FirstOrDefault(s => SafeFieldName(s) == "Comments");
-                if (sf != null)
-                {
-                    try { def.AddField(sf); } catch { /* already a field */ }
-                }
-
-                _doc.Regenerate();
-
-                // The injected UIDs render in whichever visible column the Comments field occupies — newly
-                // appended (last) when we added it, or its existing position if the schedule already showed
-                // Comments. Locate it by parameter id rather than assuming it's the last column (C1).
-                int uidCol = VisibleColumnOf(def, commentsId);
-                var sec = vs.GetTableData().GetSectionData(SectionType.Body);
-                if (uidCol >= 0 && uidCol < sec.NumberOfColumns)
-                {
-                    int nr = sec.NumberOfRows;
-                    for (int r = 0; r < table.RowCount && r < nr; r++)
-                    {
-                        var uid = vs.GetCellText(SectionType.Body, r, uidCol) ?? "";
-                        anchors[r] = validUids.Contains(uid) ? uid : null;
-                    }
-                }
-            }
-            finally
-            {
-                tx.RollBack(); // model never persistently mutated
-            }
-
-            // No element row could be anchored (empty / linked-element / un-anchorable) -> display-only.
+            // Nothing could be anchored (empty / linked / un-anchorable / not type-groupable) -> display-only.
             if (anchors.All(a => a == null))
                 table.RoundTrippable = false;
         }
+
+        // Grouped rows are bulk-instance-safe only when their type maps to exactly one row; a type split
+        // across rows (multi-field grouping) leaves instance scope ambiguous -> type params only.
+        var typeRowCount = anchors.Where(a => a != null).GroupBy(a => a!).ToDictionary(g => g.Key, g => g.Count());
 
         var writable = table.Columns.Where(c => c.Writable).ToList();
         for (int r = 0; r < table.RowCount; r++)
         {
             var meta = new RowMeta { ExcelRow = r, UniqueId = anchors[r] };
-            if (anchors[r] != null && uidToElement.TryGetValue(anchors[r]!, out var el))
+            if (anchors[r] != null && uidToElement.TryGetValue(anchors[r]!, out var host))
             {
-                meta.Kind = "element";
-                // Resolve binding per (element, field): a shared param can be instance in one
-                // family/category and type in another within a multi-category schedule.
-                var b = new Dictionary<int, string>();
-                foreach (var col in writable) b[col.Col] = ResolveBinding(el, col.ParameterId);
-                meta.Bindings = b;
+                meta.Kind = grouped ? "type" : "element";
+                if (grouped)
+                {
+                    if (typeRowCount[anchors[r]!] == 1 && typeToInstances.TryGetValue(anchors[r]!, out var insts))
+                        meta.InstanceIds = insts;          // unambiguous -> bulk-instance allowed
+                    representative.TryGetValue(anchors[r]!, out host); // resolve bindings against an instance
+                }
+                // Resolve binding per (element, field): a shared param can be instance in one family/category
+                // and type in another; for grouped rows we resolve against a representative instance.
+                if (host != null)
+                {
+                    var b = new Dictionary<int, string>();
+                    foreach (var col in writable) b[col.Col] = ResolveBinding(host, col.ParameterId);
+                    meta.Bindings = b;
+                }
             }
             else if (r == 0) meta.Kind = "columnHeader";
             else meta.Kind = RowAllEmpty(table, r) ? "blank" : "groupHeader";
             table.Rows.Add(meta);
         }
+    }
+
+    /// <summary>Itemized schedules: stamp each element's UniqueId into Comments (rolled back) and read it per row.</summary>
+    private void ReadInstanceAnchors(ViewSchedule vs, ScheduleTable table, System.Collections.Generic.IList<Element> els, string?[] anchors)
+    {
+        const int commentsId = (int)BuiltInParameter.ALL_MODEL_INSTANCE_COMMENTS;
+        var validUids = new HashSet<string>(els.Select(e => e.UniqueId));
+
+        var tx = new Transaction(_doc, "Transom: read row anchors (rolled back)");
+        tx.Start();
+        try
+        {
+            foreach (var e in els)
+            {
+                var p = e.get_Parameter(BuiltInParameter.ALL_MODEL_INSTANCE_COMMENTS);
+                if (p != null && !p.IsReadOnly && p.StorageType == StorageType.String)
+                    p.Set(e.UniqueId);
+            }
+
+            var def = vs.Definition;
+            SchedulableField? sf = def.GetSchedulableFields().FirstOrDefault(s => SafeFieldName(s) == "Comments");
+            if (sf != null) { try { def.AddField(sf); } catch { /* already a field */ } }
+
+            _doc.Regenerate();
+
+            // Locate the Comments field by parameter id (appended last, or its existing position if already shown).
+            int uidCol = VisibleColumnOf(def, commentsId);
+            var sec = vs.GetTableData().GetSectionData(SectionType.Body);
+            if (uidCol >= 0 && uidCol < sec.NumberOfColumns)
+            {
+                int nr = sec.NumberOfRows;
+                for (int r = 0; r < table.RowCount && r < nr; r++)
+                {
+                    var uid = vs.GetCellText(SectionType.Body, r, uidCol) ?? "";
+                    anchors[r] = validUids.Contains(uid) ? uid : null;
+                }
+            }
+        }
+        finally { tx.RollBack(); }
+    }
+
+    /// <summary>
+    ///     Grouped schedules: each row is one type. Stamp each type's UniqueId into Type Comments (a type
+    ///     parameter, so every instance shares it and it renders uniformly in the grouped row), read it back
+    ///     per row, and record the instances each type owns for bulk instance write-back.
+    /// </summary>
+    private void ReadTypeAnchors(ViewSchedule vs, ScheduleTable table, System.Collections.Generic.IList<Element> els,
+        string?[] anchors, Dictionary<string, Element> uidToElement,
+        Dictionary<string, List<string>> typeToInstances, Dictionary<string, Element> representative)
+    {
+        const int typeCommentsId = (int)BuiltInParameter.ALL_MODEL_TYPE_COMMENTS;
+
+        // Group the schedule's instances by their type (respects the schedule's category + filters).
+        var typeElements = new Dictionary<string, Element>();
+        foreach (var e in els)
+        {
+            var tid = e.GetTypeId();
+            if (tid == ElementId.InvalidElementId) continue;
+            var t = _doc.GetElement(tid);
+            if (t == null) continue;
+            var tUid = t.UniqueId;
+            typeElements[tUid] = t;
+            uidToElement[tUid] = t;
+            if (!typeToInstances.TryGetValue(tUid, out var list)) { list = new List<string>(); typeToInstances[tUid] = list; }
+            list.Add(e.UniqueId);
+            if (!representative.ContainsKey(tUid)) representative[tUid] = e;
+        }
+        if (typeElements.Count == 0) return; // nothing type-groupable (e.g. rooms, sheet lists) -> display-only
+
+        var validTypeUids = new HashSet<string>(typeElements.Keys);
+
+        var tx = new Transaction(_doc, "Transom: read type anchors (rolled back)");
+        tx.Start();
+        try
+        {
+            foreach (var t in typeElements.Values)
+            {
+                var p = t.get_Parameter(BuiltInParameter.ALL_MODEL_TYPE_COMMENTS);
+                if (p != null && !p.IsReadOnly && p.StorageType == StorageType.String)
+                    p.Set(t.UniqueId);
+            }
+
+            var def = vs.Definition;
+            SchedulableField? sf = def.GetSchedulableFields().FirstOrDefault(s => SafeFieldName(s) == "Type Comments");
+            if (sf != null) { try { def.AddField(sf); } catch { /* already a field */ } }
+
+            _doc.Regenerate();
+
+            int uidCol = VisibleColumnOf(def, typeCommentsId);
+            var sec = vs.GetTableData().GetSectionData(SectionType.Body);
+            if (uidCol >= 0 && uidCol < sec.NumberOfColumns)
+            {
+                int nr = sec.NumberOfRows;
+                for (int r = 0; r < table.RowCount && r < nr; r++)
+                {
+                    var uid = vs.GetCellText(SectionType.Body, r, uidCol) ?? "";
+                    anchors[r] = validTypeUids.Contains(uid) ? uid : null;
+                }
+            }
+        }
+        finally { tx.RollBack(); }
     }
 
     /// <summary>Where the parameter actually lives for this element — "instance", "type", or "none".</summary>

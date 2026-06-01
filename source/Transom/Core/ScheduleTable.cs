@@ -48,9 +48,12 @@ public sealed class ColumnMeta
 public sealed class RowMeta
 {
     public int ExcelRow;        // advisory only
-    public string? UniqueId;    // element rows only; null for header/group/blank
-    public string Kind = "";    // element | columnHeader | groupHeader | blank
+    public string? UniqueId;    // anchor: instance UniqueId (element rows) or type UniqueId (type rows); null for header/blank
+    public string Kind = "";    // element | type | columnHeader | groupHeader | blank
     public Dictionary<int, string>? Bindings; // col -> instance|type|none, resolved per element (multi-category)
+
+    /// <summary>For grouped "type" rows: the instances this row represents (bulk instance write-back). Null when itemized or ambiguous.</summary>
+    public List<string>? InstanceIds;
 }
 
 /// <summary>In-memory model of one rendered schedule: the visible grid plus round-trip metadata.</summary>

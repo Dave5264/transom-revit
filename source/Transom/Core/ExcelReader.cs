@@ -25,7 +25,9 @@ public sealed class ImportColumn
 public sealed class ImportRow
 {
     public int ExcelRow;       // 0-based sheet row (for report coloring)
-    public string UniqueId = "";
+    public string UniqueId = "";   // instance UniqueId (element rows) or type UniqueId (type rows)
+    public string Kind = "element";  // element | type
+    public List<string>? InstanceIds;  // type rows only: instances to bulk-write; null when ambiguous
     public string[] Cells = System.Array.Empty<string>();
 }
 
@@ -47,6 +49,12 @@ public sealed class ImportSheet
 
     /// <summary>Resolved binding per element: uniqueId -> (column -> instance|type|none).</summary>
     public Dictionary<string, Dictionary<int, string>> RowBindings = new();
+
+    /// <summary>Row kind per anchor: uniqueId -> "element" | "type".</summary>
+    public Dictionary<string, string> RowKinds = new();
+
+    /// <summary>Type rows only: type uniqueId -> instances it represents (bulk write-back).</summary>
+    public Dictionary<string, List<string>> RowInstanceIds = new();
 }
 
 public sealed class ImportWorkbook
@@ -120,19 +128,33 @@ public sealed class ExcelReader
                     imp.Baseline[uidProp.Name] = map;
                 }
 
-            // Per-element resolved bindings (col -> instance|type|none), keyed by uniqueId.
+            // Per-row metadata keyed by uniqueId: resolved bindings, kind, and (type rows) instance lists.
             if (sheetMeta.TryGetProperty("rows", out var rowsEl) && rowsEl.ValueKind == JsonValueKind.Array)
                 foreach (var rm in rowsEl.EnumerateArray())
                 {
                     if (!rm.TryGetProperty("uniqueId", out var uidp) || uidp.ValueKind != JsonValueKind.String)
                         continue;
-                    if (!rm.TryGetProperty("bindings", out var bel) || bel.ValueKind != JsonValueKind.Object)
-                        continue;
-                    var map = new Dictionary<int, string>();
-                    foreach (var bp in bel.EnumerateObject())
-                        if (int.TryParse(bp.Name, out var ci))
-                            map[ci] = bp.Value.GetString() ?? "";
-                    imp.RowBindings[uidp.GetString()!] = map;
+                    var uid = uidp.GetString()!;
+
+                    if (rm.TryGetProperty("bindings", out var bel) && bel.ValueKind == JsonValueKind.Object)
+                    {
+                        var map = new Dictionary<int, string>();
+                        foreach (var bp in bel.EnumerateObject())
+                            if (int.TryParse(bp.Name, out var ci))
+                                map[ci] = bp.Value.GetString() ?? "";
+                        imp.RowBindings[uid] = map;
+                    }
+
+                    if (rm.TryGetProperty("kind", out var kp) && kp.ValueKind == JsonValueKind.String)
+                        imp.RowKinds[uid] = kp.GetString() ?? "element";
+
+                    if (rm.TryGetProperty("instanceIds", out var iel) && iel.ValueKind == JsonValueKind.Array)
+                    {
+                        var ids = new List<string>();
+                        foreach (var ip in iel.EnumerateArray())
+                            if (ip.ValueKind == JsonValueKind.String) ids.Add(ip.GetString()!);
+                        imp.RowInstanceIds[uid] = ids;
+                    }
                 }
 
             var ws = wb.GetSheet(imp.SheetTabName);
@@ -198,7 +220,14 @@ public sealed class ExcelReader
             for (int c = 0; c < anchorCol; c++)
                 cells[c] = row.GetCell(c)?.ToString() ?? "";
 
-            imp.Rows.Add(new ImportRow { ExcelRow = r, UniqueId = uid, Cells = cells });
+            imp.Rows.Add(new ImportRow
+            {
+                ExcelRow = r,
+                UniqueId = uid,
+                Kind = imp.RowKinds.TryGetValue(uid, out var k) ? k : "element",
+                InstanceIds = imp.RowInstanceIds.TryGetValue(uid, out var ids) ? ids : null,
+                Cells = cells,
+            });
         }
     }
 }

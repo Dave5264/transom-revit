@@ -12,13 +12,17 @@ public sealed class ProposedChange
     public int ParameterId;
     public string Binding = "instance";
 
+    /// <summary>When set, this is a bulk instance write: NewValue is applied to each of these instance UniqueIds.</summary>
+    public List<string>? BulkInstanceIds;
+
     public bool Selected { get; set; } = true;
     public string ElementName { get; set; } = "";
     public string Field { get; set; } = "";
     public string OldValue { get; set; } = "";
     public string NewValue { get; set; } = "";
     public int InstancesAffected { get; set; } = 1;
-    public string Scope => Binding == "type" ? $"type · {InstancesAffected} inst" : "instance";
+    public string Scope => BulkInstanceIds != null ? $"all {InstancesAffected} inst"
+        : Binding == "type" ? $"type · {InstancesAffected} inst" : "instance";
 
     public bool IsString;
     public string NewString = "";
@@ -127,6 +131,14 @@ public sealed class Importer
 
             foreach (var row in sheet.Rows)
             {
+                if (row.Kind == "type")
+                {
+                    sheet.Baseline.TryGetValue(row.UniqueId, out var baseRowT);
+                    sheet.RowBindings.TryGetValue(row.UniqueId, out var rbT);
+                    HandleTypeRow(doc, sheet, row, cs, typeGroups, units, rbT, baseRowT);
+                    continue;
+                }
+
                 var label = row.Cells.FirstOrDefault(c => !string.IsNullOrEmpty(c)) ?? row.UniqueId;
                 var el = doc.GetElement(row.UniqueId);
                 if (el == null)
@@ -219,6 +231,148 @@ public sealed class Importer
 
         return cs;
     }
+
+    /// <summary>
+    ///     Grouped schedules: the row maps to a type. Type-parameter edits write once to the type (via the
+    ///     shared conflict-grouping path); instance-parameter edits bulk-apply the value to every instance the
+    ///     row represents (the list captured at export), with deleted/unwritable instances flagged.
+    /// </summary>
+    private void HandleTypeRow(Document doc, ImportSheet sheet, ImportRow row, ChangeSet cs,
+        Dictionary<(long, int), TypeCandidate> typeGroups, Units units,
+        Dictionary<int, string>? rowBindings, Dictionary<int, string>? baseRow)
+    {
+        var label = row.Cells.FirstOrDefault(c => !string.IsNullOrEmpty(c)) ?? row.UniqueId;
+        var typeEl = doc.GetElement(row.UniqueId);
+        if (typeEl == null)
+        {
+            cs.Skipped.Add(new SkippedItem { Reason = "type deleted", Detail = label });
+            foreach (var col in sheet.Columns.Where(c => c.Writable && c.Matched && c.ExcelCol < row.Cells.Length))
+                cs.Diagnostics.Add(Diag(sheet, row, col, label, "red", "type no longer exists", row.Cells[col.ExcelCol]));
+            return;
+        }
+
+        foreach (var col in sheet.Columns)
+        {
+            if (!col.Writable || !col.Matched || col.ExcelCol >= row.Cells.Length) continue;
+            var cellText = row.Cells[col.ExcelCol] ?? "";
+            var baseline = baseRow != null && baseRow.TryGetValue(col.Col, out var bv) ? bv : null;
+            var binding = rowBindings != null && rowBindings.TryGetValue(col.Col, out var rbv) ? rbv : col.Binding;
+
+            if (binding == "type")
+            {
+                var param = GetParam(typeEl, col.ParameterId);
+                if (param == null)
+                {
+                    if (baseline == null || cellText != baseline)
+                    {
+                        cs.Skipped.Add(new SkippedItem { Reason = "parameter not found", Detail = $"{col.FieldName} ({label})" });
+                        cs.Diagnostics.Add(Diag(sheet, row, col, label, "red", "parameter not found", cellText));
+                    }
+                    continue;
+                }
+                var current = CurrentDisplay(param);
+                bool edited = baseline != null ? cellText != baseline : cellText != current;
+                if (param.IsReadOnly)
+                {
+                    if (edited)
+                    {
+                        cs.Skipped.Add(new SkippedItem { Reason = "read-only", Detail = $"{col.FieldName} ({label})" });
+                        cs.Diagnostics.Add(Diag(sheet, row, col, label, "red", "parameter is read-only", cellText));
+                    }
+                    continue;
+                }
+                if (baseline != null && Drifted(param, baseline, units, col.SpecTypeId))
+                    cs.Diagnostics.Add(Diag(sheet, row, col, label, "yellow",
+                        $"changed since export (was '{baseline}', now '{current}')", cellText));
+                if (!edited) continue;
+
+                if (param.StorageType == StorageType.String)
+                    RecordType(typeGroups, sheet, col, typeEl, param, label, row.ExcelRow, cellText);
+                else if (param.StorageType == StorageType.Double && col.SpecTypeId != null)
+                {
+                    if (!UnitFormatUtils.TryParse(units, new ForgeTypeId(col.SpecTypeId), cellText, out _))
+                    {
+                        cs.Skipped.Add(new SkippedItem { Reason = "unparseable", Detail = $"{col.FieldName} = '{cellText}'" });
+                        cs.Diagnostics.Add(Diag(sheet, row, col, label, "red", "value can't be parsed", cellText));
+                        continue;
+                    }
+                    RecordType(typeGroups, sheet, col, typeEl, param, label, row.ExcelRow, cellText);
+                }
+                else
+                {
+                    cs.Skipped.Add(new SkippedItem { Reason = "unsupported parameter type", Detail = $"{col.FieldName} ({label})" });
+                    cs.Diagnostics.Add(Diag(sheet, row, col, label, "red", "unsupported parameter type", cellText));
+                }
+            }
+            else if (binding == "instance")
+            {
+                bool edited = baseline != null ? cellText != baseline : !string.IsNullOrEmpty(cellText);
+                if (!edited) continue;
+
+                if (row.InstanceIds == null || row.InstanceIds.Count == 0)
+                {
+                    cs.Skipped.Add(new SkippedItem { Reason = "ambiguous instance scope", Detail = $"{col.FieldName} ({label}) — type spans multiple rows" });
+                    cs.Diagnostics.Add(Diag(sheet, row, col, label, "red", "instance scope ambiguous (type spans rows)", cellText));
+                    continue;
+                }
+
+                // Resolve the live instances; a representative drives storage-type / read-only checks.
+                var ids = row.InstanceIds.Where(uid => doc.GetElement(uid) != null).ToList();
+                int missing = row.InstanceIds.Count - ids.Count;
+                if (missing > 0)
+                    cs.Diagnostics.Add(Diag(sheet, row, col, label, "yellow",
+                        $"{missing} of {row.InstanceIds.Count} instance(s) no longer exist", cellText));
+                if (ids.Count == 0)
+                {
+                    cs.Skipped.Add(new SkippedItem { Reason = "all instances deleted", Detail = $"{col.FieldName} ({label})" });
+                    continue;
+                }
+
+                var repr = doc.GetElement(ids[0]);
+                var rparam = repr == null ? null : GetParam(repr, col.ParameterId);
+                if (rparam == null)
+                {
+                    cs.Skipped.Add(new SkippedItem { Reason = "parameter not found", Detail = $"{col.FieldName} ({label})" });
+                    cs.Diagnostics.Add(Diag(sheet, row, col, label, "red", "parameter not found", cellText));
+                    continue;
+                }
+                if (rparam.IsReadOnly)
+                {
+                    cs.Skipped.Add(new SkippedItem { Reason = "read-only", Detail = $"{col.FieldName} ({label})" });
+                    cs.Diagnostics.Add(Diag(sheet, row, col, label, "red", "parameter is read-only", cellText));
+                    continue;
+                }
+
+                var oldDisp = string.IsNullOrEmpty(baseline) ? "(varies)" : baseline;
+                if (rparam.StorageType == StorageType.String)
+                    cs.Changes.Add(BulkChange(typeEl, col, ids, oldDisp, cellText, true, cellText, 0));
+                else if (rparam.StorageType == StorageType.Double && col.SpecTypeId != null)
+                {
+                    if (!UnitFormatUtils.TryParse(units, new ForgeTypeId(col.SpecTypeId), cellText, out double parsed))
+                    {
+                        cs.Skipped.Add(new SkippedItem { Reason = "unparseable", Detail = $"{col.FieldName} = '{cellText}'" });
+                        cs.Diagnostics.Add(Diag(sheet, row, col, label, "red", "value can't be parsed", cellText));
+                        continue;
+                    }
+                    cs.Changes.Add(BulkChange(typeEl, col, ids, oldDisp, cellText, false, "", parsed));
+                }
+                else
+                {
+                    cs.Skipped.Add(new SkippedItem { Reason = "unsupported parameter type", Detail = $"{col.FieldName} ({label})" });
+                    cs.Diagnostics.Add(Diag(sheet, row, col, label, "red", "unsupported parameter type", cellText));
+                }
+            }
+            // binding == "none" -> parameter lives on neither host for this type; nothing to write.
+        }
+    }
+
+    private static ProposedChange BulkChange(Element typeEl, ImportColumn col, List<string> instanceIds,
+        string oldDisp, string newDisp, bool isString, string str, double dbl) => new()
+    {
+        ParameterId = col.ParameterId, Binding = "instance", BulkInstanceIds = instanceIds,
+        ElementName = SafeName(typeEl), Field = col.FieldName, OldValue = oldDisp, NewValue = newDisp,
+        InstancesAffected = instanceIds.Count, IsString = isString, NewString = str, NewDouble = dbl,
+    };
 
     private static void RecordType(Dictionary<(long, int), TypeCandidate> typeGroups, ImportSheet sheet,
         ImportColumn col, Element host, Parameter param, string label, int excelRow, string cellText)
@@ -316,6 +470,22 @@ public sealed class Importer
         {
             foreach (var ch in cs.Changes)
             {
+                // Bulk instance write (grouped schedule): apply to every instance the row represented.
+                if (ch.BulkInstanceIds != null)
+                {
+                    foreach (var uid in ch.BulkInstanceIds)
+                    {
+                        var inst = doc.GetElement(uid);
+                        var ip = inst == null ? null : GetParam(inst, ch.ParameterId);
+                        if (ip == null || ip.IsReadOnly) { failed++; continue; }
+                        bool iok = ch.IsString ? ip.Set(ch.NewString) : ip.Set(ch.NewDouble);
+                        if (!iok) { failed++; continue; }
+                        if (!VerifyWrite(ip, ch)) { unverified++; continue; }
+                        applied++;
+                    }
+                    continue;
+                }
+
                 var host = ch.Binding == "type" ? doc.GetElement(new ElementId(ch.TypeId)) : doc.GetElement(ch.UniqueId);
                 var param = host == null ? null : GetParam(host, ch.ParameterId);
                 if (param == null || param.IsReadOnly) { failed++; continue; }
