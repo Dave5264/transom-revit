@@ -95,7 +95,7 @@ public static class ExcelCorrector
     }
 
     /// <summary>The schedule's display format for a value; falls back to the editable form if that doesn't round-trip.</summary>
-    private static string Canonical(Units units, ForgeTypeId spec, double value, string fallback)
+    public static string Canonical(Units units, ForgeTypeId spec, double value, string fallback)
     {
         try
         {
@@ -107,7 +107,7 @@ public static class ExcelCorrector
         catch { return fallback; }
     }
 
-    private static bool SameFormat(string a, string b) =>
+    public static bool SameFormat(string a, string b) =>
         string.Equals(a.Trim(), b.Trim(), StringComparison.OrdinalIgnoreCase);
 
     private static void SetCell(ImportRow? row, int col, string value)

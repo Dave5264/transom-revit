@@ -35,8 +35,10 @@ public sealed class ProposedChange
             : Binding == "type" ? $"type · {InstancesAffected} inst" : "instance");
 
     public bool IsString;
+    public bool IsInt;
     public string NewString = "";
     public double NewDouble;
+    public int NewInt;
 }
 
 public sealed class SkippedItem
@@ -214,6 +216,16 @@ public sealed class Importer
                         else if ((param.AsString() ?? "") != cellText)
                             cs.Changes.Add(Mark(InstanceChange(el, col, param.AsString() ?? "", cellText, true, cellText, 0), elInGroup, elGroupName));
                     }
+                    else if (param.StorageType == StorageType.Integer && binding == "instance")
+                    {
+                        if (!TryParseInteger(IsYesNo(param), cellText, out int iv))
+                        {
+                            cs.Skipped.Add(new SkippedItem { Reason = "unparseable", Detail = $"{col.FieldName} = '{cellText}'" });
+                            cs.Diagnostics.Add(Diag(sheet, row, col, label, "red", "value can't be parsed", cellText));
+                        }
+                        else if (param.AsInteger() != iv)
+                            cs.Changes.Add(Mark(IntChange(el, col, current, cellText, iv), elInGroup, elGroupName));
+                    }
                     else if (param.StorageType == StorageType.Double && col.SpecTypeId != null)
                     {
                         if (!UnitFormatUtils.TryParse(units, new ForgeTypeId(col.SpecTypeId), cellText, out double parsed))
@@ -225,7 +237,14 @@ public sealed class Importer
                         if (binding == "type")
                             RecordType(typeGroups, sheet, col, host!, param, label, row.ExcelRow, cellText);
                         else if (Math.Abs(param.AsDouble() - parsed) >= 1e-9)
-                            cs.Changes.Add(Mark(InstanceChange(el, col, param.AsValueString() ?? "", cellText, false, "", parsed), elInGroup, elGroupName));
+                        {
+                            // Always check the entered value is in the schedule's unit format; if not, ask to confirm.
+                            var canonical = ExcelCorrector.Canonical(units, new ForgeTypeId(col.SpecTypeId), parsed, cellText);
+                            if (!ExcelCorrector.SameFormat(cellText, canonical))
+                                cs.Reformats.Add(Reformat(sheet, row, col, label, cellText, canonical));
+                            else
+                                cs.Changes.Add(Mark(InstanceChange(el, col, param.AsValueString() ?? "", cellText, false, "", parsed), elInGroup, elGroupName));
+                        }
                     }
                     else
                     {
@@ -353,31 +372,47 @@ public sealed class Importer
                 }
                 if (rparam.IsReadOnly)
                 {
-                    cs.Skipped.Add(new SkippedItem { Reason = "read-only", Detail = $"{col.FieldName} ({label})" });
-                    cs.Diagnostics.Add(Diag(sheet, row, col, label, "red", "parameter is read-only", cellText));
+                    cs.Changes.Add(FrozenChange(SafeName(typeEl), col, "(varies)", cellText, "read-only — driven by the family or type"));
+                    cs.Diagnostics.Add(Diag(sheet, row, col, label, "blue", "frozen — read-only (family/type driven)", cellText));
                     continue;
                 }
 
                 var oldDisp = string.IsNullOrEmpty(baseline) ? "(varies)" : baseline;
-                bool isString;
+                bool isString = false, isInt = false;
                 string str = "";
                 double dbl = 0;
+                int iv = 0;
                 if (rparam.StorageType == StorageType.String) { isString = true; str = cellText; }
+                else if (rparam.StorageType == StorageType.Integer)
+                {
+                    isInt = true;
+                    if (!TryParseInteger(IsYesNo(rparam), cellText, out iv))
+                    {
+                        cs.Skipped.Add(new SkippedItem { Reason = "unparseable", Detail = $"{col.FieldName} = '{cellText}'" });
+                        cs.Diagnostics.Add(Diag(sheet, row, col, label, "red", "value can't be parsed", cellText));
+                        continue;
+                    }
+                }
                 else if (rparam.StorageType == StorageType.Double && col.SpecTypeId != null)
                 {
-                    isString = false;
                     if (!UnitFormatUtils.TryParse(units, new ForgeTypeId(col.SpecTypeId), cellText, out double parsed))
                     {
                         cs.Skipped.Add(new SkippedItem { Reason = "unparseable", Detail = $"{col.FieldName} = '{cellText}'" });
                         cs.Diagnostics.Add(Diag(sheet, row, col, label, "red", "value can't be parsed", cellText));
                         continue;
                     }
+                    var canonical = ExcelCorrector.Canonical(units, new ForgeTypeId(col.SpecTypeId), parsed, cellText);
+                    if (!ExcelCorrector.SameFormat(cellText, canonical))
+                    {
+                        cs.Reformats.Add(Reformat(sheet, row, col, label, cellText, canonical));
+                        continue;
+                    }
                     dbl = parsed;
                 }
                 else
                 {
-                    cs.Skipped.Add(new SkippedItem { Reason = "unsupported parameter type", Detail = $"{col.FieldName} ({label})" });
-                    cs.Diagnostics.Add(Diag(sheet, row, col, label, "red", "unsupported parameter type", cellText));
+                    cs.Changes.Add(FrozenChange(SafeName(typeEl), col, oldDisp, cellText, "set by a family/type selection, not by text"));
+                    cs.Diagnostics.Add(Diag(sheet, row, col, label, "blue", "frozen — set by family/type (can't import)", cellText));
                     continue;
                 }
 
@@ -393,20 +428,26 @@ public sealed class Importer
                     else ungrouped.Add(uid);
                 }
                 if (ungrouped.Count > 0)
-                    cs.Changes.Add(BulkChange(typeEl, col, ungrouped, oldDisp, cellText, isString, str, dbl));
+                    cs.Changes.Add(BulkChange(typeEl, col, ungrouped, oldDisp, cellText, isString, str, dbl, isInt, iv));
                 if (grouped.Count > 0)
-                    cs.Changes.Add(Mark(BulkChange(typeEl, col, grouped, oldDisp, cellText, isString, str, dbl), true, gName));
+                    cs.Changes.Add(Mark(BulkChange(typeEl, col, grouped, oldDisp, cellText, isString, str, dbl, isInt, iv), true, gName));
             }
             // binding == "none" -> parameter lives on neither host for this type; nothing to write.
         }
     }
 
     private static ProposedChange BulkChange(Element typeEl, ImportColumn col, List<string> instanceIds,
-        string oldDisp, string newDisp, bool isString, string str, double dbl) => new()
+        string oldDisp, string newDisp, bool isString, string str, double dbl, bool isInt, int iv) => new()
     {
         ParameterId = col.ParameterId, Binding = "instance", BulkInstanceIds = instanceIds,
         ElementName = SafeName(typeEl), Field = col.FieldName, OldValue = oldDisp, NewValue = newDisp,
-        InstancesAffected = instanceIds.Count, IsString = isString, NewString = str, NewDouble = dbl,
+        InstancesAffected = instanceIds.Count, IsString = isString, NewString = str, NewDouble = dbl, IsInt = isInt, NewInt = iv,
+    };
+
+    private static ReformatSuggestion Reformat(ImportSheet sheet, ImportRow row, ImportColumn col, string label, string entered, string canonical) => new()
+    {
+        SheetTabName = sheet.SheetTabName, ExcelRow = row.ExcelRow, ExcelCol = col.ExcelCol,
+        FieldName = col.FieldName, ElementLabel = label, Entered = entered, Canonical = canonical,
     };
 
     private static void RecordType(Dictionary<(long, int), TypeCandidate> typeGroups, ImportSheet sheet,
@@ -515,7 +556,7 @@ public sealed class Importer
                         var inst = doc.GetElement(uid);
                         var ip = inst == null ? null : GetParam(inst, ch.ParameterId);
                         if (ip == null || ip.IsReadOnly) { failed++; continue; }
-                        bool iok = ch.IsString ? ip.Set(ch.NewString) : ip.Set(ch.NewDouble);
+                        bool iok = SetValue(ip, ch);
                         if (!iok) { failed++; continue; }
                         if (!VerifyWrite(ip, ch)) { unverified++; continue; }
                         applied++;
@@ -526,7 +567,7 @@ public sealed class Importer
                 var host = ch.Binding == "type" ? doc.GetElement(new ElementId(ch.TypeId)) : doc.GetElement(ch.UniqueId);
                 var param = host == null ? null : GetParam(host, ch.ParameterId);
                 if (param == null || param.IsReadOnly) { failed++; continue; }
-                bool ok = ch.IsString ? param.Set(ch.NewString) : param.Set(ch.NewDouble);
+                bool ok = SetValue(param, ch);
                 if (!ok) { failed++; continue; }
 
                 // H3: re-read the parameter and confirm the value actually landed (a Set can return
@@ -548,6 +589,9 @@ public sealed class Importer
         return msg + $". {cs.Skipped.Count} skipped.";
     }
 
+    private static bool SetValue(Parameter param, ProposedChange ch) =>
+        ch.IsString ? param.Set(ch.NewString) : ch.IsInt ? param.Set(ch.NewInt) : param.Set(ch.NewDouble);
+
     /// <summary>Re-reads a just-written parameter to confirm the new value persisted (within unit tolerance).</summary>
     private static bool VerifyWrite(Parameter param, ProposedChange ch)
     {
@@ -555,6 +599,8 @@ public sealed class Importer
         {
             if (param.StorageType == StorageType.String)
                 return (param.AsString() ?? "") == (ch.NewString ?? "");
+            if (param.StorageType == StorageType.Integer)
+                return param.AsInteger() == ch.NewInt;
             if (param.StorageType == StorageType.Double)
                 return Math.Abs(param.AsDouble() - ch.NewDouble) <= 1e-6;
             return true; // other storage types aren't written by Transom
@@ -577,6 +623,37 @@ public sealed class Importer
         ParameterId = col.ParameterId, Binding = "instance", ElementName = elementName,
         Field = col.FieldName, OldValue = oldDisp, NewValue = attempted, Frozen = true, FrozenReason = reason, Selected = false,
     };
+
+    private static ProposedChange IntChange(Element el, ImportColumn col, string oldDisp, string newDisp, int iv) => new()
+    {
+        UniqueId = el.UniqueId, ParameterId = col.ParameterId, Binding = "instance", ElementName = SafeName(el),
+        Field = col.FieldName, OldValue = oldDisp, NewValue = newDisp, IsInt = true, NewInt = iv,
+    };
+
+    /// <summary>Whether a parameter is a Yes/No (boolean) integer.</summary>
+    private static bool IsYesNo(Parameter param)
+    {
+        try { return param.Definition.GetDataType() == SpecTypeId.Boolean.YesNo; }
+        catch { return false; }
+    }
+
+    /// <summary>Parses an integer or Yes/No cell. Yes/No accepts Yes/No/Y/N/True/False/1/0 (blank = No).</summary>
+    private static bool TryParseInteger(bool yesNo, string text, out int value)
+    {
+        value = 0;
+        text = (text ?? "").Trim();
+        if (yesNo)
+        {
+            switch (text.ToLowerInvariant())
+            {
+                case "yes": case "y": case "true": case "1": value = 1; return true;
+                case "no": case "n": case "false": case "0": case "": value = 0; return true;
+                default: return false;
+            }
+        }
+        return int.TryParse(text, System.Globalization.NumberStyles.Integer,
+            System.Globalization.CultureInfo.InvariantCulture, out value);
+    }
 
     private static ProposedChange TypeChange((long, int) key, TypeCandidate tc, string newDisp,
         bool isString, string str, double dbl) => new()
