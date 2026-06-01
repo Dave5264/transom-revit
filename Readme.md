@@ -4,6 +4,13 @@
 
 **Round-trip Revit schedules through spreadsheets — with full visual fidelity and type-parameter–safe write-back.**
 
+[![Latest release](https://img.shields.io/github/v/release/Dave5264/transom-revit?label=latest%20release&color=2ea44f&logo=github)](https://github.com/Dave5264/transom-revit/releases/latest)
+
+### ⬇ [Download the installer](https://github.com/Dave5264/transom-revit/releases/download/v1.0.0/Transom-1.0.0-SingleUser.msi)
+
+**One click, no admin rights** — installs into your per-user Revit add-ins folder.
+Double-click the `.msi`, then start Revit. Supports **Revit 2025 & 2027**.
+
 </div>
 
 Transom is an Autodesk Revit add-in (C#) that exports schedules to `.xlsx` / `.csv` / `.xls` exactly as Revit
@@ -12,8 +19,19 @@ back into the model, **including type parameters**, safely and inside a single t
 Claude-assisted QA layer can reconcile exports and pre-flight imports against the live model over a local MCP
 bridge, but the add-in is fully standalone without it.
 
-> **Status:** scaffolding complete; core export/import in progress. Requirements are locked in
+> **Status:** v1.0.0 released — full export and round-trip import are working. Requirements are locked in
 > [`SPEC.md`](SPEC.md); the build approach is in [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md).
+
+## Install
+
+The quickest way is the **[per-user installer](https://github.com/Dave5264/transom-revit/releases/latest)** — no administrator rights required:
+
+1. Download **`Transom-…-SingleUser.msi`** from the [latest release](https://github.com/Dave5264/transom-revit/releases/latest).
+2. Double-click it. It installs into `%AppData%\Autodesk\Revit\Addins\` for the current user only.
+3. Launch Revit — Transom is on the ribbon. To remove it later: *Apps & features → Transom*.
+
+A machine-wide `MultiUser.msi` (all users, requires admin) is built alongside it. Prefer to build from
+source instead? See [Building](#building).
 
 ## How it works (architecture in one paragraph)
 
