@@ -190,16 +190,17 @@ public sealed partial class TransomViewModel : ObservableObject
         SelectionInfo = $"{sel} of {total} selected";
     }
 
+    // Operate on the full list, not just the filtered view, so a selection hidden by the filter is also set/cleared.
     [RelayCommand]
     private void SelectAllSchedules()
     {
-        foreach (var e in FilteredSchedules) e.IsChecked = true;
+        foreach (var e in _allOther) e.IsChecked = true;
     }
 
     [RelayCommand]
     private void SelectNoneSchedules()
     {
-        foreach (var e in FilteredSchedules) e.IsChecked = false;
+        foreach (var e in _allOther) e.IsChecked = false;
     }
 
     [RelayCommand]
