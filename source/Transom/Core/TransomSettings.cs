@@ -18,6 +18,10 @@ public sealed class TransomSettings
     /// <summary>Occasionally show a cheerful message after an action. On by default — toggle in Settings.</summary>
     public bool EncouragingMessages { get; set; } = true;
 
+    /// <summary>The bridge port the MCP shim was last auto-registered with (0 = never). Drives one-time
+    /// first-run registration of the bundled shim with Claude, and re-registration when the port changes.</summary>
+    public int McpRegisteredPort { get; set; }
+
     private static string FilePath =>
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Transom", "settings.json");
 

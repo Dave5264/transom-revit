@@ -12,6 +12,11 @@ public class Application : ExternalApplication
     public override void OnStartup()
     {
         CreateRibbon();
+
+        // Seamless MCP setup: copy the bundled self-contained shim to the per-user location and register it
+        // with the user's Claude clients once (Option A — see install/SEAMLESS_INSTALL.md). Run off the UI
+        // thread so Revit startup is never delayed by the file copy; the helper never throws.
+        System.Threading.Tasks.Task.Run(Core.McpRegistration.EnsureBundledShimAndAutoRegister);
     }
 
     private void CreateRibbon()

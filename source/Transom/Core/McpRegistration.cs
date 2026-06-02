@@ -48,6 +48,73 @@ public static class McpRegistration
         catch { return false; }
     }
 
+    /// <summary>The shim as shipped inside the add-in payload — it is published next to <c>Transom.dll</c>
+    /// (same folder as this assembly). This is the source for the first-run copy to <see cref="ShimPath"/>.</summary>
+    public static string BundledShimPath
+    {
+        get
+        {
+            string dir;
+            try
+            {
+                var loc = System.Reflection.Assembly.GetExecutingAssembly().Location;
+                dir = string.IsNullOrEmpty(loc) ? AppContext.BaseDirectory : Path.GetDirectoryName(loc) ?? AppContext.BaseDirectory;
+            }
+            catch { dir = AppContext.BaseDirectory; }
+            return Path.Combine(dir, "Transom.McpShim.exe");
+        }
+    }
+
+    /// <summary>Ensures the self-contained shim is present at the per-user location (<see cref="ShimPath"/>),
+    /// copying it from the add-in payload when missing or out of date. Admin-free (LocalAppData, no elevation).
+    /// Returns true if the shim is present afterward. Safe to call repeatedly — the copy is guarded.</summary>
+    public static bool EnsureShimInstalled()
+    {
+        try
+        {
+            var dest = ShimPath;
+            var src = BundledShimPath;
+            if (!File.Exists(src)) return ShimPresent(); // nothing bundled to copy from; report current state
+
+            Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
+            bool needCopy;
+            try
+            {
+                needCopy = !File.Exists(dest)
+                           || new FileInfo(src).Length != new FileInfo(dest).Length
+                           || File.GetLastWriteTimeUtc(src) > File.GetLastWriteTimeUtc(dest);
+            }
+            catch { needCopy = !File.Exists(dest); }
+
+            if (needCopy) File.Copy(src, dest, true);
+            return ShimPresent();
+        }
+        catch { return ShimPresent(); }
+    }
+
+    /// <summary>First-run convenience (Option A): install the bundled shim, then register it with the user's
+    /// Claude clients once — or again if the bridge port changed since the last registration. Idempotent and
+    /// guarded so it can run on every add-in startup. Never throws.</summary>
+    public static void EnsureBundledShimAndAutoRegister()
+    {
+        try
+        {
+            if (!EnsureShimInstalled()) return; // no shim -> nothing to register yet
+
+            var settings = TransomSettings.Load();
+            var port = settings.BridgeSelfHostPort;
+            if (settings.McpRegisteredPort == port) return; // already registered with this port
+
+            var res = Register(port);
+            if (res.Updated > 0)
+            {
+                settings.McpRegisteredPort = port;
+                settings.Save();
+            }
+        }
+        catch { /* startup must never fail because of registration */ }
+    }
+
     private static IEnumerable<(string label, string path)> Targets()
     {
         yield return ("Claude Desktop", Path.Combine(
