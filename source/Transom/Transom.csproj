@@ -43,6 +43,14 @@
     <ItemGroup>
         <Resource Include="Resources\Icons\RibbonIcon16.png"/>
         <Resource Include="Resources\Icons\RibbonIcon32.png"/>
+        <Resource Include="Resources\Icons\Update16.png"/>
+        <Resource Include="Resources\Icons\Update32.png"/>
+        <Resource Include="Resources\Icons\Help16.png"/>
+        <Resource Include="Resources\Icons\Help32.png"/>
+        <Resource Include="Resources\Icons\Bridge16.png"/>
+        <Resource Include="Resources\Icons\Bridge32.png"/>
+        <Resource Include="Resources\Icons\Register16.png"/>
+        <Resource Include="Resources\Icons\Register32.png"/>
     </ItemGroup>
 
     <ItemGroup>

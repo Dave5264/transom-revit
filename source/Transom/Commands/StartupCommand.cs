@@ -37,13 +37,7 @@ public class StartupCommand : ExternalCommand
             if (!d.IsLinked && !d.IsFamilyDocument)
                 projects.Add(d.Title);
 
-        var schedules = new FilteredElementCollector(doc)
-            .OfClass(typeof(ViewSchedule))
-            .Cast<ViewSchedule>()
-            .Where(v => !v.IsTemplate && !v.IsTitleblockRevisionSchedule)
-            .OrderBy(v => v.Name)
-            .Select(v => (v.Id.Value, v.Name))
-            .ToList();
+        var schedules = DocUtil.UserSchedules(doc);
 
         var exportHandler = new ExportEventHandler();
         var exportEvent = Autodesk.Revit.UI.ExternalEvent.Create(exportHandler);

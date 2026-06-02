@@ -84,8 +84,11 @@ public sealed partial class TransomViewModel : ObservableObject
     [ObservableProperty] private string _importStatus = "Choose a Transom workbook to import.";
     [ObservableProperty] private string _reportPath = "";
     [ObservableProperty] private bool _copiedImport;
+    [ObservableProperty] private bool _copiedLog;
+    private string _diagnosticLog = "";
     [ObservableProperty] private bool _produceReport;   // off by default — report only on request
     [ObservableProperty] private bool _hasFrozen;       // any greyed (un-writable) rows in the preview
+    [ObservableProperty] private bool _hasAffected;     // any schedule with at least one proposed change
 
     [ObservableProperty] private bool _claudeAvailable;
     [ObservableProperty] private string _claudeMode = "Off"; // Off | Verify (read-only) | Assist (write)
@@ -93,6 +96,7 @@ public sealed partial class TransomViewModel : ObservableObject
     [ObservableProperty] private int _bridgePort = 48884;
     [ObservableProperty] private string _exchangeFolder = "";
     [ObservableProperty] private string _bridgeStatus = "Checking bridge…";
+    [ObservableProperty] private bool _encouragingMessages = true;
 
     public TransomViewModel(
         List<string> projects, string activeProjectTitle,
@@ -117,8 +121,11 @@ public sealed partial class TransomViewModel : ObservableObject
             Changes.Clear();
             Skipped.Clear();
             Fixes.Clear();
+            AffectedSchedules.Clear();
+            HasAffected = false;
             _lastChangeSet = null;
         });
+        _importHandler.OnAppliedLog = log => _ui.Invoke(() => _diagnosticLog = log);
         _importHandler.OnError = s => _ui.Invoke(() => ImportStatus = "Error: " + s);
         _exportHandler.OnStaged = p => _ui.Invoke(() => { _stagedPath = p; CanFinalize = true; });
         _scheduleLoadHandler.OnLoaded = (activeId, scheds) => _ui.Invoke(() => SetSchedules(activeId, scheds));
@@ -126,10 +133,11 @@ public sealed partial class TransomViewModel : ObservableObject
         _settings = TransomSettings.Load();
         BridgePort = _settings.BridgePort;
         ExchangeFolder = _settings.ExchangeFolder;
+        EncouragingMessages = _settings.EncouragingMessages;
         _ = RefreshBridgeAsync();
 
         _copyResetTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1.4) };
-        _copyResetTimer.Tick += (_, _) => { Copied = false; CopiedImport = false; _copyResetTimer.Stop(); };
+        _copyResetTimer.Tick += (_, _) => { Copied = false; CopiedImport = false; CopiedLog = false; _copyResetTimer.Stop(); };
 
         foreach (var p in projects) Projects.Add(p);
         _selectedProject = activeProjectTitle; // backing field: don't trigger a reload during construction
@@ -163,6 +171,7 @@ public sealed partial class TransomViewModel : ObservableObject
     public ObservableCollection<ScheduleEntry> FilteredSchedules { get; } = new();
     public ObservableCollection<ProposedChange> Changes { get; } = new();
     public ObservableCollection<SkippedItem> Skipped { get; } = new();
+    public ObservableCollection<SheetSummary> AffectedSchedules { get; } = new();
     public ObservableCollection<UnparseableFix> Fixes { get; } = new();
 
     /// <summary>Set by the view: shows a modal resolver for one type-param conflict, returns the chosen value (or null = skip).</summary>
@@ -170,6 +179,13 @@ public sealed partial class TransomViewModel : ObservableObject
 
     /// <summary>Set by the view: asks how to handle edits that target group members (skip / abort / hand to Claude).</summary>
     public Func<GroupPrompt, GroupDecision>? GroupResolver;
+
+    /// <summary>Set by the view: confirms enabling "vary by group instance" for grouped PROJECT-param edits before
+    /// Transom applies them. Arg = affected field names; returns true to proceed, false to skip them.</summary>
+    public Func<List<string>, bool>? VaryConfirm;
+
+    /// <summary>Set by the view: tells the user built-in group edits were staged for Claude-assist. Arg = staged path.</summary>
+    public Action<string>? ClaudeStagedNotice;
 
     // --- Export ---
 
@@ -231,10 +247,12 @@ public sealed partial class TransomViewModel : ObservableObject
         _exportHandler.DocTitle = SelectedProject;
         _exportHandler.Stage = stage;
         _exportHandler.ExchangeFolder = ExchangeFolder;
+        _exportHandler.ClaudeAssistEnabled = ClaudeMode.StartsWith("Assist");
         _finalDestination = dlg.FileName;
         CanFinalize = false;
         Status = stage ? $"Staging {ids.Count} schedule(s)…" : $"Exporting {ids.Count} schedule(s)…";
         _exportEvent.Raise();
+        MaybeEncourage();
     }
 
     [RelayCommand]
@@ -262,6 +280,8 @@ public sealed partial class TransomViewModel : ObservableObject
         Changes.Clear();
         Skipped.Clear();
         Fixes.Clear();
+        AffectedSchedules.Clear();
+        HasAffected = false;
         _lastChangeSet = null;
     }
 
@@ -289,6 +309,7 @@ public sealed partial class TransomViewModel : ObservableObject
             .ToList();
         ImportStatus = "Analyzing…";
         _importEvent.Raise();
+        MaybeEncourage();
     }
 
     [RelayCommand]
@@ -309,40 +330,47 @@ public sealed partial class TransomViewModel : ObservableObject
             return;
         }
 
-        // Edits that land on group members can't be written in the normal import — ask how to handle them.
-        var grouped = selected.Where(c => c.InGroup).ToList();
-        string groupNote = "";
-        if (grouped.Count > 0)
+        var notes = new List<string>();
+
+        // Grouped BUILT-IN params can't vary per instance — they need the Claude-assist definition-swap "dance".
+        // Stage them for Claude (Assist on) or skip them (Assist off, where they exported grey).
+        var builtin = selected.Where(c => c.GroupMode == GroupMode.BuiltinDance).ToList();
+        if (builtin.Count > 0)
         {
-            var prompt = new GroupPrompt { Grouped = grouped, AssistEnabled = ClaudeMode.StartsWith("Assist") };
-            var decision = GroupResolver?.Invoke(prompt) ?? GroupDecision.SkipGrouped;
-            if (decision == GroupDecision.Abort)
-            {
-                ImportStatus = $"Cancelled — {prompt.InstanceCount} edit(s) target elements in group(s).";
-                return;
-            }
-            if (decision == GroupDecision.ClaudeHandle)
+            if (ClaudeMode.StartsWith("Assist"))
             {
                 var path = ChooseArtifactPath();
                 if (path == null)
-                {
-                    groupNote = $"{prompt.InstanceCount} grouped edit(s) not staged (no file chosen)";
-                }
+                    notes.Add($"{InstanceCountOf(builtin)} built-in group edit(s) not staged (no file chosen)");
                 else
                 {
-                    var staged = StageGroupEdits(grouped, path);
-                    groupNote = staged != null
-                        ? $"{prompt.InstanceCount} grouped edit(s) staged for Claude → {staged}"
-                        : $"{prompt.InstanceCount} grouped edit(s) could not be staged";
+                    var staged = StageGroupEdits(builtin, path);
+                    if (staged != null)
+                    {
+                        notes.Add($"{InstanceCountOf(builtin)} built-in group edit(s) staged for Claude");
+                        ClaudeStagedNotice?.Invoke(staged);
+                    }
+                    else notes.Add($"{InstanceCountOf(builtin)} built-in group edit(s) could not be staged");
                 }
             }
-            else
+            else notes.Add($"{InstanceCountOf(builtin)} built-in group edit(s) skipped (enable Claude-assist to apply)");
+        }
+
+        // Grouped PROJECT params: Transom applies them itself by enabling "vary by group instance" — confirm first.
+        var projectVary = selected.Where(c => c.GroupMode == GroupMode.ProjectVary).ToList();
+        if (projectVary.Count > 0)
+        {
+            var fields = projectVary.Select(c => c.Field).Distinct().OrderBy(f => f).ToList();
+            bool ok = VaryConfirm?.Invoke(fields) ?? true;
+            if (!ok)
             {
-                groupNote = $"{prompt.InstanceCount} grouped edit(s) skipped";
+                notes.Add($"{InstanceCountOf(projectVary)} grouped project-param edit(s) skipped (vary-by-instance declined)");
+                projectVary = new List<ProposedChange>();
             }
         }
 
-        var toApplyList = selected.Where(c => !c.InGroup).ToList();
+        var toApplyList = selected.Where(c => c.GroupMode == GroupMode.None).Concat(projectVary).ToList();
+        string groupNote = notes.Count > 0 ? string.Join("  ·  ", notes) : "";
         if (toApplyList.Count == 0)
         {
             ImportStatus = groupNote.Length > 0 ? groupNote : "Nothing to apply.";
@@ -365,7 +393,11 @@ public sealed partial class TransomViewModel : ObservableObject
         _importHandler.DocTitle = SelectedProject;
         ImportStatus = $"Applying {toApplyList.Count} selected change(s)…";
         _importEvent.Raise();
+        MaybeEncourage();
     }
+
+    /// <summary>Total element writes represented by a set of changes (bulk changes count each instance).</summary>
+    private static int InstanceCountOf(List<ProposedChange> list) => list.Sum(g => g.BulkInstanceIds?.Count ?? 1);
 
     /// <summary>Prompts the user for where to save the Claude group-edits artifact (defaults to the exchange folder).</summary>
     private string? ChooseArtifactPath()
@@ -390,17 +422,17 @@ public sealed partial class TransomViewModel : ObservableObject
             var dir = Path.GetDirectoryName(path);
             if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
 
+            // Each entry: one BUILT-IN parameter set to one value (uniform) across member elements that live in
+            // instances of one group type. memberUniqueIds are the actual member elements (e.g. the bath door in
+            // each unit instance) — all share the same target value.
             var edits = grouped.Select(g => new
             {
                 field = g.Field,
                 group = g.GroupName,
                 elementName = g.ElementName,
                 parameterId = g.ParameterId,
-                isString = g.IsString,
-                valueString = g.NewString,
-                valueDouble = g.NewDouble,
-                newDisplay = g.NewValue,
-                instanceUniqueIds = g.BulkInstanceIds ?? new List<string> { g.UniqueId },
+                value = g.NewValue,
+                memberUniqueIds = g.BulkInstanceIds ?? new List<string> { g.UniqueId },
             }).ToArray();
 
             var payload = new
@@ -409,9 +441,13 @@ public sealed partial class TransomViewModel : ObservableObject
                 kind = "group-edits",
                 schedule = _lastChangeSet?.ScheduleName ?? "",
                 project = SelectedProject,
-                note = "Elements are inside Revit groups. For each entry, set the parameter (by parameterId; " +
-                       "negative ids are BuiltInParameter) on each listed instance UniqueId. Group members can't be " +
-                       "edited in place — ungroup the affected instances (or use group-edit mode), apply, then restore grouping.",
+                note = "These are BUILT-IN parameter edits (negative parameterId) on elements inside Revit MODEL " +
+                       "GROUPS. Built-in params CANNOT vary per group instance, so a direct write is rejected " +
+                       "('Changes to groups are allowed only in group edit mode') — do NOT use set_parameter. They " +
+                       "must be changed UNIFORMLY in the group DEFINITION via the safe definition-swap procedure in " +
+                       "'Transom - Apply staged edits with Claude.md' in this same folder. Follow that file exactly: " +
+                       "it has the dance (rebuild type -> repoint all instances -> delete old -> rename), the safety " +
+                       "guards (refuse attached-detail/nested/excluded groups), conflict handling, and verification.",
                 edits,
             };
             File.WriteAllText(path, System.Text.Json.JsonSerializer.Serialize(payload,
@@ -437,6 +473,7 @@ public sealed partial class TransomViewModel : ObservableObject
     private void ShowPreview(ChangeSet cs)
     {
         _lastChangeSet = cs;
+        _diagnosticLog = cs.DiagnosticLog;
         Changes.Clear();
         Skipped.Clear();
         foreach (var c in cs.Changes) Changes.Add(c);
@@ -481,6 +518,11 @@ public sealed partial class TransomViewModel : ObservableObject
             });
         }
 
+        AffectedSchedules.Clear();
+        foreach (var s in cs.SheetSummaries.Where(s => s.Changes > 0))
+            AffectedSchedules.Add(s);
+        HasAffected = AffectedSchedules.Count > 0;
+
         HasFrozen = Changes.Any(c => c.Frozen);
         int frozen = Changes.Count(c => c.Frozen);
         int applyable = Changes.Count - frozen;
@@ -503,6 +545,21 @@ public sealed partial class TransomViewModel : ObservableObject
         {
             System.Windows.Clipboard.SetText(ImportStatus ?? string.Empty);
             CopiedImport = true;
+            _copyResetTimer.Stop();
+            _copyResetTimer.Start();
+        }
+        catch { /* clipboard busy */ }
+    }
+
+    [RelayCommand]
+    private void CopyDiagnosticLog()
+    {
+        try
+        {
+            System.Windows.Clipboard.SetText(string.IsNullOrEmpty(_diagnosticLog)
+                ? "No import diagnostic yet — click Preview first."
+                : _diagnosticLog);
+            CopiedLog = true;
             _copyResetTimer.Stop();
             _copyResetTimer.Start();
         }
@@ -566,9 +623,107 @@ public sealed partial class TransomViewModel : ObservableObject
         _ = RefreshBridgeAsync();
     }
 
+    partial void OnEncouragingMessagesChanged(bool value)
+    {
+        _settings.EncouragingMessages = value;
+        _settings.Save();
+    }
+
+    /// <summary>Occasionally shows a cheerful message after an action (when the setting is on).</summary>
+    private void MaybeEncourage()
+    {
+        if (!EncouragingMessages) return;
+        var msg = Encouragement.Maybe();
+        if (msg != null)
+            try { TaskDialog.Show("Schedule Hub", msg); } catch { /* never let a pep talk break anything */ }
+    }
+
+    /// <summary>Writes a how-to markdown into the exchange folder explaining how to apply the staged group-edits
+    /// artifact with Claude. Enabled only once an exchange folder is chosen.</summary>
+    [RelayCommand(CanExecute = nameof(CanWriteClaudeGuide))]
+    private void WriteClaudeGuide()
+    {
+        try
+        {
+            Directory.CreateDirectory(ExchangeFolder);
+            var path = Path.Combine(ExchangeFolder, "Transom - Apply staged edits with Claude.md");
+            File.WriteAllText(path, ClaudeGuideMarkdown());
+            TaskDialog.Show("Schedule Hub", "Instructions written to:\n\n" + path);
+        }
+        catch (Exception ex)
+        {
+            TaskDialog.Show("Schedule Hub", "Couldn't write the instructions:\n\n" + ex.Message);
+        }
+    }
+
+    private bool CanWriteClaudeGuide() => !string.IsNullOrWhiteSpace(ExchangeFolder);
+
+    private string ClaudeGuideMarkdown() => @"# Transom — Applying staged BUILT-IN group edits with Claude
+
+This file sits in your **Claude exchange folder**. When you import with **Claude Assist**, Transom stages
+**built-in parameter edits on elements inside Revit MODEL GROUPS** into a group-edits JSON in this **same
+folder**. Built-in params (Comments, Mark, Level, …) **cannot vary per group instance**, so they must be
+changed **uniformly in the group DEFINITION**. These steps are for Claude to follow.
+
+> Project parameters on grouped elements are NOT here — Transom applies those itself (it enables ""vary
+> by group instance"" and writes them). This file is only the built-in edits, which need the swap below.
+
+## What you need
+A way to run Revit API code on the open model (e.g. the Revit MCP `execute_revit_code`). The Transom
+write-bridge's `set_parameter` will **not** work here — a direct write to a group member is rejected with
+*""Changes to groups are allowed only in group edit mode.""* You must use the definition-swap below.
+
+## 1. Find the staging file
+In **this same folder**, find the file that parses as JSON with top-level `""tool"":""Transom""` and
+`""kind"":""group-edits""` (default name `transom_group_edits.json`; match by **content, not name**). This
+`.md` is not it. If several exist, use the most recent or ask the user.
+
+## 2. Confirm the model
+The open Revit document must match the JSON's `project`/`schedule`. **If not, STOP and tell the user.**
+
+## 3. Group the edits and check for conflicts
+Each entry = one `parameterId` (negative = built-in) set to one `value` across `memberUniqueIds` (the
+member elements, one per group instance). Resolve each member's group type:
+`el = doc.GetElement(uid); groupTypeId = doc.GetElement(el.GroupId).GetTypeId()`. Group the entries by
+group type.
+
+**Conflict check (before changing anything):** within one group type, if two entries target the same
+member role with **different** values, they can't both hold while grouped (a built-in can't differ across
+instances of one type). Do **not** guess — report it and ask the user whether to ungroup those instances
+or pick one value.
+
+## 4. The safe definition-swap (per group type)
+Run it all in ONE transaction with a FailuresPreprocessor (DeleteWarning + Continue) AND a
+DialogBoxShowing handler (OverrideResult to dismiss) so nothing blocks:
+
+a. **Safety guard.** Inspect one instance of the type. If it has attached detail groups
+   (`GetAvailableAttachedDetailGroupTypeIds` / `GetShownAttachedDetailGroupTypeIds` non-empty), nested
+   groups (a member that is itself a Model Group), or excluded members — **SKIP this type** and report
+   ""manual edit needed"". The swap can silently lose these.
+b. Pick one instance **A**. Record A's member ids, then `A.UngroupMembers()`.
+c. For each staged entry for this type, find the member among A's freed ids (its uid is in the entry's
+   `memberUniqueIds`) and set the parameter to `value` (pass unit text verbatim; parse doubles via
+   `UnitFormatUtils`). `doc.Regenerate()`.
+d. `doc.Create.NewGroup(freedIds)` → newGroup (a new group type).
+e. For **every other** instance of the original type: `group.ChangeTypeId(newGroup.GetTypeId())`.
+   Use **ChangeTypeId**, NOT the `GroupType` property setter (the setter pops a modal dialog).
+f. Delete the original (now-unused) group type, then rename newGroup's type back to the original name.
+g. **Verify:** read the parameter on members across several instances — every one must equal `value`.
+   If verification fails for a type, roll back that type's work and report it; never leave a half state.
+
+## 5. Report
+Per group type: applied / skipped (with reason) / conflicts. Note this changed the group **definition**,
+so all instances now share the new value — **durable** (unlike a per-instance override, which Revit
+silently drops on the next type change, reload, or sync).
+
+## After applying
+Review in Revit; if **workshared**, **Synchronize with Central**; delete the JSON when done.
+";
+
     partial void OnExchangeFolderChanged(string value)
     {
         _settings.ExchangeFolder = value;
         _settings.Save();
+        WriteClaudeGuideCommand.NotifyCanExecuteChanged();
     }
 }

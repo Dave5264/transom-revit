@@ -30,6 +30,27 @@ public sealed partial class TransomView
             dlg.ShowDialog();
             return dlg.Decision;
         };
+
+        // Confirm enabling "vary by group instance" before Transom applies grouped project-param edits.
+        viewModel.VaryConfirm = fields =>
+        {
+            var list = string.Join("\n  • ", fields);
+            var msg = "These parameters are on grouped elements:\n\n  • " + list +
+                      "\n\nTo apply your edits, Transom will set them to “vary by group instance” and write " +
+                      "each value per instance, exactly as entered (instances can differ; other groups are unaffected). " +
+                      "This is a permanent parameter setting in the model.\n\nProceed?";
+            return System.Windows.MessageBox.Show(this, msg, "Apply changes — vary by group instance",
+                System.Windows.MessageBoxButton.YesNo, System.Windows.MessageBoxImage.Question)
+                == System.Windows.MessageBoxResult.Yes;
+        };
+
+        // Tell the user built-in group edits were staged for Claude-assist.
+        viewModel.ClaudeStagedNotice = path =>
+            System.Windows.MessageBox.Show(this,
+                "Built-in parameter edits on grouped elements were staged for Claude-assist.\n\n" +
+                "Files are ready for Claude:\n" + path + "\n\n" +
+                "Run Claude to perform the group definition-swap and apply them.",
+                "Ready for Claude", System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Information);
     }
 
     private void Close_Click(object sender, System.Windows.RoutedEventArgs e) => Close();

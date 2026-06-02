@@ -59,8 +59,34 @@ public sealed class RowMeta
     /// <summary>Column indices that can never be written on import for this row's element (greyed on export).</summary>
     public HashSet<int>? FrozenCols;
 
-    /// <summary>Column indices writable only via Claude-assist (instance params on a grouped element) — blue on export.</summary>
-    public HashSet<int>? GroupCols;
+    /// <summary>Grouped-element instance params that are PROJECT/shared params — Transom applies these itself
+    /// (sets "vary by group instance" then writes). Blue on export.</summary>
+    public HashSet<int>? GroupProjectCols;
+
+    /// <summary>Grouped-element instance params that are BUILT-IN params — can't vary, need the Claude-assist
+    /// definition-swap. Yellow on export when Claude-assist is enabled, otherwise a distinct grey.</summary>
+    public HashSet<int>? GroupBuiltinCols;
+
+    /// <summary>Column indices whose edit is a BULK write (a type parameter → every instance of that type) — green on export.</summary>
+    public HashSet<int>? BulkCols;
+
+    /// <summary>
+    ///     When set, this group-HEADER row is editable: changing the value in column <see cref="GroupHeaderEdit.Col"/>
+    ///     bulk-writes the grouping parameter to every element under that header. Lets a user rename a group
+    ///     (e.g. a hidden Sheet Discipline shown only in the header) and have it apply to all members.
+    /// </summary>
+    public GroupHeaderEdit? GroupHeaderEdit;
+}
+
+/// <summary>An editable group-header: its value cell drives a bulk write of the grouping parameter to its members.</summary>
+public sealed class GroupHeaderEdit
+{
+    public int Col;                       // the cell column that holds the group value (editable)
+    public int ParameterId;               // the grouping field's parameter
+    public string FieldName = "";         // grouping field name (for the preview)
+    public string Binding = "instance";  // instance | type
+    public string? SpecTypeId;            // null unless a measurable double
+    public List<string> InstanceIds = new(); // the elements under this header (bulk-write targets)
 }
 
 /// <summary>In-memory model of one rendered schedule: the visible grid plus round-trip metadata.</summary>
@@ -72,6 +98,17 @@ public sealed class ScheduleTable
     public string SourceModelGuid = "";
     public string SourceModelTitle = "";
     public bool RoundTrippable = true;
+
+    /// <summary>Whether Claude-assist is enabled at export time. Drives built-in grouped cells: yellow (enabled)
+    /// vs a distinct grey (disabled). Set by the export caller from the current Claude mode.</summary>
+    public bool ClaudeAssistEnabled;
+
+    /// <summary>
+    ///     True when Revit's Body section row 0 is the column-heading row (the schedule's "Show Headers" is on).
+    ///     When false (headers turned off), the Body starts straight at data with no field-name row, so the writer
+    ///     synthesizes a header row — otherwise import can't match columns by header. See ExcelWriter.WriteSheet.
+    /// </summary>
+    public bool HasHeaderRow = true;
 
     public int RowCount;
     public int ColCount;

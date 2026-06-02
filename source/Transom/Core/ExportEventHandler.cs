@@ -19,6 +19,9 @@ public sealed class ExportEventHandler : IExternalEventHandler
     public string DocTitle = "";
     public bool Stage;
     public string ExchangeFolder = "";
+    /// <summary>When true, grouped built-in-parameter cells export as yellow (Claude can apply them via the
+    /// definition-swap); when false they export as a distinct grey (no path to apply).</summary>
+    public bool ClaudeAssistEnabled;
     public Action<string> ReportStatus = _ => { };
     public Action<string> OnStaged = _ => { };
 
@@ -28,14 +31,19 @@ public sealed class ExportEventHandler : IExternalEventHandler
         {
             var doc = DocUtil.Resolve(app, DocTitle);
             if (doc == null) { ReportStatus("Export failed: project not found."); return; }
-            var reader = new ScheduleReader(doc);
+            var reader = new ScheduleReader(doc) { UiApp = app };
             var tables = new List<ScheduleTable>();
             foreach (var id in ScheduleIds.Distinct())
                 if (doc.GetElement(new ElementId(id)) is ViewSchedule vs)
                 {
                     var t = reader.Read(vs);
+                    t.ClaudeAssistEnabled = ClaudeAssistEnabled;
                     tables.Add(t);
-                    if (t.Companion != null) tables.Add(t.Companion); // editable component params of combined fields
+                    if (t.Companion != null)
+                    {
+                        t.Companion.ClaudeAssistEnabled = ClaudeAssistEnabled;
+                        tables.Add(t.Companion); // editable component params of combined fields
+                    }
                 }
 
             if (tables.Count == 0)

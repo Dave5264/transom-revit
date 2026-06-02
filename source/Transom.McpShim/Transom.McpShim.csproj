@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>Transom.McpShim</AssemblyName>
+    <RootNamespace>Transom.McpShim</RootNamespace>
+
+    <!-- Self-contained, single-file publish: load-bearing.
+         The shim must run with NO admin rights and NO separate .NET runtime
+         install (it bundles its own runtime). See BUNDLED_MCP_PLAN.md constraint 3. -->
+    <PublishSingleFile>true</PublishSingleFile>
+    <SelfContained>true</SelfContained>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <!-- Dependencies: only System.Text.Json + System.Net.Http, both part of the
+       shared framework for net8.0. No external NuGet packages. -->
+
+</Project>

@@ -22,6 +22,7 @@ public sealed class ImportEventHandler : IExternalEventHandler
 
     public Action<ChangeSet> OnPreview = _ => { };
     public Action<string> OnApplied = _ => { };
+    public Action<string> OnAppliedLog = _ => { };   // full apply diagnostic (incl. Revit warnings) for Copy-log
     public Action<string> OnError = _ => { };
 
     public void Execute(UIApplication app)
@@ -57,7 +58,26 @@ public sealed class ImportEventHandler : IExternalEventHandler
             else
             {
                 if (PendingChangeSet == null) { OnError("No previewed changes to apply."); return; }
-                OnApplied(new Importer().Apply(doc, PendingChangeSet));
+
+                // Some edits raise modal DialogBoxes (not Failures) that would block the apply — e.g. renaming a
+                // Level prompts "rename associated views?". Auto-dismiss them (7 = No/Cancel, same as the export
+                // pass) so the apply completes; record which ones for the log.
+                var dialogs = new System.Collections.Generic.List<string>();
+                EventHandler<Autodesk.Revit.UI.Events.DialogBoxShowingEventArgs> dh = (_, e) =>
+                {
+                    try { dialogs.Add(e.DialogId); } catch { /* ignore */ }
+                    try { e.OverrideResult(7); } catch { /* ignore */ }
+                };
+                app.DialogBoxShowing += dh;
+                string status;
+                try { status = new Importer().Apply(doc, PendingChangeSet); }
+                finally { app.DialogBoxShowing -= dh; }
+
+                if (dialogs.Count > 0) status += $"  ·  {dialogs.Count} Revit prompt(s) auto-dismissed (see log)";
+                OnApplied(status);
+                OnAppliedLog(PendingChangeSet.DiagnosticLog + (dialogs.Count > 0
+                    ? "\n\n== Revit prompts auto-dismissed during apply ==\n  - " + string.Join("\n  - ", dialogs)
+                    : ""));
             }
         }
         catch (Exception ex)

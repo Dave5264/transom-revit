@@ -22,15 +22,7 @@ public sealed class ScheduleLoadEventHandler : IExternalEventHandler
         if (uiDoc != null && uiDoc.Document.Title == doc.Title && uiDoc.ActiveView is ViewSchedule avs)
             activeId = avs.Id.Value;
 
-        var schedules = new FilteredElementCollector(doc)
-            .OfClass(typeof(ViewSchedule))
-            .Cast<ViewSchedule>()
-            .Where(v => !v.IsTemplate && !v.IsTitleblockRevisionSchedule)
-            .OrderBy(v => v.Name)
-            .Select(v => (v.Id.Value, v.Name))
-            .ToList();
-
-        OnLoaded(activeId, schedules);
+        OnLoaded(activeId, DocUtil.UserSchedules(doc));
     }
 
     public string GetName() => "Transom Load Schedules";

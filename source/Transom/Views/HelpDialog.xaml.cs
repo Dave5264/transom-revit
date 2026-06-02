@@ -43,5 +43,8 @@ public partial class HelpDialog : Window
         Set("Accent", "#4C9DE0");
         Set("InfoBg", "#23323F");
         Set("AccentLine", "#3E6E9E");
+        Set("WarnBg", "#3A3320");
+        Set("WarnLine", "#6E5E2E");
+        Set("Warn", "#D9B65A");
     }
 }

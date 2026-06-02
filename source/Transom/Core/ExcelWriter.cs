@@ -40,7 +40,15 @@ public sealed class ExcelWriter
         }
 
         var meta = wb.CreateSheet("cowork_meta");
-        meta.CreateRow(0).CreateCell(0).SetCellValue(BuildMetaJson(pairs));
+        // Excel hard-caps a single cell at 32,767 chars; a large grouped schedule's metadata (per-row instanceIds
+        // + baseline) easily exceeds that. Split the JSON across consecutive rows (cell A) and reassemble on read.
+        var metaJson = BuildMetaJson(pairs);
+        const int metaChunk = 32000;
+        if (metaJson.Length == 0)
+            meta.CreateRow(0).CreateCell(0).SetCellValue("");
+        else
+            for (int i = 0, r = 0; i < metaJson.Length; i += metaChunk, r++)
+                meta.CreateRow(r).CreateCell(0).SetCellValue(metaJson.Substring(i, Math.Min(metaChunk, metaJson.Length - i)));
         wb.SetSheetHidden(wb.GetSheetIndex(meta), SheetState.VeryHidden);
 
         using var fs = File.Create(path);
@@ -52,33 +60,74 @@ public sealed class ExcelWriter
         var cache = new Dictionary<string, ICellStyle>();
         int anchorCol = table.ColCount;
 
+        // When the schedule's column headers are turned off, Revit's Body has no field-name row, so row 0 is real
+        // data. Synthesize a header row (field names + sentinel) and shift the body down one row — otherwise import
+        // can't match columns by header and the first data row's anchor would be clobbered by the sentinel.
+        // Also synthesize when the schedule is empty (no body rows at all): without it the sheet would carry no
+        // header and no sentinel, so re-importing the (empty) workbook would fail with "anchor column not found".
+        bool synth = !table.HasHeaderRow || table.RowCount == 0;
+        int rowOffset = synth ? 1 : 0;
+
+        if (synth)
+        {
+            var hr = sheet.CreateRow(0);
+            for (int c = 0; c < table.ColCount; c++)
+            {
+                var name = c < table.Columns.Count
+                    ? (string.IsNullOrEmpty(table.Columns[c].Header) ? table.Columns[c].FieldName : table.Columns[c].Header)
+                    : "";
+                var cell = hr.CreateCell(c);
+                cell.SetCellValue(name);
+                cell.CellStyle = GetStyle(wb, cache, new CellStyleInfo { Bold = true }, xls);
+            }
+            hr.CreateCell(anchorCol).SetCellValue(ScheduleReader.AnchorSentinel);
+        }
+
         for (int r = 0; r < table.RowCount; r++)
         {
-            var row = sheet.CreateRow(r);
+            var row = sheet.CreateRow(r + rowOffset);
             // Export hint colours (round-trippable schedules only): grey = never importable,
             // blue = group-member instance param (importable via Claude-assist only).
             var frozen = table.RoundTrippable && r < table.Rows.Count ? table.Rows[r].FrozenCols : null;
-            var groupCols = table.RoundTrippable && r < table.Rows.Count ? table.Rows[r].GroupCols : null;
+            var groupProjectCols = table.RoundTrippable && r < table.Rows.Count ? table.Rows[r].GroupProjectCols : null;
+            var groupBuiltinCols = table.RoundTrippable && r < table.Rows.Count ? table.Rows[r].GroupBuiltinCols : null;
+            // Group-header / blank separator rows carry no element anchor, so editing them does nothing on
+            // import. Grey the whole row so it reads as non-editable (matches the per-cell grey hint).
+            var rowKind = r < table.Rows.Count ? table.Rows[r].Kind : null;
+            var ghe = r < table.Rows.Count ? table.Rows[r].GroupHeaderEdit : null;
+            var bulk = table.RoundTrippable && r < table.Rows.Count ? table.Rows[r].BulkCols : null;
+            bool nonImportableRow = table.RoundTrippable && rowKind is "groupHeader" or "blank";
             for (int c = 0; c < table.ColCount; c++)
             {
                 var tc = table.Cells[r][c];
                 var cell = row.CreateCell(c);
                 cell.SetCellValue(tc.Text);
-                var style = frozen != null && frozen.Contains(c) ? GreyOf(tc.Style)
-                    : groupCols != null && groupCols.Contains(c) ? BlueOf(tc.Style)
+                // Colour precedence: grey (can't import) > blue (grouped project param, Transom applies via vary)
+                // > yellow/grey (grouped built-in param: yellow when Claude-assist on, distinct grey when off)
+                // > green (bulk: edits many elements) > normal. An editable group-header cell is a bulk write -> green.
+                bool isGroupEditCell = ghe != null && c == ghe.Col;
+                var style = isGroupEditCell ? GreenOf(tc.Style)
+                    : nonImportableRow ? GreyOf(tc.Style)
+                    : frozen != null && frozen.Contains(c) ? GreyOf(tc.Style)
+                    : groupProjectCols != null && groupProjectCols.Contains(c) ? BlueOf(tc.Style)
+                    : groupBuiltinCols != null && groupBuiltinCols.Contains(c)
+                        ? (table.ClaudeAssistEnabled ? YellowOf(tc.Style) : GreyBuiltinOf(tc.Style))
+                    : bulk != null && bulk.Contains(c) ? GreenOf(tc.Style)
                     : tc.Style;
                 cell.CellStyle = GetStyle(wb, cache, style, xls);
             }
 
             var anchorCell = row.CreateCell(anchorCol);
-            if (r == 0)
+            // The sentinel-headed anchor column: header carries the sentinel; data rows carry their UniqueId.
+            // With a synthesized header row the sentinel is already written above, so body row 0 keeps its anchor.
+            if (!synth && r == 0)
                 anchorCell.SetCellValue(ScheduleReader.AnchorSentinel);
             else if (r < table.Rows.Count && !string.IsNullOrEmpty(table.Rows[r].UniqueId))
                 anchorCell.SetCellValue(table.Rows[r].UniqueId);
         }
 
         foreach (var m in table.Merges)
-            sheet.AddMergedRegion(new CellRangeAddress(m.Top, m.Bottom, m.Left, m.Right));
+            sheet.AddMergedRegion(new CellRangeAddress(m.Top + rowOffset, m.Bottom + rowOffset, m.Left, m.Right));
 
         for (int c = 0; c < table.ColCount; c++)
         {
@@ -109,11 +158,40 @@ public sealed class ExcelWriter
         BorderTop = s.BorderTop, BorderBottom = s.BorderBottom, BorderLeft = s.BorderLeft, BorderRight = s.BorderRight,
     };
 
-    /// <summary>A blue-tinted copy of a cell style for cells writable only via Claude-assist (group members).</summary>
+    /// <summary>A blue-tinted-FILL copy of a cell style for grouped PROJECT-parameter cells. Transom applies these
+    /// itself (sets "vary by group instance" then writes). Keeps the original (black) text colour.</summary>
     private static CellStyleInfo BlueOf(CellStyleInfo s) => new()
     {
         FontName = s.FontName, TextSize = s.TextSize, Bold = s.Bold, Italic = s.Italic, Underline = s.Underline,
-        HAlign = s.HAlign, VAlign = s.VAlign, TextColor = 0x2E6CA8, BackColor = 0xDDEBF7,
+        HAlign = s.HAlign, VAlign = s.VAlign, TextColor = s.TextColor, BackColor = 0xDDEBF7,
+        BorderTop = s.BorderTop, BorderBottom = s.BorderBottom, BorderLeft = s.BorderLeft, BorderRight = s.BorderRight,
+    };
+
+    /// <summary>An amber/yellow-tinted-FILL copy for grouped BUILT-IN-parameter cells when Claude-assist is enabled —
+    /// these need the Claude definition-swap to apply. Keeps the original (black) text colour.</summary>
+    private static CellStyleInfo YellowOf(CellStyleInfo s) => new()
+    {
+        FontName = s.FontName, TextSize = s.TextSize, Bold = s.Bold, Italic = s.Italic, Underline = s.Underline,
+        HAlign = s.HAlign, VAlign = s.VAlign, TextColor = s.TextColor, BackColor = 0xFFF2CC,
+        BorderTop = s.BorderTop, BorderBottom = s.BorderBottom, BorderLeft = s.BorderLeft, BorderRight = s.BorderRight,
+    };
+
+    /// <summary>A muted tan-grey copy for grouped BUILT-IN-parameter cells when Claude-assist is OFF — the yellow
+    /// (Claude) path is unavailable, so they read as non-editable but stay visually distinct from the plain
+    /// can't-ever-edit grey (<see cref="GreyOf"/>).</summary>
+    private static CellStyleInfo GreyBuiltinOf(CellStyleInfo s) => new()
+    {
+        FontName = s.FontName, TextSize = s.TextSize, Bold = s.Bold, Italic = s.Italic, Underline = s.Underline,
+        HAlign = s.HAlign, VAlign = s.VAlign, TextColor = 0x9A9A9A, BackColor = 0xEDE8D8,
+        BorderTop = s.BorderTop, BorderBottom = s.BorderBottom, BorderLeft = s.BorderLeft, BorderRight = s.BorderRight,
+    };
+
+    /// <summary>A green-tinted-FILL copy of a cell style for BULK-write cells (type param / group header → many
+    /// elements). Keeps the original (black) text colour — only the background is tinted.</summary>
+    private static CellStyleInfo GreenOf(CellStyleInfo s) => new()
+    {
+        FontName = s.FontName, TextSize = s.TextSize, Bold = s.Bold, Italic = s.Italic, Underline = s.Underline,
+        HAlign = s.HAlign, VAlign = s.VAlign, TextColor = s.TextColor, BackColor = 0xDDF0DD,
         BorderTop = s.BorderTop, BorderBottom = s.BorderBottom, BorderLeft = s.BorderLeft, BorderRight = s.BorderRight,
     };
 
@@ -301,6 +379,12 @@ public sealed class ExcelWriter
                 {
                     excelRow = r.ExcelRow, uniqueId = r.UniqueId, kind = r.Kind, bindings = r.Bindings,
                     instanceIds = r.InstanceIds,
+                    groupHeaderEdit = r.GroupHeaderEdit == null ? null : new
+                    {
+                        col = r.GroupHeaderEdit.Col, parameterId = r.GroupHeaderEdit.ParameterId,
+                        fieldName = r.GroupHeaderEdit.FieldName, binding = r.GroupHeaderEdit.Binding,
+                        specTypeId = r.GroupHeaderEdit.SpecTypeId, instanceIds = r.GroupHeaderEdit.InstanceIds,
+                    },
                 }).ToArray(),
                 baseline = BuildBaseline(p.t),
             }).ToArray(),
@@ -316,6 +400,15 @@ public sealed class ExcelWriter
         for (int i = 0; i < t.Rows.Count && i < t.RowCount; i++)
         {
             var rm = t.Rows[i];
+            // Editable group header: baseline is just its value cell, keyed by the synthetic anchor.
+            if (rm.GroupHeaderEdit is { } g && !string.IsNullOrEmpty(rm.UniqueId))
+            {
+                baseline[rm.UniqueId!] = new Dictionary<string, string>
+                {
+                    [g.Col.ToString()] = g.Col < t.ColCount ? t.Cells[i][g.Col].Text : "",
+                };
+                continue;
+            }
             if ((rm.Kind != "element" && rm.Kind != "type" && rm.Kind != "group") || string.IsNullOrEmpty(rm.UniqueId)) continue;
             var map = new Dictionary<string, string>();
             foreach (var col in writableCols)

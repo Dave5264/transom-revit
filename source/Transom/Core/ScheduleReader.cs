@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using System.Linq;
 using Autodesk.Revit.DB;
+using Autodesk.Revit.UI;
 
 namespace Transom.Core;
 
@@ -15,7 +16,22 @@ public sealed class ScheduleReader
 
     private readonly Document _doc;
 
+    /// <summary>Set by the export handler so the rolled-back anchor pass can auto-dismiss side-effect dialogs
+    /// (e.g. "rename corresponding views?" when stamping a Level name) and swallow group-edit warnings.</summary>
+    public UIApplication? UiApp;
+
     public ScheduleReader(Document doc) => _doc = doc;
+
+    /// <summary>Swallows warnings raised during the rolled-back anchor stamp (e.g. modifying group members).</summary>
+    private sealed class SwallowWarnings : IFailuresPreprocessor
+    {
+        public FailureProcessingResult PreprocessFailures(FailuresAccessor a)
+        {
+            foreach (var f in a.GetFailureMessages())
+                if (f.GetSeverity() == FailureSeverity.Warning) a.DeleteWarning(f);
+            return FailureProcessingResult.Continue;
+        }
+    }
 
     public ScheduleTable Read(ViewSchedule vs)
     {
@@ -31,6 +47,9 @@ public sealed class ScheduleReader
             // (one row = one type). Material takeoffs are computed quantities — never round-trippable.
             // The anchor pass downgrades this to false if no row can actually be anchored.
             RoundTrippable = !def.IsMaterialTakeoff,
+            // When the schedule's column headers are turned off, Body row 0 is data (no field-name row),
+            // so the writer must synthesize a header row for import column-matching to work.
+            HasHeaderRow = def.ShowHeaders,
         };
 
         var sec = vs.GetTableData().GetSectionData(SectionType.Body);
@@ -64,8 +83,68 @@ public sealed class ScheduleReader
             table.ColWidthsPx[c] = SafeWidthPx(sec, c);
 
         ReadAnchorsAndClassify(vs, table);
+        if (table.RoundTrippable) DetectGroupHeaderEdits(vs, table);
         if (table.RoundTrippable) table.Companion = BuildCombinedCompanion(vs, table);
         return table;
+    }
+
+    /// <summary>
+    ///     Makes a group-HEADER row editable: changing the value in the header bulk-writes the grouping
+    ///     parameter to every element under it (e.g. recategorize all sheets in "8-ELECTRICAL" at once).
+    ///     Scoped to itemized schedules with a single instance-bound group field that has a header — the
+    ///     common case, including hidden group fields shown only in the header. Multi-level / type-bound
+    ///     group headers stay non-editable (greyed) for now.
+    /// </summary>
+    private void DetectGroupHeaderEdits(ViewSchedule vs, ScheduleTable table)
+    {
+        var def = vs.Definition;
+        if (!def.IsItemized) return;
+
+        ScheduleSortGroupField? hdr = null; int headerCount = 0;
+        foreach (var sg in def.GetSortGroupFields())
+            if (sg.ShowHeader) { hdr = sg; headerCount++; }
+        if (hdr == null || headerCount != 1) return;   // single header level only
+
+        var f = def.GetField(hdr.FieldId);
+        if (f == null) return;
+        int pid = (int)f.ParameterId.Value;
+        if (f.FieldType != ScheduleFieldType.Instance) return;  // instance-bound group fields only
+
+        var els = new FilteredElementCollector(_doc, vs.Id).WhereElementIsNotElementType().ToElements();
+        var sample = els.FirstOrDefault();
+        if (sample == null) return;
+        if (ResolveBinding(sample, pid, "instance") != "instance") return;
+        var sp = GetParamOn(sample, pid);
+        if (sp == null || sp.IsReadOnly) return;
+
+        string? spec = null;
+        try { var s = f.GetSpecTypeId(); if (s != null && !s.Empty() && UnitUtils.IsMeasurableSpec(s)) spec = s.TypeId; }
+        catch { /* string/int */ }
+        if (!SupportedStorage(sp, spec)) return;
+
+        var fieldName = f.GetName();
+        GroupHeaderEdit? cur = null; int idx = 0;
+        for (int r = 0; r < table.Rows.Count; r++)
+        {
+            var rm = table.Rows[r];
+            if (rm.Kind == "groupHeader")
+            {
+                int valueCol = -1;
+                for (int c = 0; c < table.ColCount; c++)
+                    if (!string.IsNullOrEmpty(table.Cells[r][c].Text)) { valueCol = c; break; }
+                if (valueCol < 0) { cur = null; continue; }
+                cur = new GroupHeaderEdit { Col = valueCol, ParameterId = pid, FieldName = fieldName, Binding = "instance", SpecTypeId = spec };
+                rm.GroupHeaderEdit = cur;
+                rm.UniqueId = "grphdr::" + idx++;   // synthetic anchor so the header round-trips
+            }
+            else if (rm.Kind == "element" && rm.UniqueId != null && cur != null)
+                cur.InstanceIds.Add(rm.UniqueId);
+            // blank / columnHeader rows: leave the current group intact
+        }
+
+        // A header with no members can't write anything — revert it to a plain (greyed) header.
+        foreach (var rm in table.Rows)
+            if (rm.GroupHeaderEdit is { InstanceIds.Count: 0 }) { rm.GroupHeaderEdit = null; rm.UniqueId = null; }
     }
 
     // --- column metadata ---------------------------------------------------
@@ -250,21 +329,42 @@ public sealed class ScheduleReader
                 {
                     var b = new Dictionary<int, string>();
                     var frozen = new HashSet<int>();    // grey: never importable
-                    var groupCols = new HashSet<int>(); // blue: group-member instance param, Claude-assist only
+                    var groupProjectCols = new HashSet<int>(); // blue: grouped project param -> Transom sets vary + writes
+                    var groupBuiltinCols = new HashSet<int>(); // yellow/grey: grouped built-in param -> Claude dance
+                    var bulkCols = new HashSet<int>();  // green: type param -> edits every instance of the type
+                    // A grouped (non-itemized) row bulk-writes instance params to all its members; if any member
+                    // lives in a Revit model group, those instance writes need Claude-assist too (blue), just like
+                    // an itemized group member. (inGroup only covers the itemized case.)
+                    bool anyMemberGrouped = false;
+                    if (grouped && anchors[r] != null && typeToInstances.TryGetValue(anchors[r]!, out var memberIds))
+                        foreach (var mid in memberIds)
+                        {
+                            var inst = _doc.GetElement(mid);
+                            if (inst != null && inst.GroupId != null && inst.GroupId != ElementId.InvalidElementId)
+                            { anyMemberGrouped = true; break; }
+                        }
                     foreach (var col in table.Columns)
                     {
                         if (!col.Writable) { frozen.Add(col.Col); continue; } // calculated/combined -> can't edit
                         var bind = ResolveBinding(host, col.ParameterId, col.Binding);
                         b[col.Col] = bind;
                         if (!col.ImportEditable) { frozen.Add(col.Col); continue; }      // read-only / family-type
-                        if (inGroup && bind == "instance") groupCols.Add(col.Col);       // editable via Claude only
+                        if ((inGroup || anyMemberGrouped) && bind == "instance")
+                        {
+                            // project/shared params (positive id) can vary per instance; built-ins can't -> Claude dance
+                            if (col.ParameterId >= 0) groupProjectCols.Add(col.Col);
+                            else groupBuiltinCols.Add(col.Col);
+                        }
+                        else if (bind == "type") bulkCols.Add(col.Col);                  // bulk: writes to the type
                     }
                     meta.Bindings = b;
                     if (frozen.Count > 0) meta.FrozenCols = frozen;
-                    if (groupCols.Count > 0) meta.GroupCols = groupCols;
+                    if (groupProjectCols.Count > 0) meta.GroupProjectCols = groupProjectCols;
+                    if (groupBuiltinCols.Count > 0) meta.GroupBuiltinCols = groupBuiltinCols;
+                    if (bulkCols.Count > 0) meta.BulkCols = bulkCols;
                 }
             }
-            else if (r == 0) meta.Kind = "columnHeader";
+            else if (r == 0 && table.HasHeaderRow) meta.Kind = "columnHeader";
             else meta.Kind = RowAllEmpty(table, r) ? "blank" : "groupHeader";
             table.Rows.Add(meta);
         }
@@ -311,6 +411,14 @@ public sealed class ScheduleReader
         if (sample == null) return null;
         var sampleType = sample.GetTypeId() != ElementId.InvalidElementId ? _doc.GetElement(sample.GetTypeId()) : null;
 
+        // Keep only components that actually resolve to an instance/type param on the element (or its type).
+        // Otherwise we'd emit dead "param <id>" columns (a combined field can reference params that don't live
+        // directly on the scheduled element). If none resolve, there's no useful companion at all.
+        compIds = compIds.Where(pid =>
+            (GetParamOn(sample, pid) != null || (sampleType != null && GetParamOn(sampleType, pid) != null))
+            && ResolveBinding(sample, pid, "") is "instance" or "type").ToList();
+        if (compIds.Count == 0) return null;
+
         var comp = new ScheduleTable
         {
             ScheduleName = Truncate(main.ScheduleName, 22) + " — parts",
@@ -319,6 +427,7 @@ public sealed class ScheduleReader
             SourceModelGuid = main.SourceModelGuid,
             SourceModelTitle = main.SourceModelTitle,
             RoundTrippable = main.RoundTrippable,
+            HasHeaderRow = main.HasHeaderRow,
             RowCount = main.RowCount,
             ColCount = compIds.Count,
         };
@@ -374,14 +483,21 @@ public sealed class ScheduleReader
                 {
                     var b = new Dictionary<int, string>();
                     var frozen = new HashSet<int>();
-                    var groupCols = new HashSet<int>();
+                    var groupProjectCols = new HashSet<int>();
+                    var groupBuiltinCols = new HashSet<int>();
+                    var bulkCols = new HashSet<int>();
                     foreach (var col in comp.Columns)
                     {
                         var bind = ResolveBinding(bindHost, col.ParameterId, col.Binding);
                         b[col.Col] = bind;
                         if (!col.Writable) frozen.Add(col.Col);
                         else if (!col.ImportEditable) frozen.Add(col.Col);
-                        else if (inGroup && bind == "instance") groupCols.Add(col.Col);
+                        else if (inGroup && bind == "instance")
+                        {
+                            if (col.ParameterId >= 0) groupProjectCols.Add(col.Col);
+                            else groupBuiltinCols.Add(col.Col);
+                        }
+                        else if (bind == "type") bulkCols.Add(col.Col);
 
                         var valueHost = bind == "type"
                             ? (typeEl ?? (bindHost.GetTypeId() != ElementId.InvalidElementId ? _doc.GetElement(bindHost.GetTypeId()) : null))
@@ -394,7 +510,9 @@ public sealed class ScheduleReader
                     }
                     crm.Bindings = b;
                     if (frozen.Count > 0) crm.FrozenCols = frozen;
-                    if (groupCols.Count > 0) crm.GroupCols = groupCols;
+                    if (groupProjectCols.Count > 0) crm.GroupProjectCols = groupProjectCols;
+                    if (groupBuiltinCols.Count > 0) crm.GroupBuiltinCols = groupBuiltinCols;
+                    if (bulkCols.Count > 0) crm.BulkCols = bulkCols;
                 }
             }
             comp.Rows.Add(crm);
@@ -459,6 +577,20 @@ public sealed class ScheduleReader
 
         var tx = new Transaction(_doc, "Transom: read row anchors (rolled back)");
         tx.Start();
+
+        // The stamp can trigger Revit side-effect prompts (e.g. stamping a Level name -> "rename corresponding
+        // views?") and group-edit warnings. Suppress both: auto-answer any dialog with No/Cancel, and swallow
+        // warnings — nothing here is committed (we RollBack), so this is purely to keep export non-interactive.
+        var fho = tx.GetFailureHandlingOptions();
+        fho.SetFailuresPreprocessor(new SwallowWarnings());
+        fho.SetClearAfterRollback(true);
+        tx.SetFailureHandlingOptions(fho);
+        System.EventHandler<Autodesk.Revit.UI.Events.DialogBoxShowingEventArgs>? dlg = null;
+        if (UiApp != null)
+        {
+            dlg = (_, e) => { try { e.OverrideResult(7); } catch { /* 7 = No/Cancel */ } };
+            UiApp.DialogBoxShowing += dlg;
+        }
         try
         {
             foreach (var h in hosts)
@@ -489,7 +621,11 @@ public sealed class ScheduleReader
                 }
             }
         }
-        finally { tx.RollBack(); }
+        finally
+        {
+            tx.RollBack();
+            if (UiApp != null && dlg != null) UiApp.DialogBoxShowing -= dlg;
+        }
     }
 
     /// <summary>

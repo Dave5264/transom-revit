@@ -10,8 +10,8 @@
     ResizeMode="CanResize"
     WindowStartupLocation="CenterOwner"
     Title="Transom"
-    Height="600"
-    Width="460"
+    Height="800"
+    Width="620"
     MinHeight="420"
     MinWidth="380"
     Background="{DynamicResource Bg}"
@@ -191,7 +191,7 @@
                         <TextBlock DockPanel.Dock="Top" Text="Check schedules to export — each becomes a sheet (CSV writes one file per schedule)."
                                    Foreground="{DynamicResource Muted}" TextWrapping="Wrap" Margin="0,6,0,6" />
                         <TextBlock DockPanel.Dock="Top" TextWrapping="Wrap" Foreground="{DynamicResource Hint}" FontSize="11" Margin="0,0,0,12">
-                            <Run Text="In the exported file: " /><Run Text="grey" FontWeight="SemiBold" /><Run Text=" cells can't be imported (read-only or driven by the family/type); " /><Run Text="blue" FontWeight="SemiBold" Foreground="{DynamicResource Accent}" /><Run Text=" cells are on grouped elements — editable only via Claude-assist on import. Other cells edit normally." />
+                            <Run Text="In the exported file: " /><Run Text="grey" FontWeight="SemiBold" /><Run Text=" cells can't be imported (read-only or driven by the family/type); " /><Run Text="green" FontWeight="SemiBold" Foreground="#1E7A34" /><Run Text=" cells are bulk edits (a type parameter or group header — changing one updates every element it covers); " /><Run Text="blue" FontWeight="SemiBold" Foreground="{DynamicResource Accent}" /><Run Text=" cells are grouped elements' project parameters — Transom applies these by enabling “vary by group instance”; " /><Run Text="yellow" FontWeight="SemiBold" Foreground="#B8860B" /><Run Text=" cells are grouped elements' built-in parameters, applied via Claude-assist (they appear only when Claude-assist is enabled — otherwise they show as a muted grey). Other cells edit one element." />
                         </TextBlock>
 
                         <!-- Active schedule: pinned, always exported -->
@@ -355,6 +355,19 @@
                                         </ControlTemplate>
                                     </Button.Template>
                                 </Button>
+                                <Button DockPanel.Dock="Right" Command="{Binding CopyDiagnosticLogCommand}" Margin="8,0,0,0"
+                                        ToolTip="Copy the full import diagnostic log to the clipboard">
+                                    <Button.Style>
+                                        <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+                                            <Setter Property="Content" Value="Copy log" />
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding CopiedLog}" Value="True">
+                                                    <Setter Property="Content" Value="Copied!" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Button.Style>
+                                </Button>
                                 <Button DockPanel.Dock="Right" Content="Open report" Command="{Binding OpenReportCommand}" Margin="8,0,0,0">
                                     <Button.Style>
                                         <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
@@ -456,6 +469,24 @@
                             </TextBlock>
                         </Border>
 
+                        <!-- Which schedules this import will change (shown on Preview) -->
+                        <Border DockPanel.Dock="Top" Margin="0,0,0,8" Padding="9,7" CornerRadius="6"
+                                Background="{DynamicResource InfoBg}" BorderBrush="{DynamicResource AccentLine}" BorderThickness="1"
+                                Visibility="{Binding HasAffected, Converter={StaticResource BoolToVis}}">
+                            <DockPanel>
+                                <TextBlock DockPanel.Dock="Top" Text="Schedules this import will change:" FontWeight="SemiBold"
+                                           FontSize="11.5" Foreground="{DynamicResource Accent}" Margin="0,0,0,4" />
+                                <ItemsControl ItemsSource="{Binding AffectedSchedules}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <TextBlock Foreground="{DynamicResource Text}" FontSize="11.5" TextWrapping="Wrap"
+                                                       Text="{Binding Display}" />
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </DockPanel>
+                        </Border>
+
                         <DataGrid ItemsSource="{Binding Changes}" AutoGenerateColumns="False" CanUserAddRows="False"
                                   HeadersVisibility="Column" GridLinesVisibility="Horizontal" BorderBrush="{DynamicResource Line}"
                                   BorderThickness="1" FontSize="11.5" RowHeight="24" ColumnHeaderHeight="26"
@@ -510,17 +541,27 @@
                         </DockPanel>
 
                         <TextBlock Text="Claude exchange folder" Foreground="{DynamicResource Muted}" FontSize="13" Margin="0,0,0,4" />
-                        <DockPanel Margin="0,0,0,16">
+                        <DockPanel Margin="0,0,0,8">
                             <Button DockPanel.Dock="Right" Content="Browse…" Command="{Binding ChooseExchangeFolderCommand}" Margin="8,0,0,0" />
                             <Border BorderBrush="{DynamicResource Line2}" BorderThickness="1" CornerRadius="8" Padding="8,0" Height="32">
                                 <TextBlock Text="{Binding ExchangeFolder}" Foreground="{DynamicResource Muted}" FontSize="12"
                                            VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
                             </Border>
                         </DockPanel>
+                        <Button Content="Write Claude instructions to exchange folder" Command="{Binding WriteClaudeGuideCommand}"
+                                Height="30" Padding="12,0" Margin="0,0,0,16" HorizontalAlignment="Left"
+                                ToolTip="Drops a step-by-step .md into the exchange folder explaining how to apply the staged group-edits file with Claude. Enabled once a folder is selected." />
 
                         <Border Background="{DynamicResource InfoBg}" BorderBrush="{DynamicResource AccentLine}" BorderThickness="1" CornerRadius="6" Padding="10">
                             <TextBlock Text="{Binding BridgeStatus}" Foreground="{DynamicResource Accent}" FontSize="12" TextWrapping="Wrap" />
                         </Border>
+
+                        <Separator Margin="0,18,0,12" Background="{DynamicResource Line}" />
+                        <TextBlock Text="Preferences" FontSize="14" FontWeight="Medium" Foreground="{DynamicResource Text}" Margin="0,0,0,8" />
+                        <CheckBox Content="Show me encouraging messages now and then 🎉"
+                                  IsChecked="{Binding EncouragingMessages}" Foreground="{DynamicResource Muted}" FontSize="12.5" />
+                        <TextBlock Text="A little pick-me-up that occasionally appears after you export or import."
+                                   Foreground="{DynamicResource Hint}" FontSize="11" TextWrapping="Wrap" Margin="24,2,0,0" />
                     </StackPanel>
                 </Border>
             </TabItem>

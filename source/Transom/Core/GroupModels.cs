@@ -11,6 +11,14 @@ public enum GroupDecision
     ClaudeHandle,  // hand the grouped edits to Claude (Assist) to open the groups and apply
 }
 
+/// <summary>How a group-member edit can be written durably (see project_revit_group_member_edits).</summary>
+public enum GroupMode
+{
+    None,         // not in a group — write directly
+    ProjectVary,  // project/shared param: Transom sets "vary by group instance" then writes per-instance (in-process)
+    BuiltinDance, // built-in param: can't vary — needs the uniform definition-swap "dance" via Claude-assist
+}
+
 /// <summary>Context shown to the user when an import touches group members.</summary>
 public sealed class GroupPrompt
 {
