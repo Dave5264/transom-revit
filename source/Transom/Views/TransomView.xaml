@@ -24,7 +24,7 @@
         <SolidColorBrush x:Key="Surface" Color="#FFFFFF" />
         <SolidColorBrush x:Key="Text" Color="#26251F" />
         <SolidColorBrush x:Key="Muted" Color="#6B6A62" />
-        <SolidColorBrush x:Key="Hint" Color="#9A988E" />
+        <SolidColorBrush x:Key="Hint" Color="#6F6E66" />
         <SolidColorBrush x:Key="Line" Color="#E3E1D9" />
         <SolidColorBrush x:Key="Line2" Color="#CFCCC2" />
         <SolidColorBrush x:Key="Accent" Color="#185FA5" />
@@ -36,6 +36,9 @@
         <SolidColorBrush x:Key="WarnBg" Color="#FBF3E4" />
         <SolidColorBrush x:Key="WarnLine" Color="#F0D6A8" />
         <SolidColorBrush x:Key="Warn" Color="#854F0B" />
+        <!-- Legend term colours — theme-aware so they stay legible in Revit's dark theme (ApplyTheme brightens them) -->
+        <SolidColorBrush x:Key="LegendGreen" Color="#1E7A34" />
+        <SolidColorBrush x:Key="LegendYellow" Color="#B8860B" />
 
         <!-- Buttons: rounded; primary buttons set Background=#185FA5/Foreground=White inline -->
         <Style TargetType="Button">
@@ -179,7 +182,7 @@
 
         <!-- Footer -->
         <Border DockPanel.Dock="Bottom" Background="{DynamicResource Surface}" BorderBrush="{DynamicResource Line}" BorderThickness="0,1,0,0" Padding="14,12">
-            <Button Content="Close" Width="84" Height="34" HorizontalAlignment="Right" Click="Close_Click" />
+            <Button Content="Close" Width="84" Height="32" HorizontalAlignment="Right" Click="Close_Click" />
         </Border>
 
         <!-- Tabs -->
@@ -187,12 +190,43 @@
             <TabItem Header="Export">
                 <Border Background="{DynamicResource Surface}" BorderBrush="{DynamicResource Line}" BorderThickness="1" CornerRadius="6" Padding="16" Margin="0,10,0,0">
                     <DockPanel>
-                        <TextBlock DockPanel.Dock="Top" Text="Export schedules → spreadsheet" FontSize="14" FontWeight="Medium" Foreground="{DynamicResource Text}" />
+                        <TextBlock DockPanel.Dock="Top" Text="Export schedules → spreadsheet" FontSize="14" FontWeight="SemiBold" Foreground="{DynamicResource Text}" />
                         <TextBlock DockPanel.Dock="Top" Text="Check schedules to export — each becomes a sheet (CSV writes one file per schedule)."
                                    Foreground="{DynamicResource Muted}" TextWrapping="Wrap" Margin="0,6,0,6" />
-                        <TextBlock DockPanel.Dock="Top" TextWrapping="Wrap" Foreground="{DynamicResource Hint}" FontSize="11" Margin="0,0,0,12">
-                            <Run Text="In the exported file: " /><Run Text="grey" FontWeight="SemiBold" /><Run Text=" cells can't be imported (read-only or driven by the family/type); " /><Run Text="green" FontWeight="SemiBold" Foreground="#1E7A34" /><Run Text=" cells are bulk edits (a type parameter or group header — changing one updates every element it covers); " /><Run Text="blue" FontWeight="SemiBold" Foreground="{DynamicResource Accent}" /><Run Text=" cells are grouped elements' project parameters — Transom applies these by enabling “vary by group instance”; " /><Run Text="yellow" FontWeight="SemiBold" Foreground="#B8860B" /><Run Text=" cells are grouped elements' built-in parameters, applied via Claude-assist (they appear only when Claude-assist is enabled — otherwise they show as a muted grey). Other cells edit one element." />
-                        </TextBlock>
+                        <!-- Export edit-hint legend: one aligned swatch row per colour (term colours are theme-aware) -->
+                        <StackPanel DockPanel.Dock="Top" Margin="0,0,0,12">
+                            <TextBlock Text="In the exported file:" Foreground="{DynamicResource Hint}" FontSize="11.5" Margin="0,0,0,4" />
+                            <Grid Margin="0,1">
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="16" /><ColumnDefinition Width="56" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                                <Border Grid.Column="0" Width="12" Height="12" CornerRadius="2" Background="#E6E6E6" BorderBrush="#CFCDC4" BorderThickness="1" VerticalAlignment="Top" Margin="0,1,0,0" />
+                                <TextBlock Grid.Column="1" Text="grey" FontWeight="SemiBold" Foreground="{DynamicResource Muted}" FontSize="11.5" />
+                                <TextBlock Grid.Column="2" Text="can't be imported — read-only or driven by the family/type" Foreground="{DynamicResource Muted}" FontSize="11.5" TextWrapping="Wrap" />
+                            </Grid>
+                            <Grid Margin="0,1">
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="16" /><ColumnDefinition Width="56" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                                <Border Grid.Column="0" Width="12" Height="12" CornerRadius="2" Background="#DDF0DD" BorderBrush="#CFCDC4" BorderThickness="1" VerticalAlignment="Top" Margin="0,1,0,0" />
+                                <TextBlock Grid.Column="1" Text="green" FontWeight="SemiBold" Foreground="{DynamicResource LegendGreen}" FontSize="11.5" />
+                                <TextBlock Grid.Column="2" Text="bulk edit — a type parameter or group header; changing one updates every element it covers" Foreground="{DynamicResource Muted}" FontSize="11.5" TextWrapping="Wrap" />
+                            </Grid>
+                            <Grid Margin="0,1">
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="16" /><ColumnDefinition Width="56" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                                <Border Grid.Column="0" Width="12" Height="12" CornerRadius="2" Background="#DDEBF7" BorderBrush="#CFCDC4" BorderThickness="1" VerticalAlignment="Top" Margin="0,1,0,0" />
+                                <TextBlock Grid.Column="1" Text="blue" FontWeight="SemiBold" Foreground="{DynamicResource Accent}" FontSize="11.5" />
+                                <TextBlock Grid.Column="2" Text="grouped element's project parameter — Transom applies it by enabling “vary by group instance”" Foreground="{DynamicResource Muted}" FontSize="11.5" TextWrapping="Wrap" />
+                            </Grid>
+                            <Grid Margin="0,1">
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="16" /><ColumnDefinition Width="56" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                                <Border Grid.Column="0" Width="12" Height="12" CornerRadius="2" Background="#FFF2CC" BorderBrush="#CFCDC4" BorderThickness="1" VerticalAlignment="Top" Margin="0,1,0,0" />
+                                <TextBlock Grid.Column="1" Text="yellow" FontWeight="SemiBold" Foreground="{DynamicResource LegendYellow}" FontSize="11.5" />
+                                <TextBlock Grid.Column="2" Text="grouped element's built-in parameter — applied in Assist mode (shown only when Assist mode is on; otherwise a muted tan-grey)" Foreground="{DynamicResource Muted}" FontSize="11.5" TextWrapping="Wrap" />
+                            </Grid>
+                            <Grid Margin="0,1">
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="16" /><ColumnDefinition Width="56" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                                <Border Grid.Column="0" Width="12" Height="12" CornerRadius="2" Background="#FFFFFF" BorderBrush="#CFCDC4" BorderThickness="1" VerticalAlignment="Top" Margin="0,1,0,0" />
+                                <TextBlock Grid.Column="1" Text="normal" FontWeight="SemiBold" Foreground="{DynamicResource Muted}" FontSize="11.5" />
+                                <TextBlock Grid.Column="2" Text="edits one element" Foreground="{DynamicResource Muted}" FontSize="11.5" TextWrapping="Wrap" />
+                            </Grid>
+                        </StackPanel>
 
                         <!-- Active schedule: pinned, always exported -->
                         <Border DockPanel.Dock="Top" Visibility="{Binding HasActive, Converter={StaticResource BoolToVis}}"
@@ -215,8 +249,25 @@
                             <TextBlock Text="All schedules" Foreground="{DynamicResource Muted}" FontSize="13" VerticalAlignment="Center" />
                         </DockPanel>
 
-                        <TextBox DockPanel.Dock="Top" Text="{Binding ScheduleFilter, UpdateSourceTrigger=PropertyChanged}" Height="30"
-                                 VerticalContentAlignment="Center" Padding="6,0" Margin="0,0,0,8" />
+                        <Grid DockPanel.Dock="Top" Margin="0,0,0,8">
+                            <TextBox x:Name="FilterBox" Text="{Binding ScheduleFilter, UpdateSourceTrigger=PropertyChanged}" Height="30"
+                                     VerticalContentAlignment="Center" Padding="6,0"
+                                     ToolTip="Type to filter the schedule list by name" />
+                            <!-- placeholder: shown only while the box is empty -->
+                            <TextBlock Text="Filter schedules…" Foreground="{DynamicResource Hint}" FontSize="12"
+                                       Margin="9,0,0,0" VerticalAlignment="Center" IsHitTestVisible="False">
+                                <TextBlock.Style>
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding Text, ElementName=FilterBox}" Value="">
+                                                <Setter Property="Visibility" Value="Visible" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBlock.Style>
+                            </TextBlock>
+                        </Grid>
 
                         <!-- status pinned to the bottom (always visible) -->
                         <Border DockPanel.Dock="Bottom" Background="{DynamicResource InfoBg}" BorderBrush="{DynamicResource AccentLine}" BorderThickness="1" CornerRadius="6" Padding="10" Margin="0,10,0,0">
@@ -261,12 +312,14 @@
                         </Border>
 
                         <DockPanel DockPanel.Dock="Bottom" Margin="0,8,0,0">
-                            <Button DockPanel.Dock="Right" Content="Export…" Height="34" Padding="18,0"
-                                    Background="{DynamicResource Accent}" Foreground="White" BorderThickness="0" Command="{Binding ExportCommand}" />
-                            <Button DockPanel.Dock="Right" Content="Finalize" Height="34" Padding="14,0" Margin="0,0,8,0"
-                                    Background="{DynamicResource Ok}" Foreground="White" BorderThickness="0"
+                            <Button DockPanel.Dock="Right" Content="Export…" Height="32" Padding="18,0"
+                                    Background="{DynamicResource Accent}" Foreground="White" BorderThickness="0" Command="{Binding ExportCommand}"
+                                    ToolTip="Save the ticked schedules to a spreadsheet" />
+                            <Button DockPanel.Dock="Right" Content="Finalize" Height="32" Padding="14,0" Margin="0,0,8,0"
+                                    Background="Transparent" Foreground="{DynamicResource Ok}" BorderBrush="{DynamicResource Ok}" BorderThickness="1"
                                     Visibility="{Binding CanFinalize, Converter={StaticResource BoolToVis}}"
-                                    Command="{Binding FinalizeExportCommand}" />
+                                    Command="{Binding FinalizeExportCommand}"
+                                    ToolTip="Copy the staged / QA'd workbook to its final destination" />
                             <TextBlock Text="{Binding SelectionInfo}" Foreground="{DynamicResource Hint}" FontSize="11" VerticalAlignment="Center" />
                         </DockPanel>
 
@@ -290,7 +343,7 @@
             <TabItem Header="Import">
                 <Border Background="{DynamicResource Surface}" BorderBrush="{DynamicResource Line}" BorderThickness="1" CornerRadius="6" Padding="16" Margin="0,10,0,0">
                     <DockPanel>
-                        <TextBlock DockPanel.Dock="Top" Text="Import spreadsheet → Revit" FontSize="14" FontWeight="Medium" Foreground="{DynamicResource Text}" />
+                        <TextBlock DockPanel.Dock="Top" Text="Import spreadsheet → Revit" FontSize="14" FontWeight="SemiBold" Foreground="{DynamicResource Text}" />
                         <TextBlock DockPanel.Dock="Top" Text="Pick a Transom workbook, preview the changes, then write edits back into the model."
                                    Foreground="{DynamicResource Muted}" TextWrapping="Wrap" Margin="0,6,0,12" />
 
@@ -309,9 +362,11 @@
 
                         <Grid DockPanel.Dock="Top" Margin="0,0,0,10">
                             <StackPanel Orientation="Horizontal" HorizontalAlignment="Left">
-                                <Button Content="Preview changes" Height="32" Padding="12,0" Command="{Binding PreviewCommand}" />
+                                <Button Content="Preview changes" Height="32" Padding="12,0" Command="{Binding PreviewCommand}"
+                                        ToolTip="Compare the workbook to the live model (read-only) and list what would change" />
                                 <Button Content="Apply selected" Height="32" Padding="16,0" Margin="8,0,0,0"
-                                        Background="{DynamicResource Accent}" Foreground="White" BorderThickness="0" Command="{Binding ApplyCommand}" />
+                                        Background="{DynamicResource Accent}" Foreground="White" BorderThickness="0" Command="{Binding ApplyCommand}"
+                                        ToolTip="Write the ticked changes into the model" />
                             </StackPanel>
                             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
                                 <Button Content="All" Height="32" Padding="12,0" Command="{Binding SelectAllCommand}" />
@@ -524,7 +579,7 @@
                         <DockPanel>
                             <Button DockPanel.Dock="Right" Content="How Claude works" Height="28" Padding="12,0"
                                     FontSize="12" VerticalAlignment="Top" Click="ClaudeHelp_Click" />
-                            <TextBlock Text="Claude QA settings" FontSize="14" FontWeight="Medium" Foreground="{DynamicResource Text}" VerticalAlignment="Center" />
+                            <TextBlock Text="Claude QA settings" FontSize="14" FontWeight="SemiBold" Foreground="{DynamicResource Text}" VerticalAlignment="Center" />
                         </DockPanel>
                         <TextBlock Text="Transom stages the workbook + a run-log to the exchange folder; you then ask Claude to review it against the live model over MCP."
                                    Foreground="{DynamicResource Muted}" TextWrapping="Wrap" Margin="0,6,0,16" />
@@ -536,7 +591,8 @@
 
                         <TextBlock Text="Write bridge port (for Assist)" Foreground="{DynamicResource Muted}" FontSize="13" Margin="0,0,0,4" />
                         <DockPanel Margin="0,0,0,14">
-                            <Button DockPanel.Dock="Right" Content="Refresh" Command="{Binding RefreshBridgeCommand}" Margin="8,0,0,0" />
+                            <Button DockPanel.Dock="Right" Content="Refresh" Command="{Binding RefreshBridgeCommand}" Margin="8,0,0,0"
+                                    ToolTip="Re-check the Claude write-bridge connection" />
                             <TextBox Text="{Binding BridgePort, UpdateSourceTrigger=PropertyChanged}" Width="110" HorizontalAlignment="Left" />
                         </DockPanel>
 
@@ -549,7 +605,7 @@
                             </Border>
                         </DockPanel>
                         <Button Content="Write Claude instructions to exchange folder" Command="{Binding WriteClaudeGuideCommand}"
-                                Height="30" Padding="12,0" Margin="0,0,0,16" HorizontalAlignment="Left"
+                                Height="32" Padding="12,0" Margin="0,0,0,16" HorizontalAlignment="Left"
                                 ToolTip="Drops a step-by-step .md into the exchange folder explaining how to apply the staged group-edits file with Claude. Enabled once a folder is selected." />
 
                         <Border Background="{DynamicResource InfoBg}" BorderBrush="{DynamicResource AccentLine}" BorderThickness="1" CornerRadius="6" Padding="10">
@@ -557,7 +613,7 @@
                         </Border>
 
                         <Separator Margin="0,18,0,12" Background="{DynamicResource Line}" />
-                        <TextBlock Text="Preferences" FontSize="14" FontWeight="Medium" Foreground="{DynamicResource Text}" Margin="0,0,0,8" />
+                        <TextBlock Text="Preferences" FontSize="14" FontWeight="SemiBold" Foreground="{DynamicResource Text}" Margin="0,0,0,8" />
                         <CheckBox Content="Show me encouraging messages now and then 🎉"
                                   IsChecked="{Binding EncouragingMessages}" Foreground="{DynamicResource Muted}" FontSize="12.5" />
                         <TextBlock Text="A little pick-me-up that occasionally appears after you export or import."

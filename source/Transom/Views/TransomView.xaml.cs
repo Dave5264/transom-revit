@@ -76,7 +76,7 @@ public sealed partial class TransomView
         Set("Surface", "#3A3A3D");
         Set("Text", "#E8E8E8");
         Set("Muted", "#B4B4B4");
-        Set("Hint", "#8C8C8C");
+        Set("Hint", "#A8A8A8");
         Set("Line", "#4A4A4D");
         Set("Line2", "#5A5A5D");
         Set("Accent", "#4C9DE0");
@@ -88,5 +88,8 @@ public sealed partial class TransomView
         Set("WarnBg", "#3A3320");
         Set("WarnLine", "#5A4A22");
         Set("Warn", "#D8A24A");
+        // Legend term colours brightened for the dark surface (the light #1E7A34 / #B8860B are unreadable on dark).
+        Set("LegendGreen", "#3FB36A");
+        Set("LegendYellow", "#D8A24A");
     }
 }

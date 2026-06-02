@@ -307,7 +307,7 @@ public sealed partial class TransomViewModel : ObservableObject
                 SheetTabName = f.SheetTabName, ExcelRow = f.ExcelRow, ExcelCol = f.ExcelCol, NewValue = f.NewValue.Trim(),
             })
             .ToList();
-        ImportStatus = "Analyzing…";
+        ImportStatus = "Analysing…";
         _importEvent.Raise();
         MaybeEncourage();
     }
@@ -635,7 +635,7 @@ public sealed partial class TransomViewModel : ObservableObject
         if (!EncouragingMessages) return;
         var msg = Encouragement.Maybe();
         if (msg != null)
-            try { TaskDialog.Show("Schedule Hub", msg); } catch { /* never let a pep talk break anything */ }
+            try { TaskDialog.Show("Transom", msg); } catch { /* never let a pep talk break anything */ }
     }
 
     /// <summary>Writes a how-to markdown into the exchange folder explaining how to apply the staged group-edits
@@ -648,11 +648,11 @@ public sealed partial class TransomViewModel : ObservableObject
             Directory.CreateDirectory(ExchangeFolder);
             var path = Path.Combine(ExchangeFolder, "Transom - Apply staged edits with Claude.md");
             File.WriteAllText(path, ClaudeGuideMarkdown());
-            TaskDialog.Show("Schedule Hub", "Instructions written to:\n\n" + path);
+            TaskDialog.Show("Transom", "Instructions written to:\n\n" + path);
         }
         catch (Exception ex)
         {
-            TaskDialog.Show("Schedule Hub", "Couldn't write the instructions:\n\n" + ex.Message);
+            TaskDialog.Show("Transom", "Couldn't write the instructions:\n\n" + ex.Message);
         }
     }
 
