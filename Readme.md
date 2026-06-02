@@ -6,7 +6,7 @@
 
 [![Latest release](https://img.shields.io/github/v/release/Dave5264/transom-revit?label=latest%20release&color=2ea44f&logo=github)](https://github.com/Dave5264/transom-revit/releases/latest)
 
-### ⬇ [Download the installer](https://github.com/Dave5264/transom-revit/releases/download/v1.2.1/Transom-1.2.1-SingleUser.msi)
+### ⬇ [Download the installer](https://github.com/Dave5264/transom-revit/releases/download/v1.3.0/Transom-1.3.0-SingleUser.msi)
 
 **One click, no admin rights** — installs into your per-user Revit add-ins folder.
 Double-click the `.msi`, then start Revit. Supports **Revit 2025, 2026 & 2027**.
@@ -19,8 +19,10 @@ back into the model, **including type parameters**, safely and inside a single t
 Claude-assisted QA layer can reconcile exports and pre-flight imports against the live model over a local MCP
 bridge, but the add-in is fully standalone without it.
 
-> **Status:** v1.2.1 released (Revit 2025/2026/2027) — full export and round-trip import, including grouped
-> schedules (by type or by field) and annotation/keyed-note schedules. Requirements are locked in
+> **Status:** v1.3.0 released (Revit 2025/2026/2027) — full export and round-trip import, including grouped
+> schedules (by type or by field) and annotation/keyed-note schedules. v1.3.0 adds group-aware editing:
+> project parameters on grouped elements apply in-place (via "vary by group instance"), built-in params are
+> staged for Claude-assist, and group-header edits no longer error. Requirements are locked in
 > [`SPEC.md`](SPEC.md); the build approach is in [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md).
 
 ## Install
