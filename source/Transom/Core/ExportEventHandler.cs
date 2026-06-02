@@ -32,7 +32,11 @@ public sealed class ExportEventHandler : IExternalEventHandler
             var tables = new List<ScheduleTable>();
             foreach (var id in ScheduleIds.Distinct())
                 if (doc.GetElement(new ElementId(id)) is ViewSchedule vs)
-                    tables.Add(reader.Read(vs));
+                {
+                    var t = reader.Read(vs);
+                    tables.Add(t);
+                    if (t.Companion != null) tables.Add(t.Companion); // editable component params of combined fields
+                }
 
             if (tables.Count == 0)
             {

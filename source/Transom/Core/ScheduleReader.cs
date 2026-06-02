@@ -64,6 +64,7 @@ public sealed class ScheduleReader
             table.ColWidthsPx[c] = SafeWidthPx(sec, c);
 
         ReadAnchorsAndClassify(vs, table);
+        if (table.RoundTrippable) table.Companion = BuildCombinedCompanion(vs, table);
         return table;
     }
 
@@ -268,6 +269,143 @@ public sealed class ScheduleReader
             table.Rows.Add(meta);
         }
     }
+
+    /// <summary>
+    ///     If the schedule has any combined-parameter fields (e.g. "Width x Height"), builds a companion table
+    ///     exposing each underlying component parameter as its own editable column, anchored to the same rows.
+    ///     The combined column itself stays display-only on the main sheet; the components round-trip here.
+    /// </summary>
+    private ScheduleTable? BuildCombinedCompanion(ViewSchedule vs, ScheduleTable main)
+    {
+        var def = vs.Definition;
+
+        // Collect the component parameter ids of every visible combined field (deduped, in order).
+        var compIds = new List<int>();
+        var seen = new HashSet<int>();
+        foreach (var fid in def.GetFieldOrder())
+        {
+            var f = def.GetField(fid);
+            if (f == null || f.IsHidden) continue;
+            bool combined = false;
+            try { combined = f.IsCombinedParameterField; } catch { /* not supported */ }
+            if (!combined) continue;
+            IList<TableCellCombinedParameterData> parts;
+            try { parts = f.GetCombinedParameters(); } catch { continue; }
+            foreach (var p in parts)
+            {
+                if (p.ParamId == null || p.ParamId == ElementId.InvalidElementId) continue; // literal/separator
+                int pid = (int)p.ParamId.Value;
+                if (seen.Add(pid)) compIds.Add(pid);
+            }
+        }
+        if (compIds.Count == 0) return null;
+
+        // Representative element (+ its type) for component metadata.
+        Element? sample = null;
+        foreach (var rm in main.Rows)
+        {
+            if (rm.Kind == "element" && rm.UniqueId != null) sample = _doc.GetElement(rm.UniqueId);
+            else if (rm.InstanceIds is { Count: > 0 }) sample = _doc.GetElement(rm.InstanceIds[0]);
+            if (sample != null) break;
+        }
+        if (sample == null) return null;
+        var sampleType = sample.GetTypeId() != ElementId.InvalidElementId ? _doc.GetElement(sample.GetTypeId()) : null;
+
+        var comp = new ScheduleTable
+        {
+            ScheduleName = Truncate(main.ScheduleName, 22) + " — parts",
+            ScheduleUniqueId = main.ScheduleUniqueId,
+            Category = main.Category,
+            SourceModelGuid = main.SourceModelGuid,
+            SourceModelTitle = main.SourceModelTitle,
+            RoundTrippable = main.RoundTrippable,
+            RowCount = main.RowCount,
+            ColCount = compIds.Count,
+        };
+
+        foreach (var pid in compIds)
+        {
+            var p = GetParamOn(sample, pid) ?? (sampleType != null ? GetParamOn(sampleType, pid) : null);
+            var col = new ColumnMeta
+            {
+                Col = comp.Columns.Count,
+                ParameterId = pid,
+                FieldName = p?.Definition?.Name ?? ("param " + pid),
+                Header = p?.Definition?.Name ?? ("param " + pid),
+                Binding = ResolveBinding(sample, pid, ""),
+            };
+            col.Writable = p != null && col.Binding is "instance" or "type";
+            if (p != null)
+            {
+                try
+                {
+                    var spec = p.Definition.GetDataType();
+                    if (spec != null && !spec.Empty() && UnitUtils.IsMeasurableSpec(spec)) col.SpecTypeId = spec.TypeId;
+                }
+                catch { /* string/int */ }
+                col.ImportEditable = col.Writable && !p.IsReadOnly && SupportedStorage(p, col.SpecTypeId);
+            }
+            else col.ImportEditable = false;
+            comp.Columns.Add(col);
+        }
+
+        comp.Cells = new TableCell[main.RowCount][];
+        for (int r = 0; r < main.RowCount; r++)
+        {
+            comp.Cells[r] = new TableCell[compIds.Count];
+            for (int c = 0; c < compIds.Count; c++) comp.Cells[r][c] = new TableCell();
+
+            var rm = main.Rows[r];
+            var crm = new RowMeta { ExcelRow = r, UniqueId = rm.UniqueId, Kind = rm.Kind, InstanceIds = rm.InstanceIds };
+
+            if (rm.Kind == "columnHeader")
+            {
+                for (int c = 0; c < comp.Columns.Count; c++) comp.Cells[r][c] = new TableCell { Text = comp.Columns[c].Header };
+            }
+            else if (rm.UniqueId != null && rm.Kind is "element" or "type" or "group")
+            {
+                Element? el = rm.Kind == "element" ? _doc.GetElement(rm.UniqueId) : null;
+                Element? typeEl = rm.Kind == "type" ? _doc.GetElement(rm.UniqueId) : null;
+                Element? repr = rm.InstanceIds is { Count: > 0 } ? _doc.GetElement(rm.InstanceIds[0]) : el;
+                Element? bindHost = el ?? repr;
+                bool inGroup = rm.Kind == "element" && el != null && el.GroupId != null && el.GroupId != ElementId.InvalidElementId;
+
+                if (bindHost != null)
+                {
+                    var b = new Dictionary<int, string>();
+                    var frozen = new HashSet<int>();
+                    var groupCols = new HashSet<int>();
+                    foreach (var col in comp.Columns)
+                    {
+                        var bind = ResolveBinding(bindHost, col.ParameterId, col.Binding);
+                        b[col.Col] = bind;
+                        if (!col.Writable) frozen.Add(col.Col);
+                        else if (!col.ImportEditable) frozen.Add(col.Col);
+                        else if (inGroup && bind == "instance") groupCols.Add(col.Col);
+
+                        var valueHost = bind == "type"
+                            ? (typeEl ?? (bindHost.GetTypeId() != ElementId.InvalidElementId ? _doc.GetElement(bindHost.GetTypeId()) : null))
+                            : el ?? repr;
+                        var vp = valueHost == null ? null : GetParamOn(valueHost, col.ParameterId);
+                        comp.Cells[r][col.Col] = new TableCell
+                        {
+                            Text = vp == null ? "" : vp.StorageType == StorageType.String ? vp.AsString() ?? "" : vp.AsValueString() ?? "",
+                        };
+                    }
+                    crm.Bindings = b;
+                    if (frozen.Count > 0) crm.FrozenCols = frozen;
+                    if (groupCols.Count > 0) crm.GroupCols = groupCols;
+                }
+            }
+            comp.Rows.Add(crm);
+        }
+
+        comp.ColWidthsPx = new int[compIds.Count];
+        for (int c = 0; c < compIds.Count; c++) comp.ColWidthsPx[c] = 96;
+        return comp;
+    }
+
+    private static string Truncate(string s, int n) => s.Length <= n ? s : s.Substring(0, n);
 
     /// <summary>
     ///     Marks each writable column import-editable or not, by checking a representative element's parameter:

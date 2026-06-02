@@ -82,5 +82,8 @@ public sealed class ScheduleTable
     public List<ColumnMeta> Columns = new();
     public List<RowMeta> Rows = new();
 
+    /// <summary>Optional companion table exposing the editable component parameters of any combined fields, anchored to the same rows.</summary>
+    public ScheduleTable? Companion;
+
     public int ElementRowCount => Rows.Count(r => r.Kind == "element");
 }
