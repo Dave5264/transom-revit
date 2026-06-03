@@ -57,10 +57,9 @@ public class Application : ExternalApplication
         // Optional Claude UI-Assist (separate, on-demand feature; never auto-runs so Transom stays
         // standalone for non-Claude users). One-time set up that installs the bundled UI engine + MCP
         // server and registers them with Claude, enabling clicks for Revit commands that have no API.
-        // TODO(UI): swap in a dedicated UI-Assist icon during the ribbon overhaul (reusing Bridge for now).
         panel.AddPushButton<UiAssistSetupCommand>("Claude\nUI Assist")
-            .SetImage("/Transom;component/Resources/Icons/Bridge16.png")
-            .SetLargeImage("/Transom;component/Resources/Icons/Bridge32.png")
+            .SetImage("/Transom;component/Resources/Icons/UiAssist16.png")
+            .SetLargeImage("/Transom;component/Resources/Icons/UiAssist32.png")
             .SetToolTip("Set up Claude UI-Assist (one-time): lets Claude click Revit UI commands that have no API — Edit Group, Finish, dialogs, and Properties-cell edits — by driving the UI out-of-process. Installs the helper and registers it with Claude (per-user, no admin). Restart Claude afterward. Optional; Transom works fully without it.");
     }
 }

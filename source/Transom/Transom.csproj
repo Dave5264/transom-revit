@@ -51,6 +51,8 @@
         <Resource Include="Resources\Icons\Bridge32.png"/>
         <Resource Include="Resources\Icons\Register16.png"/>
         <Resource Include="Resources\Icons\Register32.png"/>
+        <Resource Include="Resources\Icons\UiAssist16.png"/>
+        <Resource Include="Resources\Icons\UiAssist32.png"/>
     </ItemGroup>
 
     <ItemGroup>

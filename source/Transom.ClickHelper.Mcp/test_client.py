@@ -8,7 +8,7 @@ import subprocess
 import sys
 import os
 
-EXE = sys.argv[1] if len(sys.argv) > 1 else r"bin\Debug\net8.0\RevitClickHelperMcp.exe"
+EXE = sys.argv[1] if len(sys.argv) > 1 else r"bin\Debug\net8.0\Transom.ClickHelper.Mcp.exe"
 
 proc = subprocess.Popen(
     [EXE],

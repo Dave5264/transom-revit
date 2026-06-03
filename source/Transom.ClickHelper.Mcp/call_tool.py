@@ -3,7 +3,7 @@ Usage: python call_tool.py <toolName> [jsonArgs]
 """
 import json, subprocess, sys, os
 
-EXE = r"bin\Debug\net8.0\RevitClickHelperMcp.exe"
+EXE = r"bin\Debug\net8.0\Transom.ClickHelper.Mcp.exe"
 tool = sys.argv[1]
 targs = json.loads(sys.argv[2]) if len(sys.argv) > 2 else {}
 
