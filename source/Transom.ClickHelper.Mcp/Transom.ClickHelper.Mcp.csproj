@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <!--
+      Transom.ClickHelper.Mcp — the MCP server for Transom's optional Claude UI-Assist feature.
+
+      A minimal stdio MCP server (JSON-RPC 2.0, Content-Length framed) that exposes Revit UI-clicking
+      tools to Claude. It does NOT touch Revit itself — it shells out to the Transom.ClickHelper engine
+      exe, which performs UI Automation against the live Revit window from its own process. Running the
+      click out-of-process is load-bearing (Revit's message pump stays free).
+
+      Mirrors Transom.McpShim's framing exactly, so it plugs into the same host the Transom bridge uses.
+      No UI assemblies needed here (it only spawns a process and reads a PNG), so plain net8.0.
+    -->
+    <PropertyGroup>
+        <OutputType>Exe</OutputType>
+        <TargetFramework>net8.0</TargetFramework>
+        <Nullable>enable</Nullable>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <AssemblyName>Transom.ClickHelper.Mcp</AssemblyName>
+        <RootNamespace>Transom.ClickHelper.Mcp</RootNamespace>
+        <InvariantGlobalization>true</InvariantGlobalization>
+    </PropertyGroup>
+
+    <!-- Self-contained single-file publish (matches Transom.McpShim): runs with no separate runtime. -->
+    <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+        <PublishSingleFile>true</PublishSingleFile>
+        <SelfContained>true</SelfContained>
+        <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+        <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    </PropertyGroup>
+
+</Project>

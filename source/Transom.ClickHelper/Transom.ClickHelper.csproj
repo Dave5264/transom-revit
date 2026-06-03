@@ -1,0 +1,45 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <!--
+      Transom.ClickHelper — the standalone UI-automation engine for Transom's optional Claude UI-Assist.
+
+      There is no Revit API to invoke the "Edit Group" / "Finish" commands, so this tool
+      drives them through Windows UI Automation against the LIVE Revit window from a SEPARATE
+      process. Running out-of-process is load-bearing: the click is delivered while Revit's
+      own message pump is free. Doing the same thing from inside the add-in (on Revit's API
+      thread, via an ExternalEvent) would block the pump and the command would never execute.
+
+      net*-windows + UseWPF pulls in the Microsoft.WindowsDesktop.App framework, which carries
+      the managed UI Automation client assemblies (System.Windows.Automation). No NuGet deps.
+
+      Version-agnostic: UI Automation targets whatever "Revit" process is running, so the SAME
+      exe drives Revit 2025 / 2026 / 2027. net8.0-windows runs fine on all three machines.
+    -->
+    <PropertyGroup>
+        <OutputType>Exe</OutputType>
+        <TargetFramework>net8.0-windows</TargetFramework>
+        <UseWPF>true</UseWPF>
+        <!-- UseWindowsForms pulls in System.Drawing for the screen-capture (screenshot) command. -->
+        <UseWindowsForms>true</UseWindowsForms>
+        <Nullable>enable</Nullable>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <LangVersion>latest</LangVersion>
+        <AssemblyName>Transom.ClickHelper</AssemblyName>
+        <RootNamespace>Transom.ClickHelper</RootNamespace>
+        <InvariantGlobalization>true</InvariantGlobalization>
+        <!-- Per-monitor DPI awareness so BoundingRectangle coords, SetCursorPos, and CopyFromScreen
+             all agree in true physical pixels on scaled/multi-monitor setups (Revit is PMv2). -->
+        <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+    </PropertyGroup>
+
+    <!-- Self-contained single-file publish for shipping (matches Transom.McpShim): runs with NO separate
+         .NET runtime, so users never see an "install .NET" step. The build module publishes this and
+         bundles the single Transom.ClickHelper.exe next to Transom.dll. -->
+    <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+        <PublishSingleFile>true</PublishSingleFile>
+        <SelfContained>true</SelfContained>
+        <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+        <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    </PropertyGroup>
+
+</Project>
