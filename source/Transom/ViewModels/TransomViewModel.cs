@@ -177,12 +177,9 @@ public sealed partial class TransomViewModel : ObservableObject
     /// <summary>Set by the view: shows a modal resolver for one type-param conflict, returns the chosen value (or null = skip).</summary>
     public Func<TypeConflict, ConflictOption?>? ConflictResolver;
 
-    /// <summary>Set by the view: asks how to handle edits that target group members (skip / abort / hand to Claude).</summary>
-    public Func<GroupPrompt, GroupDecision>? GroupResolver;
-
-    /// <summary>Set by the view: confirms enabling "vary by group instance" for grouped PROJECT-param edits before
-    /// Transom applies them. Arg = affected field names; returns true to proceed, false to skip them.</summary>
-    public Func<List<string>, bool>? VaryConfirm;
+    /// <summary>Set by the view: shows the per-parameter group-conflict picker for ONE blue/yellow column,
+    /// returns the chosen <see cref="GroupResolution"/> (or null to cancel the whole import).</summary>
+    public Func<GroupResolutionPrompt, GroupResolution?>? GroupConflictResolver;
 
     /// <summary>Set by the view: tells the user built-in group edits were staged for Claude-assist. Arg = staged path.</summary>
     public Action<string>? ClaudeStagedNotice;
@@ -330,47 +327,91 @@ public sealed partial class TransomViewModel : ObservableObject
             return;
         }
 
+        // Clear any stale resolutions from a prior Apply — these ProposedChange objects are shared with the
+        // cached change-set, so a cancelled or retried Apply must never route a column by a previous choice.
+        foreach (var c in selected) c.Resolution = null;
+
         var notes = new List<string>();
+        bool assist = ClaudeMode.StartsWith("Assist");
+        var eligible = _lastChangeSet?.Option2EligibleParams ?? new HashSet<string>();
 
-        // Grouped BUILT-IN params can't vary per instance — they need the Claude-assist definition-swap "dance".
-        // Stage them for Claude (Assist on) or skip them (Assist off, where they exported grey).
-        var builtin = selected.Where(c => c.GroupMode == GroupMode.BuiltinDance).ToList();
-        if (builtin.Count > 0)
+        var directChanges = selected.Where(c => c.GroupMode == GroupMode.None).ToList();
+        var groupChanges = selected.Where(c => c.GroupMode is GroupMode.ProjectVary or GroupMode.BuiltinDance).ToList();
+
+        var varyChanges = new List<ProposedChange>();      // option 1 — Transom enables vary + writes per instance
+        var newParamChanges = new List<ProposedChange>();  // option 2 — Importer creates a new type param
+        var stagedChanges = new List<ProposedChange>();    // option 3/4 — staged for Claude (dance / UI-assist)
+        bool wantClickHelper = false;
+
+        // ONE picker per distinct blue/yellow column (parameter); the user chooses a resolution path for each.
+        foreach (var grp in groupChanges.GroupBy(c => (c.ParameterId, c.Field)))
         {
-            if (ClaudeMode.StartsWith("Assist"))
+            var list = grp.ToList();
+            bool isBuiltin = list[0].GroupMode == GroupMode.BuiltinDance;
+            var prompt = new GroupResolutionPrompt
             {
-                var path = ChooseArtifactPath();
-                if (path == null)
-                    notes.Add($"{InstanceCountOf(builtin)} built-in group edit(s) not staged (no file chosen)");
-                else
+                Field = grp.Key.Field,
+                ParameterId = grp.Key.ParameterId,
+                IsBuiltin = isBuiltin,
+                Option2Available = eligible.Contains(Core.ChangeSet.ColumnKey(grp.Key.ParameterId, grp.Key.Field)),
+                AssistEnabled = assist,
+                Changes = list,
+            };
+
+            var choice = GroupConflictResolver?.Invoke(prompt);
+            if (GroupConflictResolver != null && choice == null)   // user cancelled the whole import
+            {
+                ImportStatus = "Import cancelled — no changes applied.";
+                return;
+            }
+
+            switch (choice ?? GroupResolution.Skip)
+            {
+                case GroupResolution.Vary:
+                    foreach (var c in list) c.Resolution = GroupResolution.Vary;
+                    varyChanges.AddRange(list);
+                    break;
+                case GroupResolution.NewTypeParam:
+                    foreach (var c in list) c.Resolution = GroupResolution.NewTypeParam;
+                    newParamChanges.AddRange(list);
+                    break;
+                case GroupResolution.GroupDance:
+                    foreach (var c in list) c.Resolution = GroupResolution.GroupDance;
+                    stagedChanges.AddRange(list);
+                    if (assist) wantClickHelper = true;
+                    break;
+                case GroupResolution.ClaudeAssist:
+                    foreach (var c in list) c.Resolution = GroupResolution.ClaudeAssist;
+                    stagedChanges.AddRange(list);
+                    wantClickHelper = true;
+                    break;
+                default: // Skip
+                    notes.Add($"{InstanceCountOf(list)} edit(s) to “{grp.Key.Field}” skipped");
+                    break;
+            }
+        }
+
+        // Stage the dance / Claude-assist edits to JSON for Claude; bring up ClickHelper when requested.
+        if (stagedChanges.Count > 0)
+        {
+            var path = ChooseArtifactPath();
+            if (path == null) notes.Add($"{InstanceCountOf(stagedChanges)} group edit(s) not staged (no file chosen)");
+            else
+            {
+                var staged = StageGroupEdits(stagedChanges, path);
+                if (staged != null)
                 {
-                    var staged = StageGroupEdits(builtin, path);
-                    if (staged != null)
-                    {
-                        notes.Add($"{InstanceCountOf(builtin)} built-in group edit(s) staged for Claude");
-                        ClaudeStagedNotice?.Invoke(staged);
-                    }
-                    else notes.Add($"{InstanceCountOf(builtin)} built-in group edit(s) could not be staged");
+                    notes.Add($"{InstanceCountOf(stagedChanges)} group edit(s) staged for Claude");
+                    if (wantClickHelper) notes.Add(EnsureClickHelper());
+                    ClaudeStagedNotice?.Invoke(staged);
                 }
-            }
-            else notes.Add($"{InstanceCountOf(builtin)} built-in group edit(s) skipped (enable Claude-assist to apply)");
-        }
-
-        // Grouped PROJECT params: Transom applies them itself by enabling "vary by group instance" — confirm first.
-        var projectVary = selected.Where(c => c.GroupMode == GroupMode.ProjectVary).ToList();
-        if (projectVary.Count > 0)
-        {
-            var fields = projectVary.Select(c => c.Field).Distinct().OrderBy(f => f).ToList();
-            bool ok = VaryConfirm?.Invoke(fields) ?? true;
-            if (!ok)
-            {
-                notes.Add($"{InstanceCountOf(projectVary)} grouped project-param edit(s) skipped (vary-by-instance declined)");
-                projectVary = new List<ProposedChange>();
+                else notes.Add($"{InstanceCountOf(stagedChanges)} group edit(s) could not be staged");
             }
         }
 
-        var toApplyList = selected.Where(c => c.GroupMode == GroupMode.None).Concat(projectVary).ToList();
-        string groupNote = notes.Count > 0 ? string.Join("  ·  ", notes) : "";
+        // Direct + vary + new-type-param edits all go to the Importer; it routes each by Resolution/GroupMode.
+        var toApplyList = directChanges.Concat(varyChanges).Concat(newParamChanges).ToList();
+        string groupNote = notes.Count > 0 ? string.Join("  ·  ", notes.Where(n => n.Length > 0)) : "";
         if (toApplyList.Count == 0)
         {
             ImportStatus = groupNote.Length > 0 ? groupNote : "Nothing to apply.";
@@ -385,6 +426,7 @@ public sealed partial class TransomViewModel : ObservableObject
         {
             ScheduleName = _lastChangeSet?.ScheduleName ?? "",
             Skipped = _lastChangeSet?.Skipped ?? new List<SkippedItem>(),
+            ImportedScheduleNames = _lastChangeSet?.ImportedScheduleNames ?? new List<string>(),
         };
         toApply.Changes.AddRange(toApplyList);
 
@@ -394,6 +436,21 @@ public sealed partial class TransomViewModel : ObservableObject
         ImportStatus = $"Applying {toApplyList.Count} selected change(s)…";
         _importEvent.Raise();
         MaybeEncourage();
+    }
+
+    /// <summary>Best-effort install + register of the Click Helper MCP so Claude has the UI tools for the
+    /// Claude-assist / group-dance paths. (For the data side, the Claude Bridge must also be ON via the ribbon.)</summary>
+    private static string EnsureClickHelper()
+    {
+        try
+        {
+            Core.ClickHelperRegistration.EnsureInstalled();
+            var res = Core.ClickHelperRegistration.Register();
+            return res.Updated > 0
+                ? "ClickHelper registered with Claude (restart Claude, ensure the Claude Bridge is ON)"
+                : "ClickHelper already set up (ensure the Claude Bridge is ON)";
+        }
+        catch { return "ClickHelper setup skipped (couldn't register — set it up via the ribbon)"; }
     }
 
     /// <summary>Total element writes represented by a set of changes (bulk changes count each instance).</summary>
@@ -441,13 +498,16 @@ public sealed partial class TransomViewModel : ObservableObject
                 kind = "group-edits",
                 schedule = _lastChangeSet?.ScheduleName ?? "",
                 project = SelectedProject,
-                note = "These are BUILT-IN parameter edits (negative parameterId) on elements inside Revit MODEL " +
-                       "GROUPS. Built-in params CANNOT vary per group instance, so a direct write is rejected " +
-                       "('Changes to groups are allowed only in group edit mode') — do NOT use set_parameter. They " +
-                       "must be changed UNIFORMLY in the group DEFINITION via the safe definition-swap procedure in " +
-                       "'Transom - Apply staged edits with Claude.md' in this same folder. Follow that file exactly: " +
-                       "it has the dance (rebuild type -> repoint all instances -> delete old -> rename), the safety " +
-                       "guards (refuse attached-detail/nested/excluded groups), conflict handling, and verification.",
+                note = "These are parameter edits on elements inside Revit MODEL GROUPS that the user chose to " +
+                       "apply via Claude. parameterId >= 0 = PROJECT/SHARED params: writable per group instance " +
+                       "after enabling 'vary by group instance', or via the bridge set_parameter (which handles " +
+                       "group members directly). parameterId < 0 = BUILT-IN params: these CANNOT vary per instance, " +
+                       "so a direct write is rejected ('Changes to groups are allowed only in group edit mode') — " +
+                       "do NOT use set_parameter; change them UNIFORMLY in the group DEFINITION via the safe " +
+                       "definition-swap procedure in 'Transom - Apply staged edits with Claude.md' in this same " +
+                       "folder (the dance: rebuild type -> repoint all instances -> delete old -> rename, with the " +
+                       "attached-detail/nested/excluded-group guards, conflict handling, and verification). Use the " +
+                       "Transom UI-Assist (ClickHelper) tools to open groups when needed, and verify every write.",
                 edits,
             };
             File.WriteAllText(path, System.Text.Json.JsonSerializer.Serialize(payload,

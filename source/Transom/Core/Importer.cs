@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using Autodesk.Revit.DB;
 
@@ -27,6 +28,10 @@ public sealed class ProposedChange
     /// <summary>Project/shared parameters carry positive ids; built-in parameters are negative.</summary>
     public static GroupMode ModeFor(int parameterId) => parameterId >= 0 ? GroupMode.ProjectVary : GroupMode.BuiltinDance;
 
+    /// <summary>How the user chose to resolve this change's group conflict (set per-column by the
+    /// GroupResolutionDialog on Apply). Null until resolved. Routes the change to the matching backend.</summary>
+    public GroupResolution? Resolution;
+
     /// <summary>True when the field can't be changed by import (read-only / driven by the family or type selection). Shown greyed, not applied.</summary>
     public bool Frozen;
     public string FrozenReason = "";
@@ -38,9 +43,22 @@ public sealed class ProposedChange
     public string OldValue { get; set; } = "";
     public string NewValue { get; set; } = "";
     public int InstancesAffected { get; set; } = 1;
-    public string Scope => (InGroup ? "⚠ group · " : "")
-        + (BulkInstanceIds != null ? $"all {InstancesAffected} inst"
-            : Binding == "type" ? $"type · {InstancesAffected} inst" : "instance");
+    /// <summary>Preview "Scope" cell. Group-conflicted (blue project / yellow built-in) rows say "choose on
+    /// Apply" so the preview is consistent with the per-parameter resolution dialog they'll trigger — they
+    /// are NOT applied silently.</summary>
+    public string Scope
+    {
+        get
+        {
+            if (InGroup)
+            {
+                var via = GroupMode == GroupMode.BuiltinDance ? "built-in" : "project/shared";
+                return $"⚠ group ({via}) — choose on Apply · {InstancesAffected} inst";
+            }
+            return BulkInstanceIds != null ? $"all {InstancesAffected} inst"
+                : Binding == "type" ? $"type · {InstancesAffected} inst" : "instance";
+        }
+    }
 
     public bool IsString;
     public bool IsInt;
@@ -111,6 +129,19 @@ public sealed class ChangeSet
     public List<CellDiagnostic> Diagnostics = new();
     public List<ReformatSuggestion> Reformats = new();
     public string ReportPath = "";
+
+    /// <summary>Keys ("paramId|field") of group-conflict columns for which "new type parameter" (option 2)
+    /// is valid — i.e. the column's edited values are consistent within every affected type (a type param
+    /// holds one value per type). Computed in <c>BuildChangeSet</c>; gates option 2 in the resolution dialog.
+    /// Keyed by (ParameterId, Field) to match the per-column picker, not by parameter id alone.</summary>
+    public HashSet<string> Option2EligibleParams = new();
+
+    /// <summary>The (ParameterId, Field) key used to identify one resolvable group-conflict column.</summary>
+    public static string ColumnKey(int parameterId, string field) => parameterId + "|" + field;
+
+    /// <summary>Names of the schedules in this import (workbook sheets). Used by option 2 to add the new
+    /// type-parameter field to the affected schedules.</summary>
+    public List<string> ImportedScheduleNames = new();
 
     /// <summary>Full plain-text diagnostic of this import (column matching, anchors, skips, results) for the Copy log button.</summary>
     public string DiagnosticLog = "";
@@ -307,8 +338,55 @@ public sealed class Importer
             Summarize();
         }
 
+        cs.ImportedScheduleNames = wb.Sheets.Select(s => s.ScheduleName).Distinct().ToList();
+        ComputeOption2Eligibility(doc, cs);
+
         cs.DiagnosticLog = BuildDiagnosticLog(doc, wb, cs);
         return cs;
+    }
+
+    /// <summary>
+    ///     Marks which group-conflict columns can use "new type parameter" (resolution option 2): only when,
+    ///     for every affected type, the column's edited instances share a single value (a type parameter holds
+    ///     one value per type). A column with two different values inside one type can't move to a type param.
+    /// </summary>
+    private static void ComputeOption2Eligibility(Document doc, ChangeSet cs)
+    {
+        foreach (var pg in cs.Changes
+                     .Where(c => !c.Frozen && c.GroupMode is GroupMode.ProjectVary or GroupMode.BuiltinDance)
+                     .GroupBy(c => ChangeSet.ColumnKey(c.ParameterId, c.Field)))
+        {
+            // If any element's type can't be resolved (deleted/odd), the column isn't safely movable to a type param.
+            if (pg.Any(c => ElementTypeIdOf(doc, c) < 0)) continue;
+
+            // Compare the PARSED value (NewString/NewInt/NewDouble within tolerance), not the display text — two
+            // cells can render differently yet be the same internal value (and vice-versa).
+            bool aligned = pg
+                .GroupBy(c => ElementTypeIdOf(doc, c))
+                .All(typeGrp => typeGrp.Select(CanonicalValue).Distinct().Count() <= 1);
+            if (aligned) cs.Option2EligibleParams.Add(pg.Key);
+        }
+    }
+
+    /// <summary>Canonical string of a change's parsed value, so eligibility compares stored values (doubles
+    /// rounded to internal-unit tolerance), not formatted display text.</summary>
+    private static string CanonicalValue(ProposedChange ch) =>
+        ch.IsString ? ch.NewString
+        : ch.IsInt ? ch.NewInt.ToString(System.Globalization.CultureInfo.InvariantCulture)
+        : Math.Round(ch.NewDouble, 9).ToString(System.Globalization.CultureInfo.InvariantCulture);
+
+    /// <summary>The type id of the element(s) a group-conflict change targets (bulk = the shared type; single
+    /// = the instance's type). -1 if it can't be resolved.</summary>
+    private static long ElementTypeIdOf(Document doc, ProposedChange ch)
+    {
+        try
+        {
+            var uid = ch.BulkInstanceIds is { Count: > 0 } ? ch.BulkInstanceIds[0] : ch.UniqueId;
+            var el = string.IsNullOrEmpty(uid) ? null : doc.GetElement(uid);
+            var tid = el?.GetTypeId();
+            return tid != null && tid != ElementId.InvalidElementId ? tid.Value : -1;
+        }
+        catch { return -1; }
     }
 
     /// <summary>
@@ -783,6 +861,7 @@ public sealed class Importer
         var failed = new List<string>();
         var unverified = new List<string>();
         var collector = new ApplyFailureCollector();
+        string newParamNote = "";
 
         using var tx = new Transaction(doc, "Transom: import edits");
         tx.Start();
@@ -793,9 +872,16 @@ public sealed class Importer
 
         try
         {
+            // Resolution option 2 (new type parameter) is handled in one bulk pass — create the param, write
+            // per-type values, add it to the affected schedules — not by the per-change write loop below.
+            var newParamChanges = cs.Changes.Where(c => c.Resolution == GroupResolution.NewTypeParam && !c.Frozen).ToList();
+            if (newParamChanges.Count > 0)
+                newParamNote = ApplyNewTypeParam(doc, newParamChanges, cs.ImportedScheduleNames, failed);
+
             foreach (var ch in cs.Changes)
             {
                 if (ch.Frozen) continue; // can't be written — shown greyed in the preview only
+                if (ch.Resolution == GroupResolution.NewTypeParam) continue; // handled in the bulk pass above
                 if (ch.GroupMode == GroupMode.BuiltinDance) continue; // built-in group param — staged for Claude-assist, not applied here
 
                 // Bulk instance write (grouped schedule): apply to every instance the row represented.
@@ -839,6 +925,7 @@ public sealed class Importer
         if (failed.Count > 0) msg += $", {failed.Count} failed";
         if (unverified.Count > 0) msg += $", {unverified.Count} unverified (value didn't take)";
         if (collector.Messages.Count > 0) msg += $"  —  {collector.Messages.Count} Revit warning(s) (see log)";
+        if (newParamNote.Length > 0) msg += $"  —  {newParamNote}";
         msg += $". {cs.Skipped.Count} skipped.";
 
         cs.DiagnosticLog = BuildApplyLog(applied, failed, unverified, collector.Messages, cs);
@@ -892,6 +979,200 @@ public sealed class Importer
             return false;
         }
         catch { return false; }
+    }
+
+    /// <summary>
+    ///     Resolution option 2: move each group-conflicted column's values out of the constrained parameter
+    ///     into a NEW shared TYPE parameter, then add that parameter to the affected schedules. Type params
+    ///     hold one value per type, so this is only offered when the column's values are consistent per type
+    ///     (gated by <see cref="ComputeOption2Eligibility"/>). Runs inside the caller's transaction.
+    ///     Returns (values written, status note).
+    /// </summary>
+    private string ApplyNewTypeParam(Document doc, List<ProposedChange> changes,
+        List<string> scheduleNames, List<string> failed)
+    {
+        var app = doc.Application;
+        int created = 0, written = 0, fields = 0;
+
+        // One new param per resolvable column — keyed (ParameterId, Field), matching the picker/eligibility.
+        foreach (var pg in changes.GroupBy(c => ChangeSet.ColumnKey(c.ParameterId, c.Field)))
+        {
+            var list = pg.ToList();
+            var sample = list[0];
+
+            // Source parameter (for storage/spec), the affected TYPE categories, and one change per type.
+            Parameter? src = null;
+            var cats = app.Create.NewCategorySet();
+            var perType = new Dictionary<long, ProposedChange>();
+            foreach (var ch in list)
+            {
+                var uid = ch.BulkInstanceIds is { Count: > 0 } ? ch.BulkInstanceIds[0] : ch.UniqueId;
+                var el = string.IsNullOrEmpty(uid) ? null : doc.GetElement(uid);
+                if (el == null) continue;
+                src ??= GetParam(el, ch.ParameterId);
+                // A TYPE binding must use the TYPE's category (usually == the instance's, but resolve it properly).
+                var tid0 = el.GetTypeId();
+                var typeEl0 = tid0 != null && tid0 != ElementId.InvalidElementId ? doc.GetElement(tid0) : null;
+                var cat = (typeEl0 ?? el).Category;
+                if (cat is { AllowsBoundParameters: true }) cats.Insert(cat);
+                if (tid0 != null && tid0 != ElementId.InvalidElementId) perType[tid0.Value] = ch;
+            }
+            if (src == null || cats.IsEmpty || perType.Count == 0)
+            { failed.Add($"{sample.Field} (new type param) — no writable source/category"); continue; }
+
+            // Derive the new param's spec from the SOURCE storage type — don't blindly trust GetDataType().
+            var spec = DeriveSpec(src);
+
+            var name = $"{sample.Field} (Transom)";
+            ElementId paramId; Guid guid;
+            try { (paramId, guid) = EnsureSharedTypeParam(doc, app, name, spec, cats); }
+            catch (Exception ex) { failed.Add($"{sample.Field} (new type param) — {ex.Message}"); continue; }
+            if (paramId == ElementId.InvalidElementId || guid == Guid.Empty)
+            { failed.Add($"{sample.Field} (new type param) — couldn't create/bind '{name}'"); continue; }
+            created++;
+
+            // Write one value per affected type and VERIFY it (option 2 was previously unverified).
+            int wroteHere = 0;
+            foreach (var kv in perType)
+            {
+                var typeEl = doc.GetElement(new ElementId(kv.Key));
+                var np = typeEl?.get_Parameter(guid);
+                if (np != null && !np.IsReadOnly && SetValue(np, kv.Value) && VerifyWrite(np, kv.Value)) { written++; wroteHere++; }
+                else failed.Add($"{name} on type {kv.Key}");
+            }
+
+            // Only surface the new column on schedules if at least one value actually landed — never leave a
+            // junk field on a column that wrote nothing.
+            if (wroteHere > 0) fields += AddFieldToSchedules(doc, paramId, scheduleNames);
+        }
+
+        return created == 0 ? "" :
+            $"option 2: {created} new type param(s), {written} value(s) written, {fields} schedule field(s) added";
+    }
+
+    /// <summary>The spec (ForgeTypeId) to create a shared param matching a source parameter's storage type.</summary>
+    private static ForgeTypeId DeriveSpec(Parameter src)
+    {
+        try
+        {
+            switch (src.StorageType)
+            {
+                case StorageType.String: return SpecTypeId.String.Text;
+                case StorageType.Integer:
+                    try { if (src.Definition.GetDataType() == SpecTypeId.Boolean.YesNo) return SpecTypeId.Boolean.YesNo; } catch { }
+                    return SpecTypeId.Int.Integer;
+                case StorageType.Double:
+                    var dt = src.Definition.GetDataType();
+                    if (dt != null && !dt.Empty() && UnitUtils.IsMeasurableSpec(dt)) return dt;
+                    return SpecTypeId.Number;
+            }
+        }
+        catch { /* fall through */ }
+        return SpecTypeId.String.Text;
+    }
+
+    /// <summary>
+    ///     Ensures a shared TYPE parameter named <paramref name="name"/> with the given spec exists and is
+    ///     bound (type binding) to <paramref name="cats"/>; regenerates, then returns its element id + GUID.
+    ///     Reuses an existing definition only when its spec matches (else disambiguates the name); extends the
+    ///     binding to new categories. Saves/restores the app shared-parameter file so an import doesn't change
+    ///     session state, and writes a valid header if it has to create one.
+    /// </summary>
+    private static (ElementId id, Guid guid) EnsureSharedTypeParam(Document doc,
+        Autodesk.Revit.ApplicationServices.Application app, string name, ForgeTypeId spec, CategorySet cats)
+    {
+        var savedFile = app.SharedParametersFilename;
+        try
+        {
+            var defFile = app.OpenSharedParameterFile();
+            if (defFile == null)
+            {
+                var tmp = Path.Combine(Path.GetTempPath(), "Transom_SharedParameters.txt");
+                if (!File.Exists(tmp) || new FileInfo(tmp).Length == 0)
+                    File.WriteAllText(tmp,
+                        "# This is a Revit shared parameter file.\n# Do not edit manually.\n" +
+                        "*META\tVERSION\tMINVERSION\nMETA\t2\t1\n*GROUP\tID\tNAME\n" +
+                        "*PARAM\tGUID\tNAME\tDATATYPE\tDATACATEGORY\tGROUP\tVISIBLE\tDESCRIPTION\tUSERMODIFIABLE\tHIDEWHENNOVALUE\n");
+                app.SharedParametersFilename = tmp;
+                defFile = app.OpenSharedParameterFile();
+            }
+            if (defFile == null) return (ElementId.InvalidElementId, Guid.Empty);
+
+            var group = defFile.Groups.Cast<DefinitionGroup>().FirstOrDefault(g => g.Name == "Transom")
+                        ?? defFile.Groups.Create("Transom");
+
+            // Reuse a same-named definition only if its spec matches; otherwise pick a fresh, disambiguated name.
+            ExternalDefinition? ext = null;
+            var useName = name;
+            for (int i = 1; ext == null && i <= 50; i++)
+            {
+                var existing = group.Definitions.Cast<Definition>().FirstOrDefault(d => d.Name == useName) as ExternalDefinition;
+                if (existing == null)
+                {
+                    ext = group.Definitions.Create(new ExternalDefinitionCreationOptions(useName, spec)) as ExternalDefinition;
+                    break;
+                }
+                if (SameSpec(existing, spec)) { ext = existing; break; }
+                useName = $"{name} ({i + 1})";
+            }
+            if (ext == null) return (ElementId.InvalidElementId, Guid.Empty);
+
+            var bindings = doc.ParameterBindings;
+            if (bindings.Contains(ext))
+            {
+                // Extend the existing binding to cover any new categories (don't leave new categories unbound).
+                if (bindings.get_Item(ext) is TypeBinding existingTb)
+                {
+                    var union = app.Create.NewCategorySet();
+                    foreach (Category c in existingTb.Categories) union.Insert(c);
+                    foreach (Category c in cats) union.Insert(c);
+                    bindings.ReInsert(ext, app.Create.NewTypeBinding(union), GroupTypeId.Data);
+                }
+            }
+            else if (!bindings.Insert(ext, app.Create.NewTypeBinding(cats), GroupTypeId.Data))
+            {
+                return (ElementId.InvalidElementId, Guid.Empty);
+            }
+
+            // The binding + per-element parameter aren't resolvable until the document regenerates.
+            doc.Regenerate();
+
+            var spe = SharedParameterElement.Lookup(doc, ext.GUID);
+            return (spe?.Id ?? ElementId.InvalidElementId, ext.GUID);
+        }
+        finally
+        {
+            try { app.SharedParametersFilename = savedFile; } catch { /* best effort */ }
+        }
+    }
+
+    private static bool SameSpec(ExternalDefinition def, ForgeTypeId spec)
+    {
+        try { return def.GetDataType() == spec; }
+        catch { return false; }
+    }
+
+    /// <summary>Adds the new parameter as a field to each named schedule that can show it (matching category).</summary>
+    private static int AddFieldToSchedules(Document doc, ElementId paramId, List<string> scheduleNames)
+    {
+        int added = 0;
+        var schedules = new FilteredElementCollector(doc).OfClass(typeof(ViewSchedule)).Cast<ViewSchedule>()
+            .Where(v => !v.IsTemplate && scheduleNames.Contains(v.Name)).ToList();
+        foreach (var sched in schedules)
+        {
+            try
+            {
+                var def = sched.Definition;
+                bool present = def.GetFieldOrder().Select(fid => def.GetField(fid).ParameterId).Any(pid => pid == paramId);
+                if (present) continue;
+                var sf = def.GetSchedulableFields().FirstOrDefault(f => f.ParameterId == paramId);
+                if (sf == null) continue; // not schedulable here (category mismatch)
+                def.AddField(sf);
+                added++;
+            }
+            catch { /* a schedule that won't take the field — skip it */ }
+        }
+        return added;
     }
 
     /// <summary>Re-reads a just-written parameter to confirm the new value persisted (within unit tolerance).</summary>

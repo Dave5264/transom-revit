@@ -23,25 +23,14 @@ public sealed partial class TransomView
             return dlg.Result;
         };
 
-        // Ask how to handle edits that target group members (skip / abort / hand to Claude).
-        viewModel.GroupResolver = prompt =>
+        // Per-parameter group-conflict resolver: one multi-option dialog for each distinct blue (project)
+        // or yellow (built-in) column the import touches inside Revit groups. Returns the chosen path, or
+        // null to cancel the whole import. Supersedes the old coarse all-fields "vary?" confirm.
+        viewModel.GroupConflictResolver = prompt =>
         {
-            var dlg = new GroupConflictDialog(prompt) { Owner = this };
+            var dlg = new GroupResolutionDialog(prompt) { Owner = this };
             dlg.ShowDialog();
-            return dlg.Decision;
-        };
-
-        // Confirm enabling "vary by group instance" before Transom applies grouped project-param edits.
-        viewModel.VaryConfirm = fields =>
-        {
-            var list = string.Join("\n  • ", fields);
-            var msg = "These parameters are on grouped elements:\n\n  • " + list +
-                      "\n\nTo apply your edits, Transom will set them to “vary by group instance” and write " +
-                      "each value per instance, exactly as entered (instances can differ; other groups are unaffected). " +
-                      "This is a permanent parameter setting in the model.\n\nProceed?";
-            return System.Windows.MessageBox.Show(this, msg, "Apply changes — vary by group instance",
-                System.Windows.MessageBoxButton.YesNo, System.Windows.MessageBoxImage.Question)
-                == System.Windows.MessageBoxResult.Yes;
+            return dlg.Result;
         };
 
         // Tell the user built-in group edits were staged for Claude-assist.

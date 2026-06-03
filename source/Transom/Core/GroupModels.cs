@@ -3,14 +3,6 @@ using System.Linq;
 
 namespace Transom.Core;
 
-/// <summary>What to do about edits that target elements inside Revit groups.</summary>
-public enum GroupDecision
-{
-    SkipGrouped,   // apply everything else, leave the grouped edits out
-    Abort,         // cancel the whole import
-    ClaudeHandle,  // hand the grouped edits to Claude (Assist) to open the groups and apply
-}
-
 /// <summary>How a group-member edit can be written durably (see project_revit_group_member_edits).</summary>
 public enum GroupMode
 {
@@ -19,17 +11,38 @@ public enum GroupMode
     BuiltinDance, // built-in param: can't vary — needs the uniform definition-swap "dance" via Claude-assist
 }
 
-/// <summary>Context shown to the user when an import touches group members.</summary>
-public sealed class GroupPrompt
+/// <summary>
+///     How the user chose to resolve a group conflict for ONE blue/yellow column (parameter). Presented
+///     per-parameter when applying an import that touches grouped members.
+/// </summary>
+public enum GroupResolution
 {
-    public List<ProposedChange> Grouped = new();
-    public bool AssistEnabled;
+    Vary,         // (BLUE only) flip the project param to "can vary by group instance" and write per-instance
+    NewTypeParam, // put the values into a new TYPE parameter and add it to the affected schedules
+    GroupDance,   // ungroup/edit/regroup/purge (staged for review; hands to Claude-assist meanwhile)
+    ClaudeAssist, // launch ClickHelper and let Claude open each group + edit via API/UI
+    Skip,         // leave this column unchanged
+}
 
-    public List<string> GroupNames => Grouped
-        .Select(g => string.IsNullOrEmpty(g.GroupName) ? "Group" : g.GroupName)
-        .Distinct()
-        .ToList();
+/// <summary>
+///     One blue/yellow column's conflict, surfaced to the user as a multi-option choice (the
+///     <c>GroupResolutionDialog</c>). Blue = project/shared param (offers all five paths); yellow =
+///     built-in param (no vary path). <see cref="Option2Available"/> gates "new type parameter" to the
+///     case where the column's values are consistent per type (a type param holds one value per type).
+/// </summary>
+public sealed class GroupResolutionPrompt
+{
+    public string Field = "";              // schedule column header / parameter name (for the heading)
+    public int ParameterId;
+    public bool IsBuiltin;                 // true = yellow (built-in, no vary); false = blue (project)
+    public bool Option2Available;          // values align per type across this whole column
+    public bool AssistEnabled;             // Claude-assist on (gates the Claude-Assist option)
+    public List<ProposedChange> Changes = new();
 
-    /// <summary>Total element writes blocked by group membership (bulk changes count each instance).</summary>
-    public int InstanceCount => Grouped.Sum(g => g.BulkInstanceIds?.Count ?? 1);
+    public List<string> GroupNames => Changes
+        .Select(c => string.IsNullOrEmpty(c.GroupName) ? "Group" : c.GroupName)
+        .Distinct().ToList();
+
+    /// <summary>Total element writes this column represents (bulk changes count each instance).</summary>
+    public int InstanceCount => Changes.Sum(c => c.BulkInstanceIds?.Count ?? 1);
 }
