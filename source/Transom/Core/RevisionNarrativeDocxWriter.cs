@@ -13,10 +13,11 @@ namespace Transom.Core;
 ///     Renders a <see cref="RevisionNarrative.Data"/> into a .docx.
 ///
 ///     <para><b>Start from a previous narrative (recommended).</b> The file is copied <b>byte-for-byte</b> and
-///     ONLY the body of <c>word/document.xml</c> is replaced. Header (logo), footers, section setup, styles,
-///     theme, numbering and media are the source's exact bytes. The new body uses the document's "No Spacing"
-///     style AND the <b>dominant run font sniffed from the source body</b> (e.g. Arial Narrow), since the firm's
-///     narratives apply the font as direct run formatting that overrides the theme default.</para>
+///     only <c>word/document.xml</c> (body) and <c>word/numbering.xml</c> are edited. Header (logo), footers,
+///     section setup, styles, theme and media are the source's exact bytes. The new body uses the document's
+///     "No Spacing" style + the dominant run font sniffed from the source (e.g. Arial Narrow), and each
+///     sheet's revision items are a <b>native Word numbered list that restarts at 1</b> (a per-sheet
+///     <c>w:num</c> over the source's decimal list, referenced from each note's <c>w:numPr</c>).</para>
 ///
 ///     <para>With no template, a plain Calibri-11 document is produced via NPOI.</para>
 /// </summary>
@@ -33,7 +34,7 @@ public static class RevisionNarrativeDocxWriter
             WritePlain(data, outputPath);
     }
 
-    // ---- surgical: copy the source, swap only document.xml's body ----
+    // ---- surgical: copy the source, swap document.xml body + add per-sheet numbering ----
     private static void WriteFromTemplate(RevisionNarrative.Data data, string outputPath, string templatePath)
     {
         if (string.Equals(Path.GetFullPath(outputPath), Path.GetFullPath(templatePath), StringComparison.OrdinalIgnoreCase))
@@ -42,48 +43,73 @@ public static class RevisionNarrativeDocxWriter
         File.Copy(templatePath, outputPath, overwrite: true);
 
         using var zip = ZipFile.Open(outputPath, ZipArchiveMode.Update);
-        var entry = zip.GetEntry("word/document.xml") ?? throw new IOException("Template has no word/document.xml.");
+        var docEntry = zip.GetEntry("word/document.xml") ?? throw new IOException("Template has no word/document.xml.");
 
         string docXml;
-        using (var r = new StreamReader(entry.Open(), Encoding.UTF8)) docXml = r.ReadToEnd();
+        using (var r = new StreamReader(docEntry.Open(), Encoding.UTF8)) docXml = r.ReadToEnd();
 
-        var font = SniffBodyFont(docXml); // match the source's actual body font (overrides theme default)
+        var numEntry = zip.GetEntry("word/numbering.xml");
+        string? numXml = null;
+        if (numEntry != null) using (var r = new StreamReader(numEntry.Open(), Encoding.UTF8)) numXml = r.ReadToEnd();
+
+        var font = SniffBodyFont(docXml);
+
+        // Set up native numbering: reuse a decimal list definition; allocate one restarting list per sheet.
+        bool canNumber = numXml != null;
+        string? absId = null;
+        int startNumId = 1;
+        string numBase = numXml ?? "";
+        if (canNumber)
+        {
+            absId = FindDecimalAbstractNum(numXml!);
+            startNumId = MaxNumId(numXml!) + 1;
+            if (absId == null)
+            {
+                int newAbs = MaxAbstractNumId(numXml!) + 1;
+                absId = newAbs.ToString();
+                numBase = InsertAbstractNum(numXml!, newAbs);
+            }
+        }
+
+        var numIds = new List<int>();
+        var body = BuildBodyXml(data, font, canNumber, startNumId, numIds, absId);
 
         int bodyTag = docXml.IndexOf("<w:body", StringComparison.Ordinal);
         int bodyOpenEnd = docXml.IndexOf('>', bodyTag) + 1;
         int sectStart = docXml.LastIndexOf("<w:sectPr", StringComparison.Ordinal);
         int tail = sectStart >= 0 ? sectStart : docXml.LastIndexOf("</w:body>", StringComparison.Ordinal);
+        var newDocXml = docXml.Substring(0, bodyOpenEnd) + body + docXml.Substring(tail);
 
-        var newXml = docXml.Substring(0, bodyOpenEnd) + BuildBodyXml(data, font) + docXml.Substring(tail);
-
-        entry.Delete();
-        var fresh = zip.CreateEntry("word/document.xml");
-        using var w = new StreamWriter(fresh.Open(), new UTF8Encoding(false));
-        w.Write(newXml);
-    }
-
-    /// <summary>Most-frequent direct run font (<c>w:rFonts w:ascii</c>) in the source body, or null.</summary>
-    private static string? SniffBodyFont(string docXml)
-    {
-        var counts = new Dictionary<string, int>();
-        foreach (Match m in Regex.Matches(docXml, "<w:rFonts[^>]*?w:ascii=\"([^\"]+)\""))
+        // Write numbering.xml first (add the per-sheet <w:num> entries), then document.xml.
+        if (canNumber && numIds.Count > 0)
         {
-            var f = m.Groups[1].Value;
-            counts[f] = counts.TryGetValue(f, out var c) ? c + 1 : 1;
+            var additions = string.Concat(numIds.Select(id =>
+                $"<w:num w:numId=\"{id}\"><w:abstractNumId w:val=\"{absId}\"/><w:lvlOverride w:ilvl=\"0\"><w:startOverride w:val=\"1\"/></w:lvlOverride></w:num>"));
+            int ni = numBase.LastIndexOf("</w:numbering>", StringComparison.Ordinal);
+            var newNum = numBase.Substring(0, ni) + additions + numBase.Substring(ni);
+            numEntry!.Delete();
+            var fn = zip.CreateEntry("word/numbering.xml");
+            using (var nw = new StreamWriter(fn.Open(), new UTF8Encoding(false))) nw.Write(newNum);
         }
-        return counts.Count == 0 ? null : counts.OrderByDescending(kv => kv.Value).First().Key;
+
+        docEntry.Delete();
+        var fd = zip.CreateEntry("word/document.xml");
+        using (var dw = new StreamWriter(fd.Open(), new UTF8Encoding(false))) dw.Write(newDocXml);
     }
 
-    private static string BuildBodyXml(RevisionNarrative.Data data, string? font)
+    private static string BuildBodyXml(RevisionNarrative.Data data, string? font, bool canNumber, int startNumId, List<int> numIds, string? absId)
     {
         var sb = new StringBuilder();
-        void Blank() => sb.Append(Para("", false, 0, 0, font));
-        void Line(string text, bool bold = false, int szHalfPt = 0, int indent = 0) => sb.Append(Para(text, bold, szHalfPt, indent, font));
+        int next = startNumId;
+        void Blank() => sb.Append(Para("", false, 0, 0, font, 0));
+        void Line(string text, bool bold = false, int szHalfPt = 0) => sb.Append(Para(text, bold, szHalfPt, 0, font, 0));
+        void Note(string text, int numId) => sb.Append(Para(text, false, 0, canNumber ? 0 : 360, font, numId));
 
         Line(data.IssueDate);
         Blank();
         Line(data.AddendumLabel, bold: true);
         Blank();
+        if (!string.IsNullOrWhiteSpace(data.BuildingName)) Line(data.BuildingName); // above the project name
         Line(data.ProjectName);
         foreach (var addr in data.AddressLines) Line(addr);
         Line(data.ProjectNumberLine);
@@ -100,10 +126,12 @@ public static class RevisionNarrativeDocxWriter
             foreach (var sheet in disc.Sheets)
             {
                 Line($"{sheet.Number} – {sheet.Name.ToUpperInvariant()}"); // en-dash separator
+                int numId = 0;
+                if (canNumber) { numId = next++; numIds.Add(numId); } // a fresh list (restarts at 1) per sheet
                 foreach (var note in sheet.Notes)
                 {
                     var label = string.IsNullOrEmpty(note.DetailNumber) ? "[insert]" : $"Detail {note.DetailNumber}";
-                    Line($"{label} - {note.Text}", indent: 360);
+                    Note($"{label} - {note.Text}", numId);
                 }
                 Blank();
             }
@@ -113,10 +141,12 @@ public static class RevisionNarrativeDocxWriter
         return sb.ToString();
     }
 
-    /// <summary>One WordprocessingML paragraph: "No Spacing" style + the sniffed run font, plus bold/size as needed.</summary>
-    private static string Para(string text, bool bold, int szHalfPt, int indent, string? font)
+    /// <summary>One WordprocessingML paragraph. numId &gt; 0 attaches native numbering; the source list's own
+    /// indent then applies, so no manual indent is added for numbered items.</summary>
+    private static string Para(string text, bool bold, int szHalfPt, int indent, string? font, int numId)
     {
         var pPr = new StringBuilder($"<w:pPr><w:pStyle w:val=\"{BodyStyle}\"/>");
+        if (numId > 0) pPr.Append($"<w:numPr><w:ilvl w:val=\"0\"/><w:numId w:val=\"{numId}\"/></w:numPr>");
         if (indent > 0) pPr.Append($"<w:ind w:left=\"{indent}\"/>");
         pPr.Append("</w:pPr>");
 
@@ -131,6 +161,52 @@ public static class RevisionNarrativeDocxWriter
             run = $"<w:r>{rPrXml}<w:t xml:space=\"preserve\">{Esc(text)}</w:t></w:r>";
         }
         return $"<w:p>{pPr}{run}</w:p>";
+    }
+
+    // ---- numbering.xml helpers ----
+    private static string? FindDecimalAbstractNum(string numXml)
+    {
+        foreach (Match m in Regex.Matches(numXml, "<w:abstractNum [^>]*?w:abstractNumId=\"(\\d+)\".*?</w:abstractNum>", RegexOptions.Singleline))
+            if (m.Value.Contains("<w:numFmt w:val=\"decimal\"")) return m.Groups[1].Value;
+        return null;
+    }
+
+    private static int MaxNumId(string numXml)
+    {
+        int max = 0;
+        foreach (Match m in Regex.Matches(numXml, "<w:num w:numId=\"(\\d+)\""))
+            max = Math.Max(max, int.Parse(m.Groups[1].Value));
+        return max;
+    }
+
+    private static int MaxAbstractNumId(string numXml)
+    {
+        int max = -1;
+        foreach (Match m in Regex.Matches(numXml, "<w:abstractNum [^>]*?w:abstractNumId=\"(\\d+)\""))
+            max = Math.Max(max, int.Parse(m.Groups[1].Value));
+        return max;
+    }
+
+    private static string InsertAbstractNum(string numXml, int newAbs)
+    {
+        var abs = $"<w:abstractNum w:abstractNumId=\"{newAbs}\"><w:multiLevelType w:val=\"singleLevel\"/>" +
+                  "<w:lvl w:ilvl=\"0\"><w:start w:val=\"1\"/><w:numFmt w:val=\"decimal\"/><w:lvlText w:val=\"%1.\"/>" +
+                  "<w:lvlJc w:val=\"left\"/><w:pPr><w:ind w:left=\"720\" w:hanging=\"360\"/></w:pPr></w:lvl></w:abstractNum>";
+        int idx = numXml.IndexOf("<w:num ", StringComparison.Ordinal);
+        if (idx < 0) idx = numXml.LastIndexOf("</w:numbering>", StringComparison.Ordinal);
+        return numXml.Substring(0, idx) + abs + numXml.Substring(idx);
+    }
+
+    /// <summary>Most-frequent direct run font (<c>w:rFonts/@w:ascii</c>) in the source body, or null.</summary>
+    private static string? SniffBodyFont(string docXml)
+    {
+        var counts = new Dictionary<string, int>();
+        foreach (Match m in Regex.Matches(docXml, "<w:rFonts[^>]*?w:ascii=\"([^\"]+)\""))
+        {
+            var f = m.Groups[1].Value;
+            counts[f] = counts.TryGetValue(f, out var c) ? c + 1 : 1;
+        }
+        return counts.Count == 0 ? null : counts.OrderByDescending(kv => kv.Value).First().Key;
     }
 
     private static string Esc(string s) =>
@@ -152,6 +228,7 @@ public static class RevisionNarrativeDocxWriter
 
         Line(data.IssueDate); Blank();
         Line(data.AddendumLabel, bold: true); Blank();
+        if (!string.IsNullOrWhiteSpace(data.BuildingName)) Line(data.BuildingName);
         Line(data.ProjectName);
         foreach (var addr in data.AddressLines) Line(addr);
         Line(data.ProjectNumberLine); Blank();
@@ -163,10 +240,11 @@ public static class RevisionNarrativeDocxWriter
             foreach (var sheet in disc.Sheets)
             {
                 Line($"{sheet.Number} – {sheet.Name.ToUpperInvariant()}");
+                int n = 1;
                 foreach (var note in sheet.Notes)
                 {
                     var label = string.IsNullOrEmpty(note.DetailNumber) ? "[insert]" : $"Detail {note.DetailNumber}";
-                    Line($"{label} - {note.Text}", indent: 360);
+                    Line($"{n++}. {label} - {note.Text}", indent: 360);
                 }
                 Blank();
             }

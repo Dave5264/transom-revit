@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using System.Text.RegularExpressions;
 using Autodesk.Revit.DB;
 
 namespace Transom.Core;
@@ -43,6 +44,7 @@ public static class RevisionNarrative
     {
         public string IssueDate = "";
         public string AddendumLabel = "";
+        public string BuildingName = "";   // shown above ProjectName when present (and used in the title block)
         public string ProjectName = "";
         public List<string> AddressLines = new();
         public string ProjectNumberLine = "";
@@ -77,13 +79,15 @@ public static class RevisionNarrative
 
         // ---- header metadata (#6: pull from Revit) ----
         var pinfo = doc.ProjectInformation;
-        data.ProjectName = SafeStr(() => pinfo?.Name) ;
+        // Building name goes above the project name when it has a value (and is shown on the title block).
+        data.BuildingName = SentenceCase(SafeStr(() => pinfo?.BuildingName));
+        data.ProjectName = SentenceCase(SafeStr(() => pinfo?.Name));
         foreach (var line in SafeStr(() => pinfo?.Address).Replace("\r", "").Split('\n'))
-            if (!string.IsNullOrWhiteSpace(line)) data.AddressLines.Add(line.Trim());
+            if (!string.IsNullOrWhiteSpace(line)) data.AddressLines.Add(SentenceCase(line.Trim()));
         var projNo = SafeStr(() => pinfo?.Number);
         data.ProjectNumberLine = $"{opts.FirmName} Project Number: {projNo}";
 
-        data.AddendumLabel = SafeStr(() => rev.Description);
+        data.AddendumLabel = SentenceCase(SafeStr(() => rev.Description));
         var revDate = SafeStr(() => rev.RevisionDate);
         data.IssueDate = FormatDate(revDate);
         if (string.IsNullOrWhiteSpace(opts.PlanSetDate)) opts.PlanSetDate = revDate;
@@ -230,6 +234,25 @@ public static class RevisionNarrative
         if (DateTime.TryParse(raw, CultureInfo.CurrentCulture, DateTimeStyles.None, out var dt))
             return dt.ToString("MMMM d, yyyy", CultureInfo.InvariantCulture);
         return string.IsNullOrWhiteSpace(raw) ? DateTime.Today.ToString("MMMM d, yyyy", CultureInfo.InvariantCulture) : raw;
+    }
+
+    /// <summary>
+    ///     Sentence-cases an ALL-CAPS string (first letter + first letter after a sentence break capitalized,
+    ///     standalone single letters kept capital so "ADDENDUM A" -> "Addendum A" and "...STREET N" keeps "N").
+    ///     Strings that already contain lowercase are left untouched, so properly-cased Revit data is preserved.
+    /// </summary>
+    private static string SentenceCase(string s)
+    {
+        if (string.IsNullOrWhiteSpace(s)) return s ?? "";
+        if (s.Any(char.IsLower)) return s; // already mixed case — assume entered correctly
+        var c = s.ToLowerInvariant().ToCharArray();
+        bool startSentence = true;
+        for (int i = 0; i < c.Length; i++)
+        {
+            if (startSentence && char.IsLetter(c[i])) { c[i] = char.ToUpperInvariant(c[i]); startSentence = false; }
+            else if (c[i] is '.' or '!' or '?') startSentence = true;
+        }
+        return Regex.Replace(new string(c), @"\b([a-z])\b", m => m.Groups[1].Value.ToUpperInvariant());
     }
 
     private static string Trunc(string s) => s.Length > 40 ? s.Substring(0, 40) + "…" : s;
