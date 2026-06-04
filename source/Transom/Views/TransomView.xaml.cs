@@ -1,3 +1,5 @@
+using System.Linq;
+using System.Windows.Controls;
 using Transom.ViewModels;
 
 namespace Transom.Views;
@@ -80,5 +82,53 @@ public sealed partial class TransomView
         // Legend term colours brightened for the dark surface (the light #1E7A34 / #B8860B are unreadable on dark).
         Set("LegendGreen", "#3FB36A");
         Set("LegendYellow", "#D8A24A");
+    }
+
+    // ----- Right-click "copy name" on the export (FilteredSchedules) and import (AffectedSchedules) lists -----
+
+    /// <summary>Copies the right-clicked schedule's name to the clipboard.</summary>
+    private void CopyScheduleName_Click(object sender, System.Windows.RoutedEventArgs e)
+    {
+        if (sender is MenuItem mi) CopyToClipboard(NameOf(ItemFor(mi)));
+    }
+
+    /// <summary>Copies every name in the list the right-clicked schedule belongs to (one per line).</summary>
+    private void CopyAllScheduleNames_Click(object sender, System.Windows.RoutedEventArgs e)
+    {
+        if (sender is not MenuItem mi || DataContext is not TransomViewModel vm) return;
+        var names = ItemFor(mi) switch
+        {
+            ScheduleEntry => vm.FilteredSchedules.Select(s => s.Name),
+            Core.SheetSummary => vm.AffectedSchedules.Select(s => s.ScheduleName),
+            _ => Enumerable.Empty<string>(),
+        };
+        CopyToClipboard(string.Join(System.Environment.NewLine, names.Where(n => !string.IsNullOrWhiteSpace(n))));
+    }
+
+    /// <summary>
+    ///     The schedule row a context-menu click targets. A ContextMenu inherits its PlacementTarget's
+    ///     DataContext (the bound row), which the MenuItem inherits in turn; fall back to reading the
+    ///     PlacementTarget explicitly if that inheritance is ever absent.
+    /// </summary>
+    private static object? ItemFor(MenuItem mi)
+    {
+        if (mi.DataContext is ScheduleEntry or Core.SheetSummary) return mi.DataContext;
+        if (mi.Parent is ContextMenu { PlacementTarget: System.Windows.FrameworkElement t }) return t.DataContext;
+        return mi.DataContext;
+    }
+
+    private static string NameOf(object? item) => item switch
+    {
+        ScheduleEntry se => se.Name,
+        Core.SheetSummary ss => ss.ScheduleName,
+        _ => "",
+    };
+
+    private static void CopyToClipboard(string text)
+    {
+        if (string.IsNullOrEmpty(text)) return;
+        // The clipboard can be transiently locked by another app; a failed copy shouldn't crash the add-in.
+        try { System.Windows.Clipboard.SetText(text); }
+        catch { /* clipboard busy — ignore */ }
     }
 }
