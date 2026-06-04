@@ -290,11 +290,13 @@ public static class RevisionNarrative
     }
 
     /// <summary>
-    ///     The Building Name as it appears in the title block — i.e. the value of a "Building Name" parameter
-    ///     carried by a title block instance placed on a sheet. Returns "" when no title block exposes it (so
-    ///     the narrative shows the building name only when it's actually in the title block). Note: this detects
-    ///     the common case where Building Name is a shared/project parameter on the title block; a title block
-    ///     that labels the built-in Project Information "Building Name" directly is not detected here.
+    ///     The Building Name to show, gated on the project actually having title blocks on sheets (the proxy
+    ///     for "used in the title block"). Two sources, in order:
+    ///       (a) a "Building Name" parameter carried by a title block instance (custom/shared-parameter setup);
+    ///       (b) the built-in Project Information "Building Name", which title blocks commonly label directly.
+    ///     Returns "" when there are no title blocks on sheets or no building name is set. (Revit's API can't
+    ///     confirm which built-in a title-block *label* displays, so (b) is gated on title blocks existing
+    ///     rather than on inspecting the label — a practical, conservative proxy.)
     /// </summary>
     private static string BuildingNameFromTitleBlock(Document doc)
     {
@@ -304,12 +306,21 @@ public static class RevisionNarrative
                 new FilteredElementCollector(doc).OfClass(typeof(ViewSheet)).Cast<ViewSheet>()
                     .Where(s => !s.IsTemplate).Select(s => s.Id.Value));
 
+            bool titleBlockOnSheet = false;
             foreach (var tb in new FilteredElementCollector(doc)
                          .OfCategory(BuiltInCategory.OST_TitleBlocks).WhereElementIsNotElementType())
             {
                 if (tb.OwnerViewId == ElementId.InvalidElementId || !onSheets.Contains(tb.OwnerViewId.Value)) continue;
-                var v = tb.LookupParameter("Building Name")?.AsString();
+                titleBlockOnSheet = true;
+                var v = tb.LookupParameter("Building Name")?.AsString(); // (a) custom/shared param on the title block
                 if (!string.IsNullOrWhiteSpace(v)) return v!;
+            }
+
+            // (b) built-in Project Information "Building Name" (what this firm's title block labels).
+            if (titleBlockOnSheet)
+            {
+                var builtIn = doc.ProjectInformation?.BuildingName;
+                if (!string.IsNullOrWhiteSpace(builtIn)) return builtIn!;
             }
         }
         catch { /* best-effort */ }
