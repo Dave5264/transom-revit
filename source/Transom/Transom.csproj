@@ -59,4 +59,26 @@
         <Folder Include="Models"/>
     </ItemGroup>
 
+    <!-- Optional Claude UI-Assist payload. Bundle the two self-contained Click Helper exes next to Transom.dll
+         so the local dev deploy (DeployAddin) ships them — mirroring what PublishClickHelperModule does for the
+         installer's publish folders. <Link> forces them to the output root (not a mirrored sub-path); <Visible>
+         hides them in Solution Explorer. Guarded by Exists(): a fresh clone that hasn't published the Click
+         Helper projects simply skips them and the build still succeeds — run the build pipeline (or publish
+         those two projects) to populate the payload. They are version-agnostic (one net8.0-windows self-contained
+         exe drives Revit 2025/2026/2027), so the same files are bundled for every configuration. -->
+    <ItemGroup>
+        <None Include="..\Transom.ClickHelper\bin\Release\net8.0-windows\win-x64\publish\Transom.ClickHelper.exe"
+              Condition="Exists('..\Transom.ClickHelper\bin\Release\net8.0-windows\win-x64\publish\Transom.ClickHelper.exe')">
+            <Link>Transom.ClickHelper.exe</Link>
+            <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+            <Visible>false</Visible>
+        </None>
+        <None Include="..\Transom.ClickHelper.Mcp\bin\Release\net8.0\win-x64\publish\Transom.ClickHelper.Mcp.exe"
+              Condition="Exists('..\Transom.ClickHelper.Mcp\bin\Release\net8.0\win-x64\publish\Transom.ClickHelper.Mcp.exe')">
+            <Link>Transom.ClickHelper.Mcp.exe</Link>
+            <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+            <Visible>false</Visible>
+        </None>
+    </ItemGroup>
+
 </Project>

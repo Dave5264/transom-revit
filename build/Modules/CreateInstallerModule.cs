@@ -21,6 +21,7 @@ namespace Build.Modules;
 [DependsOn<ResolveVersioningModule>]
 [DependsOn<CompileProjectModule>]
 [DependsOn<PublishShimModule>]
+[DependsOn<PublishClickHelperModule>]
 public sealed class CreateInstallerModule(IOptions<BuildOptions> buildOptions) : Module
 {
     protected override async Task ExecuteModuleAsync(IModuleContext context, CancellationToken cancellationToken)
