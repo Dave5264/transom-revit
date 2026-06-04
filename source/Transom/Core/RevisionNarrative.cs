@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using System.Text;
 using System.Text.RegularExpressions;
 using Autodesk.Revit.DB;
 
@@ -81,14 +82,14 @@ public static class RevisionNarrative
         var pinfo = doc.ProjectInformation;
         // Building name is read FROM the title block, so it only appears when it's actually used there
         // (and uses the exact value shown on the sheets). Empty => not shown.
-        data.BuildingName = SentenceCase(BuildingNameFromTitleBlock(doc));
-        data.ProjectName = SentenceCase(SafeStr(() => pinfo?.Name));
+        data.BuildingName = TitleCaseSmart(BuildingNameFromTitleBlock(doc));
+        data.ProjectName = TitleCaseSmart(SafeStr(() => pinfo?.Name));
         foreach (var line in SafeStr(() => pinfo?.Address).Replace("\r", "").Split('\n'))
-            if (!string.IsNullOrWhiteSpace(line)) data.AddressLines.Add(SentenceCase(line.Trim()));
+            if (!string.IsNullOrWhiteSpace(line)) data.AddressLines.Add(TitleCaseSmart(line.Trim()));
         var projNo = SafeStr(() => pinfo?.Number);
         data.ProjectNumberLine = $"{opts.FirmName} Project Number: {projNo}";
 
-        data.AddendumLabel = SentenceCase(SafeStr(() => rev.Description));
+        data.AddendumLabel = TitleCaseSmart(SafeStr(() => rev.Description));
         var revDate = SafeStr(() => rev.RevisionDate);
         data.IssueDate = FormatDate(revDate);
         if (string.IsNullOrWhiteSpace(opts.PlanSetDate)) opts.PlanSetDate = revDate;
@@ -113,7 +114,7 @@ public static class RevisionNarrative
 
         foreach (var c in clouds)
         {
-            var comment = NormalizeText(c.LookupParameter("Comments")?.AsString() ?? "", opts.Normalize);
+            var comment = NormalizeNote(c.LookupParameter("Comments")?.AsString() ?? "", opts.Normalize);
             if (string.IsNullOrWhiteSpace(comment)) { noComment++; continue; }
             var mark = SafeStr(() => c.LookupParameter("Mark")?.AsString());
 
@@ -221,13 +222,64 @@ public static class RevisionNarrative
             : (1, 0, detail);
     }
 
-    private static string NormalizeText(string s, bool on)
+    /// <summary>
+    ///     Normalizes a revision-cloud comment to sentence case and ensures end punctuation, while PRESERVING
+    ///     sheet references / callouts ("3/A501", "S402", "20/S301") and acronyms ("SCEC", "CFM", "SIM") so they
+    ///     are never lowercased. A comment typed in ALL CAPS is fully sentence-cased; a mixed-case comment is
+    ///     left as written (only its first letter is ensured capital), so intentional casing/acronyms survive.
+    /// </summary>
+    private static string NormalizeNote(string s, bool on)
     {
         s = (s ?? "").Trim();
         if (!on || s.Length == 0) return s;
-        if (char.IsLetter(s[0]) && char.IsLower(s[0])) s = char.ToUpper(s[0]) + s.Substring(1);
-        if (!s.EndsWith(".") && !s.EndsWith("!") && !s.EndsWith("?")) s += ".";
-        return s;
+
+        bool entirelyUpper = !s.Any(char.IsLower);
+        var sb = new StringBuilder();
+        bool capNext = true;
+        foreach (var tok in Regex.Split(s, @"(\s+)"))
+        {
+            if (tok.Length == 0) continue;
+            if (string.IsNullOrWhiteSpace(tok)) { sb.Append(tok); continue; }
+
+            if (IsProtectedToken(tok, entirelyUpper))
+            {
+                sb.Append(tok); // sheet ref / callout / acronym — keep verbatim
+            }
+            else
+            {
+                var w = (entirelyUpper ? tok.ToLowerInvariant() : tok).ToCharArray();
+                if (capNext)
+                    for (int i = 0; i < w.Length; i++)
+                        if (char.IsLetter(w[i])) { w[i] = char.ToUpperInvariant(w[i]); break; }
+                sb.Append(new string(w));
+            }
+            capNext = EndsSentence(tok);
+        }
+
+        var result = sb.ToString().TrimEnd();
+        if (result.Length > 0)
+        {
+            char last = result[result.Length - 1];
+            if (last is not ('.' or '!' or '?' or ':')) result += ".";
+        }
+        return result;
+    }
+
+    /// <summary>Sheet references / callouts (letters+digits, optional "n/" prefix) and — in otherwise mixed-case
+    /// text — short ALL-CAPS acronyms, are kept verbatim during note normalization.</summary>
+    private static bool IsProtectedToken(string tok, bool entirelyUpper)
+    {
+        var core = tok.Trim('(', ')', '.', ',', ';', ':', '"');
+        if (Regex.IsMatch(core, @"[A-Za-z]{1,3}\d{2,4}")) return true;           // A601, 3/A601, 20/S301
+        if (core.Contains('/') && Regex.IsMatch(core, "[A-Za-z]")) return true;  // generic "n/Sheet" callouts
+        if (!entirelyUpper && Regex.IsMatch(core, @"^[A-Z][A-Z0-9]{1,5}$")) return true; // SCEC, CFM, SIM, MLO
+        return false;
+    }
+
+    private static bool EndsSentence(string tok)
+    {
+        var t = tok.TrimEnd('"', ')');
+        return t.EndsWith(".") || t.EndsWith("!") || t.EndsWith("?");
     }
 
     private static string FormatDate(string raw)
@@ -264,23 +316,43 @@ public static class RevisionNarrative
         return "";
     }
 
+    private static readonly HashSet<string> SmallWords = new(StringComparer.OrdinalIgnoreCase)
+        { "of", "the", "and", "a", "an", "in", "on", "at", "to", "for", "by", "or", "nor", "but", "de", "la" };
+
     /// <summary>
-    ///     Sentence-cases an ALL-CAPS string (first letter + first letter after a sentence break capitalized,
-    ///     standalone single letters kept capital so "ADDENDUM A" -> "Addendum A" and "...STREET N" keeps "N").
-    ///     Strings that already contain lowercase are left untouched, so properly-cased Revit data is preserved.
+    ///     Title-cases an ALL-CAPS string the way a name/address reads: each significant word capitalized,
+    ///     small connector words (of, the, and…) kept lower (except first), standalone single letters kept
+    ///     capital (designators "A"/"B", directions "N"/"S"), and tokens starting with a digit untouched
+    ///     ("29th", "1200"). Strings that already contain lowercase are left as entered in Revit.
+    ///     e.g. "1200 WEST 29TH STREET N" -> "1200 West 29th Street N"; "SPRINGFIELD, KANSAS" -> "Springfield, Kansas".
     /// </summary>
-    private static string SentenceCase(string s)
+    private static string TitleCaseSmart(string s)
     {
         if (string.IsNullOrWhiteSpace(s)) return s ?? "";
         if (s.Any(char.IsLower)) return s; // already mixed case — assume entered correctly
-        var c = s.ToLowerInvariant().ToCharArray();
-        bool startSentence = true;
-        for (int i = 0; i < c.Length; i++)
+
+        var sb = new StringBuilder();
+        bool first = true;
+        foreach (var tok in Regex.Split(s.ToLowerInvariant(), @"(\s+)"))
         {
-            if (startSentence && char.IsLetter(c[i])) { c[i] = char.ToUpperInvariant(c[i]); startSentence = false; }
-            else if (c[i] is '.' or '!' or '?') startSentence = true;
+            if (tok.Length == 0) continue;
+            if (string.IsNullOrWhiteSpace(tok)) { sb.Append(tok); continue; }
+
+            var core = tok.Trim('(', ')', '.', ',', ';', ':', '"', '#');
+            if (core.Length == 1 && char.IsLetter(core[0])) sb.Append(tok.ToUpperInvariant()); // A, B, N, S…
+            else if (!first && SmallWords.Contains(core)) sb.Append(tok);                        // of, the, and…
+            else sb.Append(CapFirstLetter(tok));
+            first = false;
         }
-        return Regex.Replace(new string(c), @"\b([a-z])\b", m => m.Groups[1].Value.ToUpperInvariant());
+        return sb.ToString();
+    }
+
+    /// <summary>Capitalizes the first character only when the token starts with a letter (so "29th"/"1200" stay).</summary>
+    private static string CapFirstLetter(string tok)
+    {
+        var c = tok.ToCharArray();
+        if (c.Length > 0 && char.IsLetter(c[0])) c[0] = char.ToUpperInvariant(c[0]);
+        return new string(c);
     }
 
     private static string Trunc(string s) => s.Length > 40 ? s.Substring(0, 40) + "…" : s;
