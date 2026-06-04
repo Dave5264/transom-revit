@@ -58,7 +58,12 @@ public static class RevisionNarrativeDocxWriter
                 Line(doc, $"{sheet.Number} – {sheet.Name.ToUpperInvariant()}"); // en-dash separator
                 int n = 1;
                 foreach (var note in sheet.Notes)
-                    Line(doc, $"{n++}. {note.Text}", indentTwips: 360);
+                {
+                    // List the detail number when the cloud is in a detail; otherwise an [insert] placeholder
+                    // the user fills in (cloud drawn directly on the sheet / detail not discoverable).
+                    var tag = string.IsNullOrEmpty(note.DetailNumber) ? "insert" : $"Detail {note.DetailNumber}";
+                    Line(doc, $"{n++}. [{tag}] {note.Text}", indentTwips: 360);
+                }
                 Blank(doc);
             }
         }

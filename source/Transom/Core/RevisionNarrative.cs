@@ -97,6 +97,11 @@ public static class RevisionNarrative
             .Where(c => c.RevisionId == revisionId)
             .ToList();
 
+        // Precompute viewport placements once: a view (AND its dependents, keyed by the primary's id) ->
+        // [(sheet, detail number)]. This is what lets us (a) list the detail number for a cloud that sits in
+        // a viewport, (b) resolve dependent-view placements, and (c) find the sheet a LEGEND is placed on.
+        var byView = BuildViewportIndex(doc);
+
         int noComment = 0, orphan = 0;
         // discipline name -> (sheet key -> Sheet)
         var byDiscipline = new Dictionary<string, Dictionary<string, Sheet>>();
@@ -107,21 +112,30 @@ public static class RevisionNarrative
             if (string.IsNullOrWhiteSpace(comment)) { noComment++; continue; }
             var mark = SafeStr(() => c.LookupParameter("Mark")?.AsString());
 
-            ISet<ElementId> sheetIds;
-            try { sheetIds = c.GetSheetIds(); } catch { sheetIds = new HashSet<ElementId>(); }
-            if (sheetIds.Count == 0) { orphan++; data.Warnings.Add($"Cloud {c.Id.Value} (\"{Trunc(comment)}\") is on no sheet — skipped."); continue; }
+            // Resolve the sheet placement(s) for this cloud, each with its detail number where discoverable.
+            // sheetId.Value -> (sheetId, detail) ; detail "" means "on a sheet but no discernible detail".
+            var placements = new Dictionary<long, (ElementId sheet, string detail)>();
+            if (byView.TryGetValue(c.OwnerViewId.Value, out var vpList))
+                foreach (var (s, d) in vpList) placements[s.Value] = (s, d);
+            ISet<ElementId> getSheets;
+            try { getSheets = c.GetSheetIds(); } catch { getSheets = new HashSet<ElementId>(); }
+            foreach (var sid in getSheets)
+                if (!placements.ContainsKey(sid.Value)) placements[sid.Value] = (sid, ""); // on sheet, detail unknown -> [insert]
+            if (doc.GetElement(c.OwnerViewId) is ViewSheet ownerSheet && !placements.ContainsKey(ownerSheet.Id.Value))
+                placements[ownerSheet.Id.Value] = (ownerSheet.Id, ""); // cloud drawn directly on the sheet -> [insert]
 
-            foreach (var sid in sheetIds)
+            if (placements.Count == 0) { orphan++; data.Warnings.Add($"Cloud {c.Id.Value} (\"{Trunc(comment)}\") could not be attributed to a sheet — skipped."); continue; }
+
+            foreach (var kv in placements)
             {
-                if (doc.GetElement(sid) is not ViewSheet sh) continue;
+                if (doc.GetElement(kv.Value.sheet) is not ViewSheet sh) continue;
                 var number = SafeStr(() => sh.SheetNumber);
                 var name = SafeStr(() => sh.Name);
-                var detail = DetailNumberOf(doc, sh, c.OwnerViewId);
 
                 var disc = DisciplineFor(number);
                 if (!byDiscipline.TryGetValue(disc, out var sheetMap)) { sheetMap = new Dictionary<string, Sheet>(); byDiscipline[disc] = sheetMap; }
                 if (!sheetMap.TryGetValue(number, out var sheet)) { sheet = new Sheet { Number = number, Name = name }; sheetMap[number] = sheet; }
-                sheet.Notes.Add(new Note { Text = comment, DetailNumber = detail, Mark = mark, CloudId = c.Id.Value });
+                sheet.Notes.Add(new Note { Text = comment, DetailNumber = kv.Value.detail, Mark = mark, CloudId = c.Id.Value });
             }
         }
 
@@ -158,17 +172,39 @@ public static class RevisionNarrative
         return "Other";
     }
 
-    /// <summary>View's detail (viewport) number on a sheet; "" when the cloud sits directly on the sheet.</summary>
-    private static string DetailNumberOf(Document doc, ViewSheet sheet, ElementId viewId)
+    /// <summary>
+    ///     Maps every placed view -> [(sheet, detail number)] by scanning all viewports once. Dependent views
+    ///     are ALSO indexed under their primary view's id, so a cloud owned by the primary resolves to the
+    ///     dependent's sheet + detail number. This is what makes detail numbers, dependent-view placements, and
+    ///     legend-on-sheet placements all resolvable.
+    /// </summary>
+    private static Dictionary<long, List<(ElementId sheet, string detail)>> BuildViewportIndex(Document doc)
     {
-        try
+        var map = new Dictionary<long, List<(ElementId, string)>>();
+        void Add(long key, ElementId sheet, string detail)
         {
-            foreach (var vpId in sheet.GetAllViewports())
-                if (doc.GetElement(vpId) is Viewport vp && vp.ViewId == viewId)
-                    return vp.get_Parameter(BuiltInParameter.VIEWPORT_DETAIL_NUMBER)?.AsString() ?? "";
+            if (!map.TryGetValue(key, out var list)) { list = new List<(ElementId, string)>(); map[key] = list; }
+            if (!list.Any(t => t.Item1 == sheet)) list.Add((sheet, detail));
         }
-        catch { /* cloud directly on sheet / dependent view */ }
-        return "";
+        foreach (var vp in new FilteredElementCollector(doc).OfClass(typeof(Viewport)).Cast<Viewport>())
+        {
+            ElementId sheetId, viewId;
+            try { sheetId = vp.SheetId; viewId = vp.ViewId; } catch { continue; }
+            if (sheetId == ElementId.InvalidElementId || viewId == ElementId.InvalidElementId) continue;
+            var detail = "";
+            try { detail = vp.get_Parameter(BuiltInParameter.VIEWPORT_DETAIL_NUMBER)?.AsString() ?? ""; } catch { /* no detail # */ }
+            Add(viewId.Value, sheetId, detail);
+            try
+            {
+                if (doc.GetElement(viewId) is View v)
+                {
+                    var primary = v.GetPrimaryViewId();
+                    if (primary != ElementId.InvalidElementId && primary != viewId) Add(primary.Value, sheetId, detail);
+                }
+            }
+            catch { /* primary view lookup unavailable */ }
+        }
+        return map;
     }
 
     // detail numbers sort numerically when possible, else lexically; blanks last.
