@@ -882,6 +882,7 @@ public sealed class Importer
             {
                 if (ch.Frozen) continue; // can't be written — shown greyed in the preview only
                 if (ch.Resolution == GroupResolution.NewTypeParam) continue; // handled in the bulk pass above
+                if (ch.Resolution == GroupResolution.GroupDance) continue;   // handled by GroupDanceApplier AFTER this transaction
                 if (ch.GroupMode == GroupMode.BuiltinDance) continue; // built-in group param — staged for Claude-assist, not applied here
 
                 // Bulk instance write (grouped schedule): apply to every instance the row represented.

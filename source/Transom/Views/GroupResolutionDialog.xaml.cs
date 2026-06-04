@@ -48,16 +48,11 @@ public partial class GroupResolutionDialog : Window
             unavailable.Add("• Option 2 (new type parameter) is unavailable here: values differ between instances " +
                             "of the same type, so they can’t live in a single type parameter.");
 
-        // Option 3 currently hands the dance off to Claude-assist (the automated C# dance is pending review),
-        // so it's only actionable when Claude-assist is on — gate it like option 4.
-        if (p.AssistEnabled)
-            AddOption(GroupResolution.GroupDance,
-                "3.  The group dance: ungroup, edit, regroup, update siblings, rename, purge the unused one",
-                "Keeps parameters intact.",
-                "Batch group actions are error prone.  (For now Claude performs the dance; an automated version is pending review.)");
-        else
-            unavailable.Add("• Option 3 (group dance) is unavailable: it currently hands off to Claude — set Claude " +
-                            "mode to “Assist (write)” to enable it.");
+        // Option 3 is performed automatically by Transom (GroupDanceApplier) — available regardless of Claude.
+        AddOption(GroupResolution.GroupDance,
+            "3.  The group dance (automatic): Transom ungroups one instance, edits, regroups, repoints the siblings, renames, and purges the old type",
+            "Keeps parameters intact; each group is verified, with full rollback if anything goes wrong.",
+            "Batch group actions are inherently risky — Transom refuses (skips) unsafe groups: attached detail, nested groups, excluded/varying members, single-instance, or read-only params.");
 
         // Option 4 — only when Claude-assist is on.
         if (p.AssistEnabled)

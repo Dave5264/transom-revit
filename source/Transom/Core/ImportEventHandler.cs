@@ -74,8 +74,22 @@ public sealed class ImportEventHandler : IExternalEventHandler
                 finally { app.DialogBoxShowing -= dh; }
 
                 if (dialogs.Count > 0) status += $"  ·  {dialogs.Count} Revit prompt(s) auto-dismissed (see log)";
+
+                // Resolution option 3 (automated group dance) runs AFTER the import transaction has committed,
+                // because the dance opens its OWN per-group-type transactions (ungroup/regroup must not be nested
+                // in the import write). GroupDanceApplier manages its own dialog suppression + rollback.
+                var danceChanges = PendingChangeSet.Changes
+                    .Where(c => c.Resolution == GroupResolution.GroupDance && !c.Frozen).ToList();
+                string danceLog = "";
+                if (danceChanges.Count > 0)
+                {
+                    var dr = new GroupDanceApplier().Apply(doc, danceChanges, app);
+                    status += $"  ·  group dance: {dr.Danced} danced, {dr.Skipped} skipped, {dr.Failed} failed";
+                    danceLog = "\n\n" + dr.Log;
+                }
+
                 OnApplied(status);
-                OnAppliedLog(PendingChangeSet.DiagnosticLog + (dialogs.Count > 0
+                OnAppliedLog(PendingChangeSet.DiagnosticLog + danceLog + (dialogs.Count > 0
                     ? "\n\n== Revit prompts auto-dismissed during apply ==\n  - " + string.Join("\n  - ", dialogs)
                     : ""));
             }

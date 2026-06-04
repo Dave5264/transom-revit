@@ -340,7 +340,8 @@ public sealed partial class TransomViewModel : ObservableObject
 
         var varyChanges = new List<ProposedChange>();      // option 1 — Transom enables vary + writes per instance
         var newParamChanges = new List<ProposedChange>();  // option 2 — Importer creates a new type param
-        var stagedChanges = new List<ProposedChange>();    // option 3/4 — staged for Claude (dance / UI-assist)
+        var danceChanges = new List<ProposedChange>();     // option 3 — Transom runs the automated group dance
+        var stagedChanges = new List<ProposedChange>();    // option 4 — staged for Claude (UI-assist)
         bool wantClickHelper = false;
 
         // ONE picker per distinct blue/yellow column (parameter); the user chooses a resolution path for each.
@@ -377,8 +378,7 @@ public sealed partial class TransomViewModel : ObservableObject
                     break;
                 case GroupResolution.GroupDance:
                     foreach (var c in list) c.Resolution = GroupResolution.GroupDance;
-                    stagedChanges.AddRange(list);
-                    if (assist) wantClickHelper = true;
+                    danceChanges.AddRange(list);   // Transom performs the dance automatically (in ImportEventHandler)
                     break;
                 case GroupResolution.ClaudeAssist:
                     foreach (var c in list) c.Resolution = GroupResolution.ClaudeAssist;
@@ -409,8 +409,9 @@ public sealed partial class TransomViewModel : ObservableObject
             }
         }
 
-        // Direct + vary + new-type-param edits all go to the Importer; it routes each by Resolution/GroupMode.
-        var toApplyList = directChanges.Concat(varyChanges).Concat(newParamChanges).ToList();
+        // Direct + vary + new-type-param + group-dance edits all go to the Importer event; it applies the first
+        // three in the import transaction and runs the automated dance (option 3) afterward in its own transactions.
+        var toApplyList = directChanges.Concat(varyChanges).Concat(newParamChanges).Concat(danceChanges).ToList();
         string groupNote = notes.Count > 0 ? string.Join("  ·  ", notes.Where(n => n.Length > 0)) : "";
         if (toApplyList.Count == 0)
         {
