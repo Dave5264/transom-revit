@@ -29,6 +29,7 @@ public sealed class ImportRow
     public string UniqueId = "";   // instance UniqueId (element rows) or type UniqueId (type rows)
     public string Kind = "element";  // element | type
     public List<string>? InstanceIds;  // type rows only: instances to bulk-write; null when ambiguous
+    public List<string>? AggregatedTypeUids;  // multi-type rows: every type uid a type edit fans out to
     public string[] Cells = System.Array.Empty<string>();
 
     /// <summary>Set on an editable group-header row: its value cell bulk-writes the group field to its members.</summary>
@@ -59,6 +60,9 @@ public sealed class ImportSheet
 
     /// <summary>Type rows only: type uniqueId -> instances it represents (bulk write-back).</summary>
     public Dictionary<string, List<string>> RowInstanceIds = new();
+
+    /// <summary>Multi-type rows: anchor uniqueId -> the full list of type uids a type edit must fan out to.</summary>
+    public Dictionary<string, List<string>> RowAggregatedTypeUids = new();
 
     /// <summary>Editable group-header rows: synthetic uid -> its bulk-write spec.</summary>
     public Dictionary<string, GroupHeaderEdit> RowGroupHeaderEdits = new();
@@ -178,6 +182,14 @@ public sealed class ExcelReader
                         foreach (var ip in iel.EnumerateArray())
                             if (ip.ValueKind == JsonValueKind.String) ids.Add(ip.GetString()!);
                         imp.RowInstanceIds[uid] = ids;
+                    }
+
+                    if (rm.TryGetProperty("aggregatedTypeUids", out var ael) && ael.ValueKind == JsonValueKind.Array)
+                    {
+                        var agg = new List<string>();
+                        foreach (var ap in ael.EnumerateArray())
+                            if (ap.ValueKind == JsonValueKind.String) agg.Add(ap.GetString()!);
+                        if (agg.Count > 0) imp.RowAggregatedTypeUids[uid] = agg;
                     }
 
                     if (rm.TryGetProperty("groupHeaderEdit", out var gh) && gh.ValueKind == JsonValueKind.Object)
@@ -319,6 +331,7 @@ public sealed class ExcelReader
                 UniqueId = uid,
                 Kind = kind,
                 InstanceIds = imp.RowInstanceIds.TryGetValue(uid, out var ids) ? ids : null,
+                AggregatedTypeUids = imp.RowAggregatedTypeUids.TryGetValue(uid, out var agg) ? agg : null,
                 GroupHeaderEdit = imp.RowGroupHeaderEdits.TryGetValue(uid, out var ghe) ? ghe : null,
                 Cells = cells,
             });

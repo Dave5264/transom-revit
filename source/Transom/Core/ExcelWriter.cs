@@ -378,7 +378,7 @@ public sealed class ExcelWriter
                 rows = p.t.Rows.Select(r => new
                 {
                     excelRow = r.ExcelRow, uniqueId = r.UniqueId, kind = r.Kind, bindings = r.Bindings,
-                    instanceIds = r.InstanceIds,
+                    instanceIds = r.InstanceIds, aggregatedTypeUids = r.AggregatedTypeUids,
                     groupHeaderEdit = r.GroupHeaderEdit == null ? null : new
                     {
                         col = r.GroupHeaderEdit.Col, parameterId = r.GroupHeaderEdit.ParameterId,

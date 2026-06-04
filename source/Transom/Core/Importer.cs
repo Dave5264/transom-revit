@@ -504,6 +504,19 @@ public sealed class Importer
 
         var nameEl = (typeEl ?? reprInst)!;   // non-null: type rows have a type, group rows have a live instance
 
+        // #3: a multi-type row (a Type Mark shared by 2+ types) fans each TYPE edit out to EVERY aggregated type;
+        // single-type rows fall back to the one anchor. ResolveTypeGroups then skips any type the value already matches.
+        void RecordTypeAll(ImportColumn c, string text)
+        {
+            var targets = row.AggregatedTypeUids ?? new List<string> { row.UniqueId };
+            foreach (var tuid in targets)
+            {
+                var te = doc.GetElement(tuid);
+                var tp = te == null ? null : GetParam(te, c.ParameterId);
+                if (tp != null && !tp.IsReadOnly) RecordType(typeGroups, sheet, c, te, tp, label, row.ExcelRow, text);
+            }
+        }
+
         foreach (var col in sheet.Columns)
         {
             if (!col.Writable || !col.Matched || col.ExcelCol >= row.Cells.Length) continue;
@@ -545,7 +558,7 @@ public sealed class Importer
                 if (!edited) continue;
 
                 if (param.StorageType == StorageType.String)
-                    RecordType(typeGroups, sheet, col, typeEl!, param, label, row.ExcelRow, cellText);
+                    RecordTypeAll(col, cellText);
                 else if (param.StorageType == StorageType.Double && col.SpecTypeId != null)
                 {
                     if (!UnitFormatUtils.TryParse(units, new ForgeTypeId(col.SpecTypeId), cellText, out _))
@@ -554,7 +567,7 @@ public sealed class Importer
                         cs.Diagnostics.Add(Diag(sheet, row, col, label, "red", "value can't be parsed", cellText));
                         continue;
                     }
-                    RecordType(typeGroups, sheet, col, typeEl!, param, label, row.ExcelRow, cellText);
+                    RecordTypeAll(col, cellText);
                 }
                 else
                 {

@@ -305,6 +305,31 @@ public sealed class ScheduleReader
         // (multi-field grouping) leaves instance scope ambiguous -> skip those rows' instance writes.
         var typeRowCount = anchors.Where(a => a != null).GroupBy(a => a!).ToDictionary(g => g.Key, g => g.Count());
 
+        // #3: detect Type-Mark groups shared by 2+ types (e.g. "UJ" -> two near-identical types). They collapse to
+        // ONE rendered row the per-type anchor can't resolve; we still make that row editable, anchored to ALL its
+        // types (a type edit fans out to each). Only when grouped by visible field(s), so the row's group key is
+        // readable from its cells.
+        var sgParams = new List<int>();
+        foreach (var sg in def.GetSortGroupFields())
+        {
+            var sgf = def.GetField(sg.FieldId);
+            if (sgf != null) sgParams.Add((int)sgf.ParameterId.Value);
+        }
+        var sgCols = sgParams.Select(pid => table.Columns.FirstOrDefault(c => c.ParameterId == pid)?.Col ?? -1).ToList();
+        bool canMulti = grouped && !fieldGrouped && sgParams.Count > 0 && sgCols.All(c => c >= 0);
+        var typesByGroupKey = new Dictionary<string, List<string>>();
+        if (canMulti)
+            foreach (var kv in uidToElement)
+            {
+                var gkey = GroupKeyOf(kv.Value, sgParams);
+                if (!typesByGroupKey.TryGetValue(gkey, out var lst)) { lst = new List<string>(); typesByGroupKey[gkey] = lst; }
+                lst.Add(kv.Key);
+            }
+        string RowKey(int rr) => string.Join("", sgCols.Select(c => c < table.ColCount ? table.Cells[rr][c].Text : ""));
+        bool RowKeyPresent(int rr) => sgCols.Any(c => c < table.ColCount && !string.IsNullOrEmpty(table.Cells[rr][c].Text));
+        bool HasDataBeyondKey(int rr) => table.Columns.Any(c => c.Writable && !sgCols.Contains(c.Col)
+            && c.Col < table.ColCount && !string.IsNullOrEmpty(table.Cells[rr][c.Col].Text));
+
         var writable = table.Columns.Where(c => c.Writable).ToList();
         for (int r = 0; r < table.RowCount; r++)
         {
@@ -364,10 +389,75 @@ public sealed class ScheduleReader
                     if (bulkCols.Count > 0) meta.BulkCols = bulkCols;
                 }
             }
+            else if (canMulti && !(r == 0 && table.HasHeaderRow) && !RowAllEmpty(table, r)
+                     && RowKeyPresent(r) && HasDataBeyondKey(r)
+                     && typesByGroupKey.TryGetValue(RowKey(r), out var aggTypes) && aggTypes.Count >= 2)
+                BuildMultiTypeRow(table, meta, aggTypes, typeToInstances);
             else if (r == 0 && table.HasHeaderRow) meta.Kind = "columnHeader";
             else meta.Kind = RowAllEmpty(table, r) ? "blank" : "groupHeader";
             table.Rows.Add(meta);
         }
+    }
+
+    /// <summary>The sort/group key of an element: its sort/group field values joined (matches a rendered row's key).</summary>
+    private string GroupKeyOf(Element e, List<int> paramIds)
+    {
+        var parts = new string[paramIds.Count];
+        for (int i = 0; i < paramIds.Count; i++)
+        {
+            var p = GetParamOn(e, paramIds[i]);
+            parts[i] = p == null ? "" : p.StorageType == StorageType.String ? p.AsString() ?? "" : p.AsValueString() ?? "";
+        }
+        return string.Join("", parts);
+    }
+
+    /// <summary>#3: turns a multi-type row (a Type Mark shared by 2+ types) into an editable "type" row anchored to
+    /// ALL its types. InstanceIds = the union of every type's instances; the per-column hint colours are the WORST
+    /// CASE across the aggregated types (sets are unioned, and ExcelWriter's grey&gt;blue&gt;yellow&gt;green precedence
+    /// picks the most-cautionary). A type edit fans out to every type on import (see Importer.RecordTypeAll).</summary>
+    private void BuildMultiTypeRow(ScheduleTable table, RowMeta meta, List<string> typeUids,
+        Dictionary<string, List<string>> typeToInstances)
+    {
+        meta.Kind = "type";
+        meta.UniqueId = typeUids[0];          // representative -> carried in the anchor column
+        meta.AggregatedTypeUids = typeUids;   // a type edit fans out to all of these
+
+        var allInstances = new List<string>();
+        var bindings = new Dictionary<int, string>();
+        var frozen = new HashSet<int>();
+        var groupProject = new HashSet<int>();
+        var groupBuiltin = new HashSet<int>();
+        var bulk = new HashSet<int>();
+
+        foreach (var tuid in typeUids)
+        {
+            if (!typeToInstances.TryGetValue(tuid, out var members) || members.Count == 0) continue;
+            allInstances.AddRange(members);
+            var repr = _doc.GetElement(members[0]);
+            if (repr == null) continue;
+            bool anyMemberGrouped = members.Select(m => _doc.GetElement(m))
+                .Any(inst => inst != null && inst.GroupId != null && inst.GroupId != ElementId.InvalidElementId);
+            foreach (var col in table.Columns)
+            {
+                if (!col.Writable) { frozen.Add(col.Col); continue; }
+                var bind = ResolveBinding(repr, col.ParameterId, col.Binding);
+                if (!bindings.ContainsKey(col.Col)) bindings[col.Col] = bind;
+                if (!col.ImportEditable) { frozen.Add(col.Col); continue; }
+                if (anyMemberGrouped && bind == "instance")
+                {
+                    if (col.ParameterId >= 0) groupProject.Add(col.Col);
+                    else groupBuiltin.Add(col.Col);
+                }
+                else if (bind == "type") bulk.Add(col.Col);
+            }
+        }
+
+        meta.InstanceIds = allInstances;
+        meta.Bindings = bindings;
+        if (frozen.Count > 0) meta.FrozenCols = frozen;
+        if (groupProject.Count > 0) meta.GroupProjectCols = groupProject;
+        if (groupBuiltin.Count > 0) meta.GroupBuiltinCols = groupBuiltin;
+        if (bulk.Count > 0) meta.BulkCols = bulk;
     }
 
     /// <summary>

@@ -56,6 +56,11 @@ public sealed class RowMeta
     /// <summary>For grouped "type" rows: the instances this row represents (bulk instance write-back). Null when itemized or ambiguous.</summary>
     public List<string>? InstanceIds;
 
+    /// <summary>When a Type Mark (or sort/group key) is shared by 2+ types, the row collapses to ONE rendered row.
+    /// This is the full list of type UniqueIds it represents — a type edit fans out to every one. Null = single type
+    /// (use <see cref="UniqueId"/>). When set, <see cref="UniqueId"/> is the first one (the anchor-column representative).</summary>
+    public List<string>? AggregatedTypeUids;
+
     /// <summary>Column indices that can never be written on import for this row's element (greyed on export).</summary>
     public HashSet<int>? FrozenCols;
 
