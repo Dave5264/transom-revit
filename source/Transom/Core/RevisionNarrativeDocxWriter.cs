@@ -56,13 +56,12 @@ public static class RevisionNarrativeDocxWriter
             foreach (var sheet in disc.Sheets)
             {
                 Line(doc, $"{sheet.Number} – {sheet.Name.ToUpperInvariant()}"); // en-dash separator
-                int n = 1;
                 foreach (var note in sheet.Notes)
                 {
-                    // List the detail number when the cloud is in a detail; otherwise an [insert] placeholder
-                    // the user fills in (cloud drawn directly on the sheet / detail not discoverable).
-                    var tag = string.IsNullOrEmpty(note.DetailNumber) ? "insert" : $"Detail {note.DetailNumber}";
-                    Line(doc, $"{n++}. [{tag}] {note.Text}", indentTwips: 360);
+                    // "Detail N - text" when the cloud's detail location is known; "[insert] - text" when it
+                    // isn't (cloud drawn directly on the sheet / detail not discoverable) for the user to fill.
+                    var label = string.IsNullOrEmpty(note.DetailNumber) ? "[insert]" : $"Detail {note.DetailNumber}";
+                    Line(doc, $"{label} - {note.Text}", indentTwips: 360);
                 }
                 Blank(doc);
             }
