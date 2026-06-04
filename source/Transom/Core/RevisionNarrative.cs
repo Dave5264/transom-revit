@@ -79,8 +79,9 @@ public static class RevisionNarrative
 
         // ---- header metadata (#6: pull from Revit) ----
         var pinfo = doc.ProjectInformation;
-        // Building name goes above the project name when it has a value (and is shown on the title block).
-        data.BuildingName = SentenceCase(SafeStr(() => pinfo?.BuildingName));
+        // Building name is read FROM the title block, so it only appears when it's actually used there
+        // (and uses the exact value shown on the sheets). Empty => not shown.
+        data.BuildingName = SentenceCase(BuildingNameFromTitleBlock(doc));
         data.ProjectName = SentenceCase(SafeStr(() => pinfo?.Name));
         foreach (var line in SafeStr(() => pinfo?.Address).Replace("\r", "").Split('\n'))
             if (!string.IsNullOrWhiteSpace(line)) data.AddressLines.Add(SentenceCase(line.Trim()));
@@ -234,6 +235,33 @@ public static class RevisionNarrative
         if (DateTime.TryParse(raw, CultureInfo.CurrentCulture, DateTimeStyles.None, out var dt))
             return dt.ToString("MMMM d, yyyy", CultureInfo.InvariantCulture);
         return string.IsNullOrWhiteSpace(raw) ? DateTime.Today.ToString("MMMM d, yyyy", CultureInfo.InvariantCulture) : raw;
+    }
+
+    /// <summary>
+    ///     The Building Name as it appears in the title block — i.e. the value of a "Building Name" parameter
+    ///     carried by a title block instance placed on a sheet. Returns "" when no title block exposes it (so
+    ///     the narrative shows the building name only when it's actually in the title block). Note: this detects
+    ///     the common case where Building Name is a shared/project parameter on the title block; a title block
+    ///     that labels the built-in Project Information "Building Name" directly is not detected here.
+    /// </summary>
+    private static string BuildingNameFromTitleBlock(Document doc)
+    {
+        try
+        {
+            var onSheets = new HashSet<long>(
+                new FilteredElementCollector(doc).OfClass(typeof(ViewSheet)).Cast<ViewSheet>()
+                    .Where(s => !s.IsTemplate).Select(s => s.Id.Value));
+
+            foreach (var tb in new FilteredElementCollector(doc)
+                         .OfCategory(BuiltInCategory.OST_TitleBlocks).WhereElementIsNotElementType())
+            {
+                if (tb.OwnerViewId == ElementId.InvalidElementId || !onSheets.Contains(tb.OwnerViewId.Value)) continue;
+                var v = tb.LookupParameter("Building Name")?.AsString();
+                if (!string.IsNullOrWhiteSpace(v)) return v!;
+            }
+        }
+        catch { /* best-effort */ }
+        return "";
     }
 
     /// <summary>
