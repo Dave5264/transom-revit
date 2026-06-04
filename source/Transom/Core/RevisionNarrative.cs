@@ -26,9 +26,11 @@ public static class RevisionNarrative
     // ---- options the caller can override (some have no Revit field; sensible defaults / prompts) ----
     public sealed class Options
     {
-        /// <summary>Plan-set title used in the boilerplate sentence (no native Revit field — defaulted/prompted).</summary>
-        public string PlanSetTitle = "Permit Plans";
-        /// <summary>Plan-set date used in the boilerplate sentence.</summary>
+        /// <summary>Override for the boilerplate "titled …" reference. Empty = computed from the revision
+        /// sequence (previous revision, or Project Status for the first revision).</summary>
+        public string PlanSetTitle = "";
+        /// <summary>Override for the boilerplate "dated …" reference. Empty = computed (previous revision's
+        /// date, or Project Issue Date for the first revision).</summary>
         public string PlanSetDate = "";
         /// <summary>Firm name prefixing the project number line, e.g. "Sample Firm".</summary>
         public string FirmName = "Sample Firm";
@@ -90,11 +92,15 @@ public static class RevisionNarrative
         data.ProjectNumberLine = $"{opts.FirmName} Project Number: {projNo}";
 
         data.AddendumLabel = TitleCaseSmart(SafeStr(() => rev.Description));
-        var revDate = SafeStr(() => rev.RevisionDate);
-        data.IssueDate = FormatDate(revDate);
-        if (string.IsNullOrWhiteSpace(opts.PlanSetDate)) opts.PlanSetDate = revDate;
+        data.IssueDate = FormatDate(SafeStr(() => rev.RevisionDate));
+
+        // The boilerplate references the ISSUE BEING REVISED — the previous (non-blank) revision in the
+        // sequence, or, for the first revision, the original submission (Project Status + Project Issue Date).
+        var (refTitleRaw, refDateRaw) = ReferencedIssue(doc, revisionId);
+        var refTitle = TitleCaseSmart(string.IsNullOrWhiteSpace(opts.PlanSetTitle) ? refTitleRaw : opts.PlanSetTitle);
+        var refDate = string.IsNullOrWhiteSpace(opts.PlanSetDate) ? refDateRaw : opts.PlanSetDate;
         data.IntroSentence =
-            $"The drawings for the above-referenced project titled {opts.PlanSetTitle}, dated {opts.PlanSetDate} " +
+            $"The drawings for the above-referenced project titled {refTitle}, dated {refDate} " +
             "are revised by, but not limited to, the following items:";
 
         // ---- collect clouds for this revision ----
@@ -280,6 +286,34 @@ public static class RevisionNarrative
     {
         var t = tok.TrimEnd('"', ')');
         return t.EndsWith(".") || t.EndsWith("!") || t.EndsWith("?");
+    }
+
+    /// <summary>
+    ///     The issue being revised, as (title, date): the previous NON-BLANK revision in the sequence (its
+    ///     Description + RevisionDate), or — when the selected revision is the first real one — the original
+    ///     submission (Project Status + Project Issue Date). Blank revisions (no description, added to keep
+    ///     numbering aligned with other disciplines) are skipped when walking backward.
+    /// </summary>
+    private static (string title, string date) ReferencedIssue(Document doc, ElementId selectedRevId)
+    {
+        try
+        {
+            var ordered = Revision.GetAllRevisionIds(doc); // returned in sequence order
+            int idx = -1;
+            for (int i = 0; i < ordered.Count; i++) if (ordered[i] == selectedRevId) { idx = i; break; }
+            for (int j = idx - 1; j >= 0; j--)
+            {
+                if (doc.GetElement(ordered[j]) is Revision pr)
+                {
+                    var desc = SafeStr(() => pr.Description);
+                    if (!string.IsNullOrWhiteSpace(desc)) return (desc, SafeStr(() => pr.RevisionDate));
+                }
+            }
+        }
+        catch { /* fall through to the original submission */ }
+
+        var pinfo = doc.ProjectInformation;
+        return (SafeStr(() => pinfo?.Status), SafeStr(() => pinfo?.IssueDate));
     }
 
     private static string FormatDate(string raw)
