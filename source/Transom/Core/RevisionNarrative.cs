@@ -1,0 +1,231 @@
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+using System.Linq;
+using Autodesk.Revit.DB;
+
+namespace Transom.Core;
+
+/// <summary>
+///     Stand-alone (no Claude/MCP) builder for a Revision Narrative. Given a selected revision it collects
+///     every revision cloud, reads each cloud's <c>Comments</c> field, resolves the sheet(s) the cloud
+///     appears on plus the view's detail number on each sheet, groups by discipline (sheet-number prefix)
+///     then by sheet, orders the notes, and normalizes the text into the firm's narrative style.
+///
+///     Data-model findings it must tolerate (validated live on SAMPLE PROJECT, Addendum A, 67 clouds):
+///       • clouds live inside views (46) OR directly on sheets (21) — both resolved via GetSheetIds();
+///       • a cloud can appear on MORE THAN ONE sheet (dependent views) — the note is listed under each (#5);
+///       • a cloud can appear on NO sheet (legend/working view) — skipped and reported, never dropped silently;
+///       • a detail number is OFTEN absent (on-sheet clouds, dependent views) — ordering falls back to
+///         the cloud Mark, then element id.
+/// </summary>
+public static class RevisionNarrative
+{
+    // ---- options the caller can override (some have no Revit field; sensible defaults / prompts) ----
+    public sealed class Options
+    {
+        /// <summary>Plan-set title used in the boilerplate sentence (no native Revit field — defaulted/prompted).</summary>
+        public string PlanSetTitle = "Permit Plans";
+        /// <summary>Plan-set date used in the boilerplate sentence.</summary>
+        public string PlanSetDate = "";
+        /// <summary>Firm name prefixing the project number line, e.g. "Sample Firm".</summary>
+        public string FirmName = "Sample Firm";
+        /// <summary>Normalize comment text to house style (sentence case + trailing period). Answer #4 = yes.</summary>
+        public bool Normalize = true;
+    }
+
+    // ---- output model (consumed by RevisionNarrativeDocxWriter) ----
+    public sealed class Note { public string Text = ""; public string DetailNumber = ""; public string Mark = ""; public long CloudId; }
+    public sealed class Sheet { public string Number = ""; public string Name = ""; public readonly List<Note> Notes = new(); }
+    public sealed class Discipline { public string Name = ""; public readonly List<Sheet> Sheets = new(); }
+
+    public sealed class Data
+    {
+        public string IssueDate = "";
+        public string AddendumLabel = "";
+        public string ProjectName = "";
+        public List<string> AddressLines = new();
+        public string ProjectNumberLine = "";
+        public string IntroSentence = "";
+        public readonly List<Discipline> Disciplines = new();
+        public readonly List<string> Warnings = new();
+    }
+
+    // Sheet-number prefix -> discipline name. G (general) is filed under Architectural to match the firm's
+    // existing narratives. Order of this list is the discipline order in the document.
+    private static readonly (string Prefix, string Name)[] DisciplineMap =
+    {
+        ("A", "Architectural"), ("G", "Architectural"),
+        ("S", "Structural"),
+        ("M", "Mechanical"),
+        ("E", "Electrical"),
+        ("P", "Plumbing"),
+        ("C", "Civil"),
+        ("L", "Landscape"),
+        ("FP", "Fire Protection"), ("FA", "Fire Alarm"),
+    };
+    private static readonly string[] DisciplineOrder =
+        { "Architectural", "Structural", "Mechanical", "Electrical", "Plumbing", "Civil", "Landscape", "Fire Protection", "Fire Alarm", "Other" };
+
+    public static Data Build(Document doc, ElementId revisionId, Options opts)
+    {
+        opts ??= new Options();
+        var data = new Data();
+
+        var rev = doc.GetElement(revisionId) as Revision;
+        if (rev == null) { data.Warnings.Add("Revision not found."); return data; }
+
+        // ---- header metadata (#6: pull from Revit) ----
+        var pinfo = doc.ProjectInformation;
+        data.ProjectName = SafeStr(() => pinfo?.Name) ;
+        foreach (var line in SafeStr(() => pinfo?.Address).Replace("\r", "").Split('\n'))
+            if (!string.IsNullOrWhiteSpace(line)) data.AddressLines.Add(line.Trim());
+        var projNo = SafeStr(() => pinfo?.Number);
+        data.ProjectNumberLine = $"{opts.FirmName} Project Number: {projNo}";
+
+        data.AddendumLabel = SafeStr(() => rev.Description);
+        var revDate = SafeStr(() => rev.RevisionDate);
+        data.IssueDate = FormatDate(revDate);
+        if (string.IsNullOrWhiteSpace(opts.PlanSetDate)) opts.PlanSetDate = revDate;
+        data.IntroSentence =
+            $"The drawings for the above-referenced project titled {opts.PlanSetTitle}, dated {opts.PlanSetDate} " +
+            "are revised by, but not limited to, the following items:";
+
+        // ---- collect clouds for this revision ----
+        var clouds = new FilteredElementCollector(doc)
+            .OfClass(typeof(RevisionCloud)).Cast<RevisionCloud>()
+            .Where(c => c.RevisionId == revisionId)
+            .ToList();
+
+        int noComment = 0, orphan = 0;
+        // discipline name -> (sheet key -> Sheet)
+        var byDiscipline = new Dictionary<string, Dictionary<string, Sheet>>();
+
+        foreach (var c in clouds)
+        {
+            var comment = NormalizeText(c.LookupParameter("Comments")?.AsString() ?? "", opts.Normalize);
+            if (string.IsNullOrWhiteSpace(comment)) { noComment++; continue; }
+            var mark = SafeStr(() => c.LookupParameter("Mark")?.AsString());
+
+            ISet<ElementId> sheetIds;
+            try { sheetIds = c.GetSheetIds(); } catch { sheetIds = new HashSet<ElementId>(); }
+            if (sheetIds.Count == 0) { orphan++; data.Warnings.Add($"Cloud {c.Id.Value} (\"{Trunc(comment)}\") is on no sheet — skipped."); continue; }
+
+            foreach (var sid in sheetIds)
+            {
+                if (doc.GetElement(sid) is not ViewSheet sh) continue;
+                var number = SafeStr(() => sh.SheetNumber);
+                var name = SafeStr(() => sh.Name);
+                var detail = DetailNumberOf(doc, sh, c.OwnerViewId);
+
+                var disc = DisciplineFor(number);
+                if (!byDiscipline.TryGetValue(disc, out var sheetMap)) { sheetMap = new Dictionary<string, Sheet>(); byDiscipline[disc] = sheetMap; }
+                if (!sheetMap.TryGetValue(number, out var sheet)) { sheet = new Sheet { Number = number, Name = name }; sheetMap[number] = sheet; }
+                sheet.Notes.Add(new Note { Text = comment, DetailNumber = detail, Mark = mark, CloudId = c.Id.Value });
+            }
+        }
+
+        if (noComment > 0) data.Warnings.Add($"{noComment} cloud(s) for this revision have no Comments text — not included. Populate the cloud's Comments field to list them.");
+        if (orphan > 0) data.Warnings.Add($"{orphan} cloud(s) could not be attributed to a sheet.");
+
+        // ---- order: disciplines (fixed order), sheets (natural by number), notes (detail# -> mark -> id) ----
+        foreach (var discName in DisciplineOrder)
+        {
+            if (!byDiscipline.TryGetValue(discName, out var sheetMap)) continue; // #7: only disciplines with clouds
+            var d = new Discipline { Name = discName };
+            foreach (var sheet in sheetMap.Values.OrderBy(s => s.Number, NaturalComparer.Instance))
+            {
+                var ordered = sheet.Notes
+                    .OrderBy(n => DetailSortKey(n.DetailNumber))
+                    .ThenBy(n => n.Mark, NaturalComparer.Instance)
+                    .ThenBy(n => n.CloudId)
+                    .ToList();
+                var s = new Sheet { Number = sheet.Number, Name = sheet.Name };
+                s.Notes.AddRange(ordered);
+                d.Sheets.Add(s);
+            }
+            data.Disciplines.Add(d);
+        }
+        return data;
+    }
+
+    private static string DisciplineFor(string sheetNumber)
+    {
+        var n = (sheetNumber ?? "").TrimStart().ToUpperInvariant();
+        // two-letter prefixes first (FP/FA), then single-letter
+        foreach (var (prefix, name) in DisciplineMap.OrderByDescending(m => m.Prefix.Length))
+            if (n.StartsWith(prefix, StringComparison.Ordinal)) return name;
+        return "Other";
+    }
+
+    /// <summary>View's detail (viewport) number on a sheet; "" when the cloud sits directly on the sheet.</summary>
+    private static string DetailNumberOf(Document doc, ViewSheet sheet, ElementId viewId)
+    {
+        try
+        {
+            foreach (var vpId in sheet.GetAllViewports())
+                if (doc.GetElement(vpId) is Viewport vp && vp.ViewId == viewId)
+                    return vp.get_Parameter(BuiltInParameter.VIEWPORT_DETAIL_NUMBER)?.AsString() ?? "";
+        }
+        catch { /* cloud directly on sheet / dependent view */ }
+        return "";
+    }
+
+    // detail numbers sort numerically when possible, else lexically; blanks last.
+    private static (int, int, string) DetailSortKey(string detail)
+    {
+        if (string.IsNullOrWhiteSpace(detail)) return (2, int.MaxValue, "");
+        return int.TryParse(detail, NumberStyles.Integer, CultureInfo.InvariantCulture, out var v)
+            ? (0, v, "")
+            : (1, 0, detail);
+    }
+
+    private static string NormalizeText(string s, bool on)
+    {
+        s = (s ?? "").Trim();
+        if (!on || s.Length == 0) return s;
+        if (char.IsLetter(s[0]) && char.IsLower(s[0])) s = char.ToUpper(s[0]) + s.Substring(1);
+        if (!s.EndsWith(".") && !s.EndsWith("!") && !s.EndsWith("?")) s += ".";
+        return s;
+    }
+
+    private static string FormatDate(string raw)
+    {
+        if (DateTime.TryParse(raw, CultureInfo.CurrentCulture, DateTimeStyles.None, out var dt))
+            return dt.ToString("MMMM d, yyyy", CultureInfo.InvariantCulture);
+        return string.IsNullOrWhiteSpace(raw) ? DateTime.Today.ToString("MMMM d, yyyy", CultureInfo.InvariantCulture) : raw;
+    }
+
+    private static string Trunc(string s) => s.Length > 40 ? s.Substring(0, 40) + "…" : s;
+    private static string SafeStr(Func<string?> f) { try { return f() ?? ""; } catch { return ""; } }
+
+    /// <summary>Compares strings with embedded numbers naturally (A2 &lt; A10, S101 &lt; S202).</summary>
+    private sealed class NaturalComparer : IComparer<string>
+    {
+        public static readonly NaturalComparer Instance = new();
+        public int Compare(string? a, string? b)
+        {
+            a ??= ""; b ??= "";
+            int i = 0, j = 0;
+            while (i < a.Length && j < b.Length)
+            {
+                if (char.IsDigit(a[i]) && char.IsDigit(b[j]))
+                {
+                    int si = i, sj = j;
+                    while (i < a.Length && char.IsDigit(a[i])) i++;
+                    while (j < b.Length && char.IsDigit(b[j])) j++;
+                    var na = long.Parse(a.Substring(si, i - si));
+                    var nb = long.Parse(b.Substring(sj, j - sj));
+                    if (na != nb) return na.CompareTo(nb);
+                }
+                else
+                {
+                    int cmp = a[i].CompareTo(b[j]);
+                    if (cmp != 0) return cmp;
+                    i++; j++;
+                }
+            }
+            return (a.Length - i).CompareTo(b.Length - j);
+        }
+    }
+}

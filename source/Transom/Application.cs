@@ -30,6 +30,11 @@ public class Application : ExternalApplication
             .SetLargeImage("/Transom;component/Resources/Icons/RibbonIcon32.png")
             .SetToolTip("Export schedules to spreadsheets with full fidelity, and import edits back into the model.");
 
+        panel.AddPushButton<RevisionNarrativeCommand>("Revision\nNarrative")
+            .SetImage("/Transom;component/Resources/Icons/RibbonIcon16.png")
+            .SetLargeImage("/Transom;component/Resources/Icons/RibbonIcon32.png")
+            .SetToolTip("Generate a Revision Narrative (.docx) from a selected revision's clouds — reads each cloud's Comments, groups by discipline and sheet, orders by detail number, and writes the firm letterhead narrative. Stand-alone; no Claude required.");
+
         panel.AddSeparator();
 
         panel.AddPushButton<UpdateCommand>("Check for\nUpdates")
