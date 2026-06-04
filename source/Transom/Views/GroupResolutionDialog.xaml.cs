@@ -88,6 +88,10 @@ public partial class GroupResolutionDialog : Window
             Content = title,
             FontWeight = FontWeights.Medium,
             Foreground = (Brush)Resources["Text"],
+            // Each option lives in its OWN StackPanel, so WPF's implicit "same parent" radio grouping
+            // doesn't apply — without a shared GroupName the buttons aren't mutually exclusive (the
+            // default Skip selection can't be switched off). An explicit GroupName ties them into one group.
+            GroupName = "GroupResolution",
         };
         _map.Add((rb, res));
         panel.Children.Add(rb);

@@ -334,7 +334,29 @@ public sealed class Importer
                 }
             }
 
-            ResolveTypeGroups(cs, typeGroups, units);
+            var typeCounts = TypeInstanceCounts(doc, sheet.Category, typeGroups.Keys);
+            ResolveTypeGroups(cs, typeGroups, units, typeCounts);
+
+            // #5: warn when an edit targets a column the schedule filters or sorts/groups on — changing it can
+            // drop the row from this schedule or reorder it (e.g. renaming a Type Mark the schedule filters on).
+            var sensitive = SensitiveFieldParamIds(doc, sheet.ScheduleUniqueId);
+            if (sensitive.Count > 0)
+            {
+                var flagged = new HashSet<string>();
+                for (int i = chg0; i < cs.Changes.Count; i++)
+                {
+                    var ch = cs.Changes[i];
+                    if (ch.Frozen || !sensitive.Contains(ch.ParameterId) || !flagged.Add(ch.Field)) continue;
+                    cs.Diagnostics.Add(new CellDiagnostic
+                    {
+                        SheetTabName = sheet.SheetTabName, ExcelRow = 0, Col = 0, FieldName = ch.Field,
+                        ElementLabel = ch.ElementName, Severity = "yellow",
+                        Reason = $"'{ch.Field}' drives the schedule's filter or sort/group — editing it may remove " +
+                                 "this row from the schedule or reorder it",
+                        Value = ch.NewValue,
+                    });
+                }
+            }
             Summarize();
         }
 
@@ -772,11 +794,15 @@ public sealed class Importer
         tc.Cells.Add((excelRow, cellText, label));
     }
 
-    private static void ResolveTypeGroups(ChangeSet cs, Dictionary<(long, int), TypeCandidate> typeGroups, Units units)
+    private static void ResolveTypeGroups(ChangeSet cs, Dictionary<(long, int), TypeCandidate> typeGroups, Units units,
+        Dictionary<long, int> typeCounts)
     {
         foreach (var kv in typeGroups)
         {
             var tc = kv.Value;
+            // #1: a type edit changes the TYPE, so it affects EVERY instance of that type — report the real
+            // instance count, not the number of schedule rows touched (~1). Falls back to cell count if unknown.
+            int affects = typeCounts.TryGetValue(kv.Key.Item1, out var instCount) ? instCount : tc.Cells.Count;
             var distinct = tc.Cells.Select(c => c.value).Distinct().ToList();
             if (distinct.Count > 1)
             {
@@ -787,7 +813,7 @@ public sealed class Importer
                     Field = tc.Col.FieldName,
                     TypeName = tc.TypeName,
                     CurrentDisplay = tc.CurDisplay,
-                    InstancesAffected = tc.Cells.Count,
+                    InstancesAffected = affects,
                 };
                 foreach (var v in distinct)
                 {
@@ -813,7 +839,9 @@ public sealed class Importer
             if (tc.IsString)
             {
                 if (value == tc.CurString) continue;
-                cs.Changes.Add(TypeChange(kv.Key, tc, value, true, value, 0));
+                var chS = TypeChange(kv.Key, tc, value, true, value, 0);
+                chS.InstancesAffected = affects;
+                cs.Changes.Add(chS);
             }
             else
             {
@@ -823,9 +851,52 @@ public sealed class Importer
                     continue;
                 }
                 if (Math.Abs(parsed - tc.CurDouble) < 1e-9) continue;
-                cs.Changes.Add(TypeChange(kv.Key, tc, value, false, "", parsed));
+                // #2: show the canonical formatted value (e.g. 1'-0") as New, not the raw cell text ("1"), so the
+                // preview reveals how a unit-less entry was interpreted instead of silently writing it.
+                var canonical = ExcelCorrector.Canonical(units, new ForgeTypeId(tc.SpecTypeId!), parsed, value);
+                var chD = TypeChange(kv.Key, tc, canonical, false, "", parsed);
+                chD.InstancesAffected = affects;
+                cs.Changes.Add(chD);
             }
         }
+    }
+
+    /// <summary>#1: instances per type id (for the requested type ids only) — lets a type-param edit's Scope
+    /// report the real blast radius (every instance of the type) instead of the number of schedule rows touched.</summary>
+    private static Dictionary<long, int> TypeInstanceCounts(Document doc, int category, IEnumerable<(long, int)> keys)
+    {
+        var counts = new Dictionary<long, int>();
+        foreach (var k in keys) counts[k.Item1] = 0;
+        if (counts.Count == 0) return counts;
+        var col = new FilteredElementCollector(doc).WhereElementIsNotElementType();
+        if (category != -1) col = col.OfCategoryId(new ElementId((long)category));
+        foreach (var e in col)
+        {
+            var tid = e.GetTypeId().Value;
+            if (counts.ContainsKey(tid)) counts[tid]++;
+        }
+        return counts;
+    }
+
+    /// <summary>#5: parameter ids the schedule uses in a filter or sort/group field. Editing such a value can
+    /// remove a row from the schedule (filter) or reorder it (sort/group), so the preview flags it.</summary>
+    private static HashSet<long> SensitiveFieldParamIds(Document doc, string scheduleUniqueId)
+    {
+        var ids = new HashSet<long>();
+        if (string.IsNullOrEmpty(scheduleUniqueId) || doc.GetElement(scheduleUniqueId) is not ViewSchedule vs) return ids;
+        var def = vs.Definition;
+        void Add(ScheduleFieldId fid)
+        {
+            try
+            {
+                var f = def.GetField(fid);
+                if (f != null && f.ParameterId != ElementId.InvalidElementId) ids.Add(f.ParameterId.Value);
+            }
+            catch { /* field may not resolve — ignore */ }
+        }
+        try { foreach (var sg in def.GetSortGroupFields()) Add(sg.FieldId); } catch { /* ignore */ }
+        try { for (int i = 0; i < def.GetFilterCount(); i++) Add(def.GetFilter(i).FieldId); } catch { /* ignore */ }
+        return ids;
     }
 
     public static ProposedChange ResolveToChange(TypeConflict c, ConflictOption opt) => new()
@@ -913,7 +984,19 @@ public sealed class Importer
                 if (!VerifyWrite(param, ch)) { unverified.Add(Label(ch)); continue; }
                 applied++;
             }
-            tx.Commit();
+            var commitStatus = tx.Commit();
+            if (commitStatus != TransactionStatus.Committed)
+            {
+                // Revit discarded the ENTIRE transaction — Commit() returns RolledBack WITHOUT throwing, so
+                // this is otherwise invisible. It happens when unresolved ERROR-severity failures can't be
+                // committed (ApplyFailureCollector only auto-deletes warnings). Nothing persisted, so report
+                // the rollback honestly instead of the in-transaction "applied" tally — which would otherwise
+                // read as a success the model never actually received.
+                int errCount = collector.Messages.Count(m => m.StartsWith("[Error]"));
+                cs.DiagnosticLog = BuildApplyLog(applied, failed, unverified, collector.Messages, cs, rolledBack: true);
+                return $"Apply ROLLED BACK by Revit — 0 of {applied} attempted change(s) were saved" +
+                       (errCount > 0 ? $"; {errCount} error(s) blocked the commit (see log)." : " (see log).");
+            }
         }
         catch (Exception ex)
         {
@@ -939,12 +1022,15 @@ public sealed class Importer
     /// <summary>Full plain-text record of an apply for the Copy-log button: counts, each failed/unverified write,
     /// and every Revit warning/error raised during the commit.</summary>
     private static string BuildApplyLog(int applied, List<string> failed, List<string> unverified,
-        List<string> revitMessages, ChangeSet cs)
+        List<string> revitMessages, ChangeSet cs, bool rolledBack = false)
     {
         const int cap = 200;
         var sb = new System.Text.StringBuilder();
         sb.AppendLine("Transom apply — " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
-        sb.AppendLine($"applied: {applied}");
+        if (rolledBack)
+            sb.AppendLine("*** ROLLED BACK BY REVIT — NOTHING PERSISTED. The 'attempted' count below is what was " +
+                          "written in-transaction before Revit discarded the commit (usually unresolved errors). ***");
+        sb.AppendLine($"{(rolledBack ? "attempted (NOT saved)" : "applied")}: {applied}");
         sb.AppendLine($"skipped (from preview): {cs.Skipped.Count}");
 
         sb.AppendLine($"\n== Revit warnings / errors during apply: {revitMessages.Count} ==");
@@ -1182,7 +1268,9 @@ public sealed class Importer
         try
         {
             if (param.StorageType == StorageType.String)
-                return (param.AsString() ?? "") == (ch.NewString ?? "");
+                // Revit trims leading/trailing whitespace when storing a string param, so compare trimmed —
+                // otherwise a legit write of e.g. " s" reads back as "s" and looks like a failed (unverified) write.
+                return (param.AsString() ?? "").Trim() == (ch.NewString ?? "").Trim();
             if (param.StorageType == StorageType.Integer)
                 return param.AsInteger() == ch.NewInt;
             if (param.StorageType == StorageType.Double)
