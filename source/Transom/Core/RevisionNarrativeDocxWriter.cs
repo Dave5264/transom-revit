@@ -101,9 +101,9 @@ public static class RevisionNarrativeDocxWriter
     {
         var sb = new StringBuilder();
         int next = startNumId;
+        int ctrlId = 110000001; // unique content-control ids for the [insert] placeholders
         void Blank() => sb.Append(Para("", false, 0, 0, font, 0));
         void Line(string text, bool bold = false, int szHalfPt = 0) => sb.Append(Para(text, bold, szHalfPt, 0, font, 0));
-        void Note(string text, int numId) => sb.Append(Para(text, false, 0, canNumber ? 0 : 360, font, numId));
 
         Line(data.IssueDate);
         Blank();
@@ -128,10 +128,13 @@ public static class RevisionNarrativeDocxWriter
                 Line($"{sheet.Number} – {sheet.Name.ToUpperInvariant()}"); // en-dash separator
                 int numId = 0;
                 if (canNumber) { numId = next++; numIds.Add(numId); } // a fresh list (restarts at 1) per sheet
+                int ind = numId > 0 ? 0 : 360;
                 foreach (var note in sheet.Notes)
                 {
-                    var label = string.IsNullOrEmpty(note.DetailNumber) ? "[insert]" : $"Detail {note.DetailNumber}";
-                    Note($"{label} - {note.Text}", numId);
+                    if (string.IsNullOrEmpty(note.DetailNumber))
+                        sb.Append(InsertNotePara(note.Text, font, numId, ind, ref ctrlId)); // click-to-fill [insert]
+                    else
+                        sb.Append(Para($"Detail {note.DetailNumber} - {note.Text}", false, 0, ind, font, numId));
                 }
                 Blank();
             }
@@ -161,6 +164,33 @@ public static class RevisionNarrativeDocxWriter
             run = $"<w:r>{rPrXml}<w:t xml:space=\"preserve\">{Esc(text)}</w:t></w:r>";
         }
         return $"<w:p>{pPr}{run}</w:p>";
+    }
+
+    /// <summary>
+    ///     A numbered note whose detail is unknown: the "[insert]" token is a PLAIN-TEXT CONTENT CONTROL with
+    ///     placeholder behavior — a single click selects the whole "[insert]", typing replaces it, and because
+    ///     it's marked temporary, the control is removed once edited (leaving normal text). The " - {comment}"
+    ///     after it is an ordinary run, so the dash and comment stay editable as usual.
+    /// </summary>
+    private static string InsertNotePara(string comment, string? font, int numId, int indent, ref int ctrlId)
+    {
+        var pPr = new StringBuilder($"<w:pPr><w:pStyle w:val=\"{BodyStyle}\"/>");
+        if (numId > 0) pPr.Append($"<w:numPr><w:ilvl w:val=\"0\"/><w:numId w:val=\"{numId}\"/></w:numPr>");
+        if (indent > 0) pPr.Append($"<w:ind w:left=\"{indent}\"/>");
+        pPr.Append("</w:pPr>");
+
+        var rPr = string.IsNullOrEmpty(font) ? "" : $"<w:rPr><w:rFonts w:ascii=\"{Esc(font!)}\" w:hAnsi=\"{Esc(font!)}\"/></w:rPr>";
+        int id = ctrlId++;
+        var sdt =
+            "<w:sdt><w:sdtPr>" + rPr +
+            $"<w:id w:val=\"{id}\"/>" +
+            "<w:placeholder><w:docPart w:val=\"DefaultPlaceholder_-1854013440\"/></w:placeholder>" +
+            "<w:temporary/><w:showingPlcHdr/><w:text/>" +
+            "</w:sdtPr><w:sdtContent>" +
+            $"<w:r>{rPr}<w:t xml:space=\"preserve\">[insert]</w:t></w:r>" +
+            "</w:sdtContent></w:sdt>";
+        var rest = $"<w:r>{rPr}<w:t xml:space=\"preserve\"> - {Esc(comment)}</w:t></w:r>";
+        return $"<w:p>{pPr}{sdt}{rest}</w:p>";
     }
 
     // ---- numbering.xml helpers ----
