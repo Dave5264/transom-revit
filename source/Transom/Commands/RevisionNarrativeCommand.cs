@@ -34,11 +34,12 @@ public class RevisionNarrativeCommand : ExternalCommand
         var chosen = revIds.Count == 1 ? revIds[0] : PickRevision(doc, revIds);
         if (chosen == null) return; // cancelled
 
-        // Optional letterhead template (.docx) — generate the body into a copy of it (answer #9). Cancel = plain.
+        // Optional: start from a previous narrative / letterhead .docx. Its header, footer, page setup, styles
+        // and fonts are reused exactly; only the body is replaced. Cancel = produce a plain document.
         string? templatePath = null;
         var tdlg = new OpenFileDialog
         {
-            Title = "Optional: letterhead template (.docx) — Cancel to skip",
+            Title = "Start from a previous narrative (.docx) — reuses header/footer/fonts, replaces body. Cancel to skip.",
             Filter = "Word document (*.docx)|*.docx",
             CheckFileExists = true,
         };
