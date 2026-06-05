@@ -301,6 +301,13 @@ public sealed class ScheduleReader
             DetermineEditability(table, els); // mark columns that can't be written on import (greyed on export)
         }
 
+        // CRITICAL: the rolled-back anchor pass above may have called def.AddField (when the UID carrier wasn't
+        // already a visible column) inside a transaction that was then RolledBack — which INVALIDATES this
+        // ScheduleDefinition handle. Re-fetch it before any further use; otherwise def.GetSortGroupFields() /
+        // def.GetField() below throw InvalidObjectException ("the referenced object is not valid… its creation
+        // was undone"). This aborted EVERY schedule whose anchor carrier had to be added as a field.
+        def = vs.Definition;
+
         // A grouped row is bulk-safe only when its key maps to exactly one row; a key split across rows
         // (multi-field grouping) leaves instance scope ambiguous -> skip those rows' instance writes.
         var typeRowCount = anchors.Where(a => a != null).GroupBy(a => a!).ToDictionary(g => g.Key, g => g.Count());
@@ -683,11 +690,25 @@ public sealed class ScheduleReader
         }
         try
         {
-            foreach (var h in hosts)
+            // Stamp each host's UniqueId into the carrier parameter. CRITICAL: editing a member of a Revit
+            // group makes Revit regenerate that group and INVALIDATE the other captured Element handles
+            // mid-loop, so reusing the pre-loop `hosts` handles throws InvalidObjectException ("referenced
+            // object is not valid…") on the next iteration and aborts the export. Capture the UniqueIds up
+            // front (ids are stable across regen; the Element wrapper is not), re-fetch each pass, and isolate
+            // each write — a stale handle or a member that rejects the edit just leaves that row unanchored
+            // (display-only) instead of killing the whole schedule. Hit by itemized schedules with grouped
+            // members (e.g. a unit-door schedule with hundreds of grouped instances).
+            foreach (var uid in hosts.Select(h => h.UniqueId).ToList())
             {
-                var p = GetParamOn(h, cpid);
-                if (p != null && !p.IsReadOnly && p.StorageType == StorageType.String)
-                    p.Set(h.UniqueId);
+                try
+                {
+                    var h = _doc.GetElement(uid);
+                    if (h == null) continue;
+                    var p = GetParamOn(h, cpid);
+                    if (p != null && !p.IsReadOnly && p.StorageType == StorageType.String)
+                        p.Set(uid);
+                }
+                catch { /* stale handle or rejected group-member edit — row stays unanchored */ }
             }
 
             // Append the carrier as a field if it isn't already a visible column.
