@@ -333,16 +333,6 @@
                                 <ListBox.ItemContainerStyle>
                                     <Style TargetType="ListBoxItem">
                                         <Setter Property="Padding" Value="4,3" />
-                                        <!-- Stretch so the whole row (not just the text) is a right-click target. -->
-                                        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
-                                        <Setter Property="ContextMenu">
-                                            <Setter.Value>
-                                                <ContextMenu>
-                                                    <MenuItem Header="Copy name" Click="CopyScheduleName_Click" />
-                                                    <MenuItem Header="Copy all names" Click="CopyAllScheduleNames_Click" />
-                                                </ContextMenu>
-                                            </Setter.Value>
-                                        </Setter>
                                     </Style>
                                 </ListBox.ItemContainerStyle>
                             </ListBox>
@@ -544,16 +534,8 @@
                                 <ItemsControl ItemsSource="{Binding AffectedSchedules}">
                                     <ItemsControl.ItemTemplate>
                                         <DataTemplate>
-                                            <!-- Background=Transparent makes the full row width a right-click target. -->
                                             <TextBlock Foreground="{DynamicResource Text}" FontSize="11.5" TextWrapping="Wrap"
-                                                       Background="Transparent" Text="{Binding Display}">
-                                                <TextBlock.ContextMenu>
-                                                    <ContextMenu>
-                                                        <MenuItem Header="Copy name" Click="CopyScheduleName_Click" />
-                                                        <MenuItem Header="Copy all names" Click="CopyAllScheduleNames_Click" />
-                                                    </ContextMenu>
-                                                </TextBlock.ContextMenu>
-                                            </TextBlock>
+                                                       Text="{Binding Display}" />
                                         </DataTemplate>
                                     </ItemsControl.ItemTemplate>
                                 </ItemsControl>

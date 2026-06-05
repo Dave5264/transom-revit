@@ -427,7 +427,7 @@ internal static class Program
     {
         if (!TryGetRevitRoot(args, out _, out var proc, out var error) || proc is null) return Fail(error, 4);
 
-        var hwnd = GetBestRevitWindow(proc);
+        var hwnd = ResolveTargetWindow(args, proc);
         if (!GetWindowRect(hwnd, out var rc))
             return Fail("could not read the Revit window rectangle.", 5);
 
@@ -1002,7 +1002,7 @@ internal static class Program
             else proc = withWindows[0];
         }
 
-        var hwnd = GetBestRevitWindow(proc);
+        var hwnd = ResolveTargetWindow(args, proc);
         if (hwnd == IntPtr.Zero) { error = $"Revit pid {proc.Id} has no usable top-level window yet."; return false; }
 
         try { root = AutomationElement.FromHandle(hwnd); }
@@ -1042,6 +1042,43 @@ internal static class Program
         }, IntPtr.Zero);
 
         return best;
+    }
+
+    /// <summary>The process's visible top-level window whose title contains <paramref name="substring"/>
+    /// (case-insensitive) — used by --window to target an owned window (e.g. the "Transom" Schedule Hub window)
+    /// instead of Revit's main frame. Largest match wins; IntPtr.Zero if none.</summary>
+    private static IntPtr GetWindowByTitle(Process proc, string substring)
+    {
+        IntPtr best = IntPtr.Zero; long bestArea = -1;
+        uint target = (uint)proc.Id;
+        var needle = substring.ToLowerInvariant();
+        EnumWindows((h, _) =>
+        {
+            GetWindowThreadProcessId(h, out uint wpid);
+            if (wpid != target || !IsWindowVisible(h)) return true;
+            int len = GetWindowTextLength(h);
+            if (len == 0) return true;
+            var sb = new StringBuilder(len + 1);
+            GetWindowText(h, sb, sb.Capacity);
+            if (!sb.ToString().ToLowerInvariant().Contains(needle)) return true;
+            if (!GetWindowRect(h, out var r)) return true;
+            long area = (long)(r.Right - r.Left) * (r.Bottom - r.Top);
+            if (area > bestArea) { bestArea = area; best = h; }
+            return true;
+        }, IntPtr.Zero);
+        return best;
+    }
+
+    /// <summary>The window a command targets: the --window title match when given, else Revit's main frame.</summary>
+    private static IntPtr ResolveTargetWindow(ArgSet args, Process proc)
+    {
+        var title = args.GetString("--window");
+        if (!string.IsNullOrWhiteSpace(title))
+        {
+            var h = GetWindowByTitle(proc, title!);
+            if (h != IntPtr.Zero) return h;
+        }
+        return GetBestRevitWindow(proc);
     }
 
     private static bool OwnsWindow(Process proc, IntPtr hwnd)
