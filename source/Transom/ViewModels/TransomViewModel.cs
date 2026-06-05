@@ -713,7 +713,7 @@ public sealed partial class TransomViewModel : ObservableObject
         }
         catch (Exception ex)
         {
-            TaskDialog.Show("Transom", "Couldn't write the instructions:\n\n" + ex.Message);
+            Transom.Views.ReportDialog.Show("Transom", "Couldn't write the instructions.", ex.ToString(), isError: true);
         }
     }
 

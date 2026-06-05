@@ -61,13 +61,12 @@ public class RevisionNarrativeCommand : ExternalCommand
 
         int sheets = data.Disciplines.Sum(d => d.Sheets.Count);
         int notes = data.Disciplines.Sum(d => d.Sheets.Sum(s => s.Notes.Count));
-        var msg = $"Generated narrative for “{data.AddendumLabel}”.\n\n" +
-                  $"Disciplines: {data.Disciplines.Count}\nSheets: {sheets}\nNotes: {notes}\n\n" +
-                  $"Saved: {sdlg.FileName}";
+        var details = $"Disciplines: {data.Disciplines.Count}\nSheets: {sheets}\nNotes: {notes}\nSaved: {sdlg.FileName}";
         if (data.Warnings.Count > 0)
-            msg += "\n\nWarnings:\n- " + string.Join("\n- ", data.Warnings);
+            details += "\n\nWarnings:\n- " + string.Join("\n- ", data.Warnings);
 
-        TaskDialog.Show("Transom — Revision Narrative", msg);
+        Transom.Views.ReportDialog.Show("Transom — Revision Narrative",
+            $"Generated narrative for “{data.AddendumLabel}”.", details, isError: false);
     }
 
     /// <summary>Minimal code-only WPF picker so any number of revisions is supported (no XAML resource).</summary>

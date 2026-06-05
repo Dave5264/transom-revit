@@ -38,11 +38,11 @@ public class RegisterBridgeCommand : ExternalCommand
                     ? "Registration finished with issues:\n\n"
                     : "Nothing to change.\n\n";
 
-        var dlg = new TaskDialog("Transom — Register Claude Bridge")
-        {
-            MainInstruction = head.TrimEnd(),
-            MainContent = body + $"\n\nShim: {McpRegistration.ShimPath}\nPort: {port}",
-        };
-        dlg.Show();
+        var details = body
+                      + $"\n\nShim: {McpRegistration.ShimPath}"
+                      + $"\nShim present: {(McpRegistration.ShimPresent() ? "yes" : "NO")}"
+                      + $"\nPort: {port}";
+        var isError = !shimReady || res.Errors > 0;
+        Transom.Views.ReportDialog.Show("Transom — Register Claude Bridge", head.TrimEnd(), details, isError);
     }
 }

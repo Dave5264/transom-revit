@@ -37,11 +37,10 @@ public class UiAssistSetupCommand : ExternalCommand
                     ? "Set up finished with issues:\n\n"
                     : "Already set up — nothing to change.\n\n";
 
-        var dlg = new TaskDialog("Transom — Claude UI Assist")
-        {
-            MainInstruction = head.TrimEnd(),
-            MainContent = body + $"\n\nInstalled to: {ClickHelperRegistration.McpServerPath}",
-        };
-        dlg.Show();
+        var details = body
+                      + "\n\nInstalled to: " + ClickHelperRegistration.McpServerPath
+                      + "\n\n--- diagnostics ---\n" + ClickHelperRegistration.Diagnostics();
+        var isError = !ready || res.Errors > 0;
+        Transom.Views.ReportDialog.Show("Transom — Claude UI Assist", head.TrimEnd(), details, isError);
     }
 }

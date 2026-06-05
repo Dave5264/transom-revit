@@ -72,9 +72,11 @@ public class BridgeToggleCommand : ExternalCommand
         {
             try { _server.Stop(); } catch { /* ignore */ }
             DeleteToken();
-            TaskDialog.Show("Transom — Claude Bridge",
-                $"Couldn't start the bridge on port {port}:\n{ex.Message}\n\n" +
-                "Another instance may already be using that port. Change BridgeSelfHostPort in settings and retry.");
+            Transom.Views.ReportDialog.Show("Transom — Claude Bridge",
+                $"Couldn't start the Claude-assist bridge on port {port}.",
+                "Another instance may already be using that port. Change BridgeSelfHostPort in settings and retry.\n\n" +
+                "--- error ---\n" + ex,
+                isError: true);
         }
     }
 

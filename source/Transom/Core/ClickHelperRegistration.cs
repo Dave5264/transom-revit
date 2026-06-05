@@ -83,6 +83,20 @@ public static class ClickHelperRegistration
         catch { return Installed(); }
     }
 
+    /// <summary>Human-readable diagnostics for the setup dialog: every relevant path and whether it exists.</summary>
+    public static string Diagnostics()
+    {
+        string Row(string label, string path) => $"{label,-22}{(FilePresent(path) ? "[found]   " : "[MISSING] ")}{path}";
+        return string.Join("\n", new[]
+        {
+            "Add-in folder:        " + AddInDir,
+            Row("Bundled MCP server: ", BundledMcpServerPath),
+            Row("Bundled engine:     ", BundledEnginePath),
+            Row("Installed MCP server:", McpServerPath),
+            Row("Installed engine:   ", EnginePath),
+        });
+    }
+
     private static void CopyIfNewer(string src, string dest)
     {
         if (!File.Exists(src)) return; // nothing bundled to copy from; leave whatever is already installed
