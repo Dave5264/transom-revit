@@ -20,20 +20,24 @@ namespace Transom.Commands;
 [Transaction(TransactionMode.Manual)]
 public class StartupCommand : ExternalCommand
 {
-    public override void Execute()
+    public override void Execute() => OpenOrActivate(Application);
+
+    /// <summary>Opens Schedule Hub (or activates the existing instance) and returns the window. Shared with
+    /// <see cref="SettingsCommand"/> so the Settings button reuses the exact same window.</summary>
+    internal static TransomView OpenOrActivate(Autodesk.Revit.UI.UIApplication app)
     {
         if (TransomView.Instance != null)
         {
             TransomView.Instance.Activate();
-            return;
+            return TransomView.Instance;
         }
 
-        var uiDoc = Application.ActiveUIDocument;
+        var uiDoc = app.ActiveUIDocument;
         var doc = uiDoc.Document;
         var active = uiDoc.ActiveView as ViewSchedule;
 
         var projects = new List<string>();
-        foreach (Document d in Application.Application.Documents)
+        foreach (Document d in app.Application.Documents)
             if (!d.IsLinked && !d.IsFamilyDocument)
                 projects.Add(d.Title);
 
@@ -50,7 +54,8 @@ public class StartupCommand : ExternalCommand
             projects, doc.Title, active?.Id.Value ?? 0, schedules,
             exportEvent, exportHandler, importEvent, importHandler, loadEvent, loadHandler);
         var view = new TransomView(viewModel);
-        new WindowInteropHelper(view) { Owner = Application.MainWindowHandle };
+        new WindowInteropHelper(view) { Owner = app.MainWindowHandle };
         view.Show();
+        return view;
     }
 }

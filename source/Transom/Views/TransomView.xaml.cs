@@ -44,6 +44,15 @@ public sealed partial class TransomView
                 "Ready for Claude", System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Information);
     }
 
+    /// <summary>Brings the window to the Settings tab — used by the Settings ribbon button.</summary>
+    public void SelectSettingsTab()
+    {
+        foreach (var item in Tabs.Items)
+            if (item is System.Windows.Controls.TabItem ti && ti.Header as string == "Settings")
+            { Tabs.SelectedItem = ti; return; }
+        if (Tabs.Items.Count > 0) Tabs.SelectedIndex = Tabs.Items.Count - 1;
+    }
+
     private void Close_Click(object sender, System.Windows.RoutedEventArgs e) => Close();
 
     private void ClaudeHelp_Click(object sender, System.Windows.RoutedEventArgs e)
