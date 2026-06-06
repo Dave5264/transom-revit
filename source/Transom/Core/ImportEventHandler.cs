@@ -88,6 +88,16 @@ public sealed class ImportEventHandler : IExternalEventHandler
                     danceLog = "\n\n" + dr.Log;
                 }
 
+                // Post-commit verification (catches silent post-apply failures, incl. the just-run dance), then a
+                // run-results workbook if anything Failed/Unverified — written next to the source import file.
+                try
+                {
+                    new Importer().VerifyApplied(doc, PendingChangeSet);
+                    var runResultsPath = RunResultsWriter.Write(doc, PendingChangeSet, app, WorkbookPath);
+                    if (!string.IsNullOrEmpty(runResultsPath)) status += $"  ·  run-results: {runResultsPath}";
+                }
+                catch { /* verification / report is best-effort — never block the apply */ }
+
                 OnApplied(status);
                 OnAppliedLog(PendingChangeSet.DiagnosticLog + danceLog + (dialogs.Count > 0
                     ? "\n\n== Revit prompts auto-dismissed during apply ==\n  - " + string.Join("\n  - ", dialogs)

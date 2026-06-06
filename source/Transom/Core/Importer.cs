@@ -6,6 +6,10 @@ using Autodesk.Revit.DB;
 
 namespace Transom.Core;
 
+/// <summary>Outcome of applying one change, stamped after the apply + post-apply verification passes. Drives the
+/// run-results report: bold = Applied, italic + red = Failed/Unverified.</summary>
+public enum ApplyOutcome { Pending, Applied, Failed, Unverified, Skipped }
+
 public sealed class ProposedChange
 {
     public string UniqueId = "";
@@ -20,6 +24,12 @@ public sealed class ProposedChange
     public bool InGroup;
     public string GroupName = "";
 
+    /// <summary>True when this change's model group is BROKEN — the definition-swap dance can't reproduce it
+    /// (a member anchored outside the group, a nested group, or mixed instance orientation). Such columns drop
+    /// the dance (option 3) and route to option 2 / Claude-Assist, and color RED. Set by <c>ComputeGroupBroken</c>.</summary>
+    public bool GroupBroken;
+    public string GroupBrokenReason = "";
+
     /// <summary>How a grouped edit gets written durably. ProjectVary = Transom applies in-process (vary flag);
     /// BuiltinDance = staged for Claude-assist (definition swap). Set only when <see cref="InGroup"/> is true.
     /// Project/shared params (positive id) vary; built-ins (negative id) can't and need the dance.</summary>
@@ -31,6 +41,11 @@ public sealed class ProposedChange
     /// <summary>How the user chose to resolve this change's group conflict (set per-column by the
     /// GroupResolutionDialog on Apply). Null until resolved. Routes the change to the matching backend.</summary>
     public GroupResolution? Resolution;
+
+    /// <summary>Outcome after the apply + post-apply verification passes (Pending until applied). Drives the
+    /// run-results report — bold for Applied, italic + red for Failed/Unverified.</summary>
+    public ApplyOutcome Outcome = ApplyOutcome.Pending;
+    public string OutcomeNote = "";
 
     /// <summary>True when the field can't be changed by import (read-only / driven by the family or type selection). Shown greyed, not applied.</summary>
     public bool Frozen;
@@ -362,6 +377,7 @@ public sealed class Importer
 
         cs.ImportedScheduleNames = wb.Sheets.Select(s => s.ScheduleName).Distinct().ToList();
         ComputeOption2Eligibility(doc, cs);
+        ComputeGroupBroken(doc, cs);
 
         cs.DiagnosticLog = BuildDiagnosticLog(doc, wb, cs);
         return cs;
@@ -387,6 +403,37 @@ public sealed class Importer
                 .GroupBy(c => ElementTypeIdOf(doc, c))
                 .All(typeGrp => typeGrp.Select(CanonicalValue).Distinct().Count() <= 1);
             if (aligned) cs.Option2EligibleParams.Add(pg.Key);
+        }
+    }
+
+    /// <summary>
+    ///     Flags every grouped change whose model group is BROKEN — one the definition-swap dance cannot
+    ///     faithfully reproduce (a member anchored outside the group, a nested model group, or instances at
+    ///     mixed orientations; see <see cref="GroupSafety"/>). Broken columns drop option 3 (dance) and route
+    ///     to option 2 / Claude-Assist, and color RED on export. Cached per group TYPE across the change set.
+    /// </summary>
+    private static void ComputeGroupBroken(Document doc, ChangeSet cs)
+    {
+        var cache = new Dictionary<long, GroupSafetyResult>();
+        GroupSafetyResult Safety(ElementId typeId)
+        {
+            long k = typeId.Value;
+            if (!cache.TryGetValue(k, out var res)) cache[k] = res = GroupSafety.AnalyzeType(doc, typeId);
+            return res;
+        }
+        foreach (var ch in cs.Changes)
+        {
+            if (!ch.InGroup) continue;
+            var memberUids = ch.BulkInstanceIds ?? new List<string> { ch.UniqueId };
+            foreach (var uid in memberUids)
+            {
+                if (string.IsNullOrEmpty(uid)) continue;
+                var gid = doc.GetElement(uid)?.GroupId;
+                if (gid == null || gid == ElementId.InvalidElementId) continue;
+                if (doc.GetElement(gid) is not Group g) continue;
+                var s = Safety(g.GetTypeId());
+                if (s.IsBroken) { ch.GroupBroken = true; ch.GroupBrokenReason = s.Explain(); break; }
+            }
         }
     }
 
@@ -972,30 +1019,33 @@ public sealed class Importer
                 // Bulk instance write (grouped schedule): apply to every instance the row represented.
                 if (ch.BulkInstanceIds != null)
                 {
+                    bool anyFail = false, anyUnver = false;
                     foreach (var uid in ch.BulkInstanceIds)
                     {
                         var inst = doc.GetElement(uid);
                         var ip = inst == null ? null : GetParam(inst, ch.ParameterId);
-                        if (ip == null || ip.IsReadOnly) { failed.Add(Label(ch)); continue; }
+                        if (ip == null || ip.IsReadOnly) { failed.Add(Label(ch)); anyFail = true; continue; }
                         // Grouped project param: allow it to vary per instance, then write each instance directly.
-                        if (ch.GroupMode == GroupMode.ProjectVary && !EnsureVary(ip, doc)) { failed.Add(Label(ch) + " — can't vary by group instance"); continue; }
-                        if (!SetValue(ip, ch)) { failed.Add(Label(ch)); continue; }
-                        if (!VerifyWrite(ip, ch)) { unverified.Add(Label(ch)); continue; }
+                        if (ch.GroupMode == GroupMode.ProjectVary && !EnsureVary(ip, doc)) { failed.Add(Label(ch) + " — can't vary by group instance"); anyFail = true; continue; }
+                        if (!SetValue(ip, ch)) { failed.Add(Label(ch)); anyFail = true; continue; }
+                        if (!VerifyWrite(ip, ch)) { unverified.Add(Label(ch)); anyUnver = true; continue; }
                         applied++;
                     }
+                    // Any failed instance fails the whole cell; else any unverified; else applied.
+                    ch.Outcome = anyFail ? ApplyOutcome.Failed : anyUnver ? ApplyOutcome.Unverified : ApplyOutcome.Applied;
                     continue;
                 }
 
                 var host = ch.Binding == "type" ? doc.GetElement(new ElementId(ch.TypeId)) : doc.GetElement(ch.UniqueId);
                 var param = host == null ? null : GetParam(host, ch.ParameterId);
-                if (param == null || param.IsReadOnly) { failed.Add(Label(ch)); continue; }
-                if (ch.GroupMode == GroupMode.ProjectVary && !EnsureVary(param, doc)) { failed.Add(Label(ch) + " — can't vary by group instance"); continue; }
-                if (!SetValue(param, ch)) { failed.Add(Label(ch)); continue; }
+                if (param == null || param.IsReadOnly) { failed.Add(Label(ch)); ch.Outcome = ApplyOutcome.Failed; continue; }
+                if (ch.GroupMode == GroupMode.ProjectVary && !EnsureVary(param, doc)) { failed.Add(Label(ch) + " — can't vary by group instance"); ch.Outcome = ApplyOutcome.Failed; continue; }
+                if (!SetValue(param, ch)) { failed.Add(Label(ch)); ch.Outcome = ApplyOutcome.Failed; continue; }
 
                 // H3: re-read the parameter and confirm the value actually landed (a Set can return
                 // true yet be coerced/clamped, or silently no-op on some derived parameters).
-                if (!VerifyWrite(param, ch)) { unverified.Add(Label(ch)); continue; }
-                applied++;
+                if (!VerifyWrite(param, ch)) { unverified.Add(Label(ch)); ch.Outcome = ApplyOutcome.Unverified; continue; }
+                applied++; ch.Outcome = ApplyOutcome.Applied;
             }
             var commitStatus = tx.Commit();
             if (commitStatus != TransactionStatus.Committed)
@@ -1005,6 +1055,9 @@ public sealed class Importer
                 // committed (ApplyFailureCollector only auto-deletes warnings). Nothing persisted, so report
                 // the rollback honestly instead of the in-transaction "applied" tally — which would otherwise
                 // read as a success the model never actually received.
+                // Nothing persisted: every change that thought it applied actually failed.
+                foreach (var c in cs.Changes)
+                    if (c.Outcome is ApplyOutcome.Applied or ApplyOutcome.Unverified) c.Outcome = ApplyOutcome.Failed;
                 int errCount = collector.Messages.Count(m => m.StartsWith("[Error]"));
                 cs.DiagnosticLog = BuildApplyLog(applied, failed, unverified, collector.Messages, cs, rolledBack: true);
                 return $"Apply ROLLED BACK by Revit — 0 of {applied} attempted change(s) were saved" +
@@ -1027,6 +1080,45 @@ public sealed class Importer
 
         cs.DiagnosticLog = BuildApplyLog(applied, failed, unverified, collector.Messages, cs);
         return msg;
+    }
+
+    /// <summary>
+    ///     Post-apply (post-commit) verification: re-reads every applied change's target parameter from the model
+    ///     and compares it to the change's parsed value. Catches silent failures that only surface after the
+    ///     transaction commits (e.g. a value Revit clamps, or a group-phase write the dance couldn't reproduce).
+    ///     A mismatch stamps <see cref="ApplyOutcome.Failed"/>; a match on a still-<c>Pending</c> change stamps
+    ///     <see cref="ApplyOutcome.Applied"/>. Option-2 (NewTypeParam) changes are skipped — they store the value
+    ///     in a DIFFERENT parameter, so the original target won't reflect it; their stamp is trusted as-is.
+    /// </summary>
+    public void VerifyApplied(Document doc, ChangeSet cs)
+    {
+        foreach (var ch in cs.Changes)
+        {
+            if (ch.Frozen) continue;
+            if (ch.Resolution == GroupResolution.NewTypeParam) continue; // value lives in a different param — trust its stamp
+
+            bool matches;
+            if (ch.BulkInstanceIds != null)
+            {
+                // Bulk write: every instance must currently hold the value, else the cell failed.
+                matches = true;
+                foreach (var uid in ch.BulkInstanceIds)
+                {
+                    var inst = doc.GetElement(uid);
+                    var ip = inst == null ? null : GetParam(inst, ch.ParameterId);
+                    if (ip == null || !VerifyWrite(ip, ch)) { matches = false; break; }
+                }
+            }
+            else
+            {
+                var host = ch.Binding == "type" ? doc.GetElement(new ElementId(ch.TypeId)) : doc.GetElement(ch.UniqueId);
+                var param = host == null ? null : GetParam(host, ch.ParameterId);
+                matches = param != null && VerifyWrite(param, ch);
+            }
+
+            if (!matches) ch.Outcome = ApplyOutcome.Failed;
+            else if (ch.Outcome == ApplyOutcome.Pending) ch.Outcome = ApplyOutcome.Applied;
+        }
     }
 
     private static string Label(ProposedChange ch) =>
@@ -1118,7 +1210,7 @@ public sealed class Importer
                 if (tid0 != null && tid0 != ElementId.InvalidElementId) perType[tid0.Value] = ch;
             }
             if (src == null || cats.IsEmpty || perType.Count == 0)
-            { failed.Add($"{sample.Field} (new type param) — no writable source/category"); continue; }
+            { failed.Add($"{sample.Field} (new type param) — no writable source/category"); StampFailed(list); continue; }
 
             // Derive the new param's spec from the SOURCE storage type — don't blindly trust GetDataType().
             var spec = DeriveSpec(src);
@@ -1126,19 +1218,32 @@ public sealed class Importer
             var name = $"{sample.Field} (Transom)";
             ElementId paramId; Guid guid;
             try { (paramId, guid) = EnsureSharedTypeParam(doc, app, name, spec, cats); }
-            catch (Exception ex) { failed.Add($"{sample.Field} (new type param) — {ex.Message}"); continue; }
+            catch (Exception ex) { failed.Add($"{sample.Field} (new type param) — {ex.Message}"); StampFailed(list); continue; }
             if (paramId == ElementId.InvalidElementId || guid == Guid.Empty)
-            { failed.Add($"{sample.Field} (new type param) — couldn't create/bind '{name}'"); continue; }
+            { failed.Add($"{sample.Field} (new type param) — couldn't create/bind '{name}'"); StampFailed(list); continue; }
             created++;
 
             // Write one value per affected type and VERIFY it (option 2 was previously unverified).
+            // Track each type's success so every change in this column can be stamped by the type it targets.
             int wroteHere = 0;
+            var typeOk = new Dictionary<long, bool>();
             foreach (var kv in perType)
             {
                 var typeEl = doc.GetElement(new ElementId(kv.Key));
                 var np = typeEl?.get_Parameter(guid);
-                if (np != null && !np.IsReadOnly && SetValue(np, kv.Value) && VerifyWrite(np, kv.Value)) { written++; wroteHere++; }
+                bool ok = np != null && !np.IsReadOnly && SetValue(np, kv.Value) && VerifyWrite(np, kv.Value);
+                typeOk[kv.Key] = ok;
+                if (ok) { written++; wroteHere++; }
                 else failed.Add($"{name} on type {kv.Key}");
+            }
+
+            // Stamp every change in this column from the outcome of the type it writes to (a type whose write
+            // never ran — element/type unresolved — counts as Failed, mirroring the failed-list semantics).
+            foreach (var ch in list)
+            {
+                long tid = ElementTypeIdOf(doc, ch);
+                ch.Outcome = tid >= 0 && typeOk.TryGetValue(tid, out var ok) && ok
+                    ? ApplyOutcome.Applied : ApplyOutcome.Failed;
             }
 
             // Only surface the new column on schedules if at least one value actually landed — never leave a
@@ -1148,6 +1253,12 @@ public sealed class Importer
 
         return created == 0 ? "" :
             $"option 2: {created} new type param(s), {written} value(s) written, {fields} schedule field(s) added";
+    }
+
+    /// <summary>Stamps every change in a failed option-2 column as <see cref="ApplyOutcome.Failed"/>.</summary>
+    private static void StampFailed(List<ProposedChange> changes)
+    {
+        foreach (var ch in changes) ch.Outcome = ApplyOutcome.Failed;
     }
 
     /// <summary>The spec (ForgeTypeId) to create a shared param matching a source parameter's storage type.</summary>

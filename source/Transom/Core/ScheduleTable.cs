@@ -68,9 +68,18 @@ public sealed class RowMeta
     /// (sets "vary by group instance" then writes). Blue on export.</summary>
     public HashSet<int>? GroupProjectCols;
 
-    /// <summary>Grouped-element instance params that are BUILT-IN params — can't vary, need the Claude-assist
-    /// definition-swap. Yellow on export when Claude-assist is enabled, otherwise a distinct grey.</summary>
+    /// <summary>Grouped-element instance params that are BUILT-IN params in a SIMPLE (danceable) group — can't
+    /// vary, but the definition-swap dance can reproduce the group. Yellow on export.</summary>
     public HashSet<int>? GroupBuiltinCols;
+
+    /// <summary>Grouped-element BUILT-IN params whose model group is BROKEN (a member anchored outside the group,
+    /// a nested group, or mixed instance orientation) — the dance can't reproduce it, so the edit must use a new
+    /// type parameter (option 2) or Claude-Assist. RED on export.</summary>
+    public HashSet<int>? GroupBrokenCols;
+
+    /// <summary>Why this row's group is broken (offending elements/conditions) — surfaced on the red cell's
+    /// comment and the import dialog so the user can go fix the model. Empty when the group is simple.</summary>
+    public string GroupBrokenReason = "";
 
     /// <summary>Column indices whose edit is a BULK write (a type parameter → every instance of that type) — green on export.</summary>
     public HashSet<int>? BulkCols;

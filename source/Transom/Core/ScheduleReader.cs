@@ -338,6 +338,21 @@ public sealed class ScheduleReader
             && c.Col < table.ColCount && !string.IsNullOrEmpty(table.Cells[rr][c.Col].Text));
 
         var writable = table.Columns.Where(c => c.Writable).ToList();
+
+        // Cache GroupSafety verdicts per group-TYPE for this pass: built-in group-member cells in a BROKEN group
+        // (anchored/sketch members, nested, or mixed orientation) color RED (option 2 / Claude-Assist) instead
+        // of yellow (dance available). See GroupSafety.
+        var groupSafetyCache = new Dictionary<long, GroupSafetyResult>();
+        GroupSafetyResult SafetyOfGroup(ElementId? gid)
+        {
+            if (gid == null || gid == ElementId.InvalidElementId) return new GroupSafetyResult();
+            if (_doc.GetElement(gid) is not Group g) return new GroupSafetyResult();
+            long key = g.GetTypeId().Value;
+            if (!groupSafetyCache.TryGetValue(key, out var res))
+                groupSafetyCache[key] = res = GroupSafety.AnalyzeType(_doc, g.GetTypeId());
+            return res;
+        }
+
         for (int r = 0; r < table.RowCount; r++)
         {
             var meta = new RowMeta { ExcelRow = r, UniqueId = anchors[r] };
@@ -362,7 +377,8 @@ public sealed class ScheduleReader
                     var b = new Dictionary<int, string>();
                     var frozen = new HashSet<int>();    // grey: never importable
                     var groupProjectCols = new HashSet<int>(); // blue: grouped project param -> Transom sets vary + writes
-                    var groupBuiltinCols = new HashSet<int>(); // yellow/grey: grouped built-in param -> Claude dance
+                    var groupBuiltinCols = new HashSet<int>(); // yellow: grouped built-in param, SIMPLE group -> dance
+                    var groupBrokenCols = new HashSet<int>();  // red: grouped built-in param, BROKEN group -> option 2/4/5
                     var bulkCols = new HashSet<int>();  // green: type param -> edits every instance of the type
                     // A grouped (non-itemized) row bulk-writes instance params to all its members; if any member
                     // lives in a Revit model group, those instance writes need Claude-assist too (blue), just like
@@ -375,6 +391,23 @@ public sealed class ScheduleReader
                             if (inst != null && inst.GroupId != null && inst.GroupId != ElementId.InvalidElementId)
                             { anyMemberGrouped = true; break; }
                         }
+
+                    // Is this row's grouped element in a BROKEN model group? Drives red (broken) vs yellow (simple)
+                    // for its built-in group-member cells. Prefer a broken verdict if ANY relevant group is broken.
+                    GroupSafetyResult? rowGroupSafety = null;
+                    if (inGroup) rowGroupSafety = SafetyOfGroup(host.GroupId);
+                    else if (anyMemberGrouped && grouped && anchors[r] != null
+                             && typeToInstances.TryGetValue(anchors[r]!, out var safMids))
+                        foreach (var mid in safMids)
+                        {
+                            var inst = _doc.GetElement(mid);
+                            if (inst?.GroupId == null || inst.GroupId == ElementId.InvalidElementId) continue;
+                            var s = SafetyOfGroup(inst.GroupId);
+                            rowGroupSafety ??= s;
+                            if (s.IsBroken) { rowGroupSafety = s; break; }
+                        }
+                    bool rowGroupBroken = rowGroupSafety?.IsBroken == true;
+
                     foreach (var col in table.Columns)
                     {
                         if (!col.Writable) { frozen.Add(col.Col); continue; } // calculated/combined -> can't edit
@@ -383,8 +416,10 @@ public sealed class ScheduleReader
                         if (!col.ImportEditable) { frozen.Add(col.Col); continue; }      // read-only / family-type
                         if ((inGroup || anyMemberGrouped) && bind == "instance")
                         {
-                            // project/shared params (positive id) can vary per instance; built-ins can't -> Claude dance
+                            // project/shared params (positive id) can vary per instance -> blue. Built-ins can't:
+                            // a SIMPLE group can dance -> yellow; a BROKEN group can't -> red (option 2/4/5).
                             if (col.ParameterId >= 0) groupProjectCols.Add(col.Col);
+                            else if (rowGroupBroken) groupBrokenCols.Add(col.Col);
                             else groupBuiltinCols.Add(col.Col);
                         }
                         else if (bind == "type") bulkCols.Add(col.Col);                  // bulk: writes to the type
@@ -393,6 +428,11 @@ public sealed class ScheduleReader
                     if (frozen.Count > 0) meta.FrozenCols = frozen;
                     if (groupProjectCols.Count > 0) meta.GroupProjectCols = groupProjectCols;
                     if (groupBuiltinCols.Count > 0) meta.GroupBuiltinCols = groupBuiltinCols;
+                    if (groupBrokenCols.Count > 0)
+                    {
+                        meta.GroupBrokenCols = groupBrokenCols;
+                        meta.GroupBrokenReason = rowGroupSafety?.Explain() ?? "";
+                    }
                     if (bulkCols.Count > 0) meta.BulkCols = bulkCols;
                 }
             }

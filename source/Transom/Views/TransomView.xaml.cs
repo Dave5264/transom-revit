@@ -91,6 +91,7 @@ public sealed partial class TransomView
         // Legend term colours brightened for the dark surface (the light #1E7A34 / #B8860B are unreadable on dark).
         Set("LegendGreen", "#3FB36A");
         Set("LegendYellow", "#D8A24A");
+        Set("LegendRed", "#E8736B");
     }
 
     // ----- Right-click "copy name" on the export (FilteredSchedules) and import (AffectedSchedules) lists -----

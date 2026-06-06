@@ -33,6 +33,12 @@ namespace Transom.Core;
 //  ALL instances of a type, BEFORE any edit. Inside the dance, ANY anomaly throws and rolls the whole
 //  type back — UngroupMembers is a one-way door, so the per-type transaction rollback is the guarantee
 //  that we NEVER leave a half-danced group.
+//
+//  NESTED GROUPS: a BYSTANDER nested model group (the edited param is on a DIRECT member, not inside the
+//  nest) is now PRESERVED rather than skipped — UngroupMembers frees it whole, NewGroup re-nests it, and
+//  the post-dance STEP-14 check verifies full structural parity (every role's category/type, nested groups
+//  included) so anything the swap would have lost/changed rolls the type back instead. (A target INSIDE a
+//  nested group is not a direct member, so the role plan still skips it.)
 // =====================================================================================================
 
 /// <summary>Per-group-type outcome of an automated dance.</summary>
@@ -131,6 +137,7 @@ public sealed class GroupDanceApplier
                 {
                     // No resolvable grouped member — can't dance this change. Bucket as Failed (distinct from Skip).
                     result.Failed++;
+                    ch.Outcome = ApplyOutcome.Failed;
                     result.Outcomes.Add(new GroupOutcome
                     {
                         GroupTypeName = string.IsNullOrEmpty(ch.GroupName) ? "(unknown group)" : ch.GroupName,
@@ -157,7 +164,15 @@ public sealed class GroupDanceApplier
 
             // ---- STEP 3..15: one dance per group type -------------------------------------------------------
             foreach (var (typeId, changes, _) in ordered)
+            {
+                int before = result.Outcomes.Count;
                 DanceOneType(doc, typeId, changes, result, revitWarnings);
+                // Stamp every change in this type's bucket with the type's outcome (Danced -> Applied, else Failed),
+                // so the run-results report can colour them. DanceOneType adds exactly one outcome per call.
+                var last = result.Outcomes.Count > before ? result.Outcomes[result.Outcomes.Count - 1] : null;
+                var oc = last != null && last.Status == GroupOutcome.DanceStatus.Danced ? ApplyOutcome.Applied : ApplyOutcome.Failed;
+                foreach (var ch in changes) { ch.Outcome = oc; if (oc == ApplyOutcome.Failed) ch.OutcomeNote = last?.Reason ?? ""; }
+            }
         }
         finally
         {
@@ -232,7 +247,20 @@ public sealed class GroupDanceApplier
             }
         }
 
-        // Snapshot ordered member ids per instance once (used by 4d/4e/4f + the plan).
+        // (4d) BROKEN-GROUP gate — the definition swap can only faithfully reproduce a SIMPLE group. Refuse
+        //      (the user is routed to option 2 / Claude-Assist) when a member is anchored OUTSIDE the group
+        //      (hosted on a Level, or a sketch-based Ceiling/Floor/Roof), the group contains a NESTED model
+        //      group, or its instances sit at DIFFERENT orientations (mirror/rotation). Each one makes
+        //      NewGroup + ChangeTypeId silently scatter or re-orient members — verified empirically; see
+        //      GroupSafety. (STEP 14b below is the runtime backstop for anything this pre-flight check misses.)
+        var safety = GroupSafety.AnalyzeType(doc, groupTypeId);
+        if (safety.IsBroken)
+        {
+            Skip(result, originalName, "broken group — " + safety.Explain());
+            return;
+        }
+
+        // Snapshot ordered member ids per instance once (used by 4e/4f + the plan).
         List<IList<ElementId>> memberLists;
         try
         {
@@ -244,18 +272,9 @@ public sealed class GroupDanceApplier
             return;
         }
 
-        // (4d) nested member groups (any instance)
-        for (int i = 0; i < instances.Count; i++)
-        {
-            foreach (var mid in memberLists[i])
-            {
-                if (doc.GetElement(mid) is Group)
-                {
-                    Skip(result, originalName, "contains a nested model group");
-                    return;
-                }
-            }
-        }
+        // Nested model groups are refused by the broken-group gate (4d) above, so any group reaching here has
+        // none — this count is therefore 0 and is kept only so the success-log shape stays uniform.
+        int nestedGroupMembers = memberLists[0].Count(mid => doc.GetElement(mid) is Group);
 
         // (4e) excluded members / mismatched member sets — equal COUNT precondition (Revit 2025 has no
         //      public GetExcludedMemberIds, and GetMemberIds() omits excluded members, so unequal counts
@@ -346,6 +365,10 @@ public sealed class GroupDanceApplier
         // Capture the OTHER instances' ids now (still valid). A's id is captured to exclude it from repoint.
         var aId = A.Id;
         var otherInstanceIds = instances.Where(g => g.Id != aId).Select(g => g.Id).ToList();
+
+        // Capture every instance's bounding box BEFORE the swap, so STEP 14b can assert nothing moved.
+        var bboxBefore = new Dictionary<ElementId, BoundingBoxXYZ?>();
+        foreach (var g in instances) bboxBefore[g.Id] = SafeBoundingBox(g);
 
         // ---- STEP 7..15: the dance, inside ONE dedicated top-level transaction for THIS type ------------
         using var tx = new Transaction(doc, $"Transom group dance: {originalName}");
@@ -441,6 +464,37 @@ public sealed class GroupDanceApplier
             foreach (var vInst in verifyInstances)
             {
                 var vMembers = vInst.GetMemberIds();
+
+                // POSITION PARITY (STEP 14b) — the instance must occupy the SAME bounding box as before the
+                // dance. RoleSignature is geometry-blind (a scattered or re-oriented member keeps its category
+                // + type), so this is the real "nothing moved" guarantee: it catches anchored-member scatter
+                // and orientation snap that would slip past the structural check, and rolls the whole type back.
+                var beforeKey = vInst.Id == newGroup.Id ? aId : vInst.Id;
+                if (bboxBefore.TryGetValue(beforeKey, out var bb0) && bb0 != null)
+                {
+                    var bb1 = SafeBoundingBox(vInst);
+                    if (bb1 == null || !BoxesMatch(bb0, bb1))
+                        throw new InvalidOperationException(
+                            "an instance moved during the dance (a member scattered or the group re-oriented) — rolled back");
+                }
+
+                // STRUCTURAL PARITY — the "everything else is exactly as before" guarantee. The entire member
+                // set (every bystander, INCLUDING any nested model group) must be positionally identical to the
+                // pre-dance baseline: same count, and same category/type signature at each role index. A nested
+                // group (or any bystander) that the ungroup/regroup/repoint lost, added, re-typed, or reordered
+                // trips this and rolls the whole type back. Only the target parameter is allowed to differ — a
+                // value change never alters a role's category/type signature, so this stays orthogonal to the
+                // per-parameter verification below.
+                if (vMembers.Count != memberCount)
+                    throw new InvalidOperationException(
+                        $"member count changed after dance: expected {memberCount}, found {vMembers.Count} (a nested group or bystander member was lost or added) — rolled back");
+                for (int r = 0; r < memberCount; r++)
+                {
+                    if (RoleSignature(doc, vMembers[r]) != roleSig0[r])
+                        throw new InvalidOperationException(
+                            $"member structure changed at role {r} after dance (a nested group or bystander member changed kind/type or moved) — rolled back");
+                }
+
                 foreach (var (role, ch) in plan)
                 {
                     if (role >= vMembers.Count)
@@ -454,17 +508,29 @@ public sealed class GroupDanceApplier
                 }
             }
 
-            // STEP 15: commit.
-            tx.Commit();
+            // STEP 15: commit — and VERIFY it actually stuck. A DocumentCorruption failure (e.g. regrouping a
+            // bystander NESTED model group creates a "circular chain of references") makes Revit ROLL BACK the
+            // commit: tx.Commit() then returns RolledBack, NOT Committed, and the model silently reverts. Without
+            // this check the dance falsely reported "danced" while nothing changed. Treat any non-Committed
+            // result as a failure (the model is already back to its pre-dance state).
+            var commitStatus = tx.Commit();
             CollectWarnings(collector, revitWarnings, originalName);
+            if (commitStatus != TransactionStatus.Committed)
+                throw new InvalidOperationException(
+                    $"commit did not stick (status {commitStatus}) — Revit rejected the change and rolled the transaction back. "
+                    + "Most often this is a nested model group whose regroup forms a circular reference; the model is unchanged.");
 
             int paramsApplied = plan.Select(pe => (pe.roleIndex, pe.ch.ParameterId)).Distinct().Count();
             result.Danced++;
+            var danceNote = renameNote.Length > 0 ? renameNote.Trim() : "";
+            if (nestedGroupMembers > 0)
+                danceNote = (danceNote.Length > 0 ? danceNote + "; " : "")
+                            + $"preserved {nestedGroupMembers} nested group(s) per instance (verified structurally)";
             result.Outcomes.Add(new GroupOutcome
             {
                 GroupTypeName = originalName,
                 Status = GroupOutcome.DanceStatus.Danced,
-                Reason = renameNote.Length > 0 ? renameNote.Trim() : "",
+                Reason = danceNote,
                 ParamsApplied = paramsApplied,
                 InstancesRepointed = repointed,
                 InstancesVerified = verifyInstances.Count,
@@ -523,6 +589,16 @@ public sealed class GroupDanceApplier
         try { var t = el.GetTypeId(); typ = t == ElementId.InvalidElementId ? -1 : t.Value; } catch { typ = -1; }
         return cat + ":" + typ;
     }
+
+    private static BoundingBoxXYZ? SafeBoundingBox(Element e)
+    {
+        try { return e.get_BoundingBox(null); } catch { return null; }
+    }
+
+    /// <summary>Model bounding boxes match within ~0.1 ft on every corner (position-parity backstop).</summary>
+    private static bool BoxesMatch(BoundingBoxXYZ a, BoundingBoxXYZ b, double tol = 0.1) =>
+        Math.Abs(a.Min.X - b.Min.X) <= tol && Math.Abs(a.Min.Y - b.Min.Y) <= tol && Math.Abs(a.Min.Z - b.Min.Z) <= tol &&
+        Math.Abs(a.Max.X - b.Max.X) <= tol && Math.Abs(a.Max.Y - b.Max.Y) <= tol && Math.Abs(a.Max.Z - b.Max.Z) <= tol;
 
     /// <summary>Canonical parsed-value key for conflict comparison (mirrors the storage the write uses).</summary>
     private static string ValueKey(ProposedChange ch) =>

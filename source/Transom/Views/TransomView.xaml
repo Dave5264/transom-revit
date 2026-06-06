@@ -39,6 +39,7 @@
         <!-- Legend term colours — theme-aware so they stay legible in Revit's dark theme (ApplyTheme brightens them) -->
         <SolidColorBrush x:Key="LegendGreen" Color="#1E7A34" />
         <SolidColorBrush x:Key="LegendYellow" Color="#B8860B" />
+        <SolidColorBrush x:Key="LegendRed" Color="#C0392B" />
 
         <!-- Buttons: rounded; primary buttons set Background=#185FA5/Foreground=White inline -->
         <Style TargetType="Button">
@@ -218,7 +219,13 @@
                                 <Grid.ColumnDefinitions><ColumnDefinition Width="16" /><ColumnDefinition Width="56" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
                                 <Border Grid.Column="0" Width="12" Height="12" CornerRadius="2" Background="#FFF2CC" BorderBrush="#CFCDC4" BorderThickness="1" VerticalAlignment="Top" Margin="0,1,0,0" />
                                 <TextBlock Grid.Column="1" Text="yellow" FontWeight="SemiBold" Foreground="{DynamicResource LegendYellow}" FontSize="11.5" />
-                                <TextBlock Grid.Column="2" Text="grouped element's built-in parameter — applied in Assist mode (shown only when Assist mode is on; otherwise a muted tan-grey)" Foreground="{DynamicResource Muted}" FontSize="11.5" TextWrapping="Wrap" />
+                                <TextBlock Grid.Column="2" Text="grouped built-in parameter in a simple group — the group dance can apply it (no Assist required)" Foreground="{DynamicResource Muted}" FontSize="11.5" TextWrapping="Wrap" />
+                            </Grid>
+                            <Grid Margin="0,1">
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="16" /><ColumnDefinition Width="56" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                                <Border Grid.Column="0" Width="12" Height="12" CornerRadius="2" Background="#F8D2D5" BorderBrush="#CFCDC4" BorderThickness="1" VerticalAlignment="Top" Margin="0,1,0,0" />
+                                <TextBlock Grid.Column="1" Text="red" FontWeight="SemiBold" Foreground="{DynamicResource LegendRed}" FontSize="11.5" />
+                                <TextBlock Grid.Column="2" Text="grouped built-in parameter in a “broken” group (a member anchored outside the group, a nested group, or mixed instance orientation) — the dance can't reproduce it; use a new type parameter or Claude-Assist (text greys out when Assist mode is off, since it usually can't be changed without it)" Foreground="{DynamicResource Muted}" FontSize="11.5" TextWrapping="Wrap" />
                             </Grid>
                             <Grid Margin="0,1">
                                 <Grid.ColumnDefinitions><ColumnDefinition Width="16" /><ColumnDefinition Width="56" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>

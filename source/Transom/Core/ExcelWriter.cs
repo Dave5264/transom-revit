@@ -22,7 +22,10 @@ public sealed class ExcelWriter
 
     public void Write(ScheduleTable table, string path) => WriteMany(new List<ScheduleTable> { table }, path);
 
-    public void WriteMany(List<ScheduleTable> tables, string path)
+    /// <param name="outcomes">Optional run-results overlay keyed by (row UniqueId, column ParameterId): Applied
+    /// cells render BOLD (keep their fill), Failed/Unverified cells render ITALIC on a red fill. Null = no overlay.</param>
+    public void WriteMany(List<ScheduleTable> tables, string path,
+        Dictionary<(string uid, int paramId), ApplyOutcome>? outcomes = null)
     {
         var ext = Path.GetExtension(path).ToLowerInvariant();
         if (ext == ".csv") { WriteCsvMany(tables, path); return; }
@@ -35,7 +38,7 @@ public sealed class ExcelWriter
         foreach (var table in tables)
         {
             var name = UniqueName(SafeSheetName(table.ScheduleName), used);
-            WriteSheet(wb, wb.CreateSheet(name), table, xls);
+            WriteSheet(wb, wb.CreateSheet(name), table, xls, outcomes);
             pairs.Add((table, name));
         }
 
@@ -55,7 +58,8 @@ public sealed class ExcelWriter
         wb.Write(fs);
     }
 
-    private static void WriteSheet(IWorkbook wb, ISheet sheet, ScheduleTable table, bool xls)
+    private static void WriteSheet(IWorkbook wb, ISheet sheet, ScheduleTable table, bool xls,
+        Dictionary<(string uid, int paramId), ApplyOutcome>? outcomes = null)
     {
         var cache = new Dictionary<string, ICellStyle>();
         int anchorCol = table.ColCount;
@@ -91,6 +95,7 @@ public sealed class ExcelWriter
             var frozen = table.RoundTrippable && r < table.Rows.Count ? table.Rows[r].FrozenCols : null;
             var groupProjectCols = table.RoundTrippable && r < table.Rows.Count ? table.Rows[r].GroupProjectCols : null;
             var groupBuiltinCols = table.RoundTrippable && r < table.Rows.Count ? table.Rows[r].GroupBuiltinCols : null;
+            var groupBrokenCols = table.RoundTrippable && r < table.Rows.Count ? table.Rows[r].GroupBrokenCols : null;
             // Group-header / blank separator rows carry no element anchor, so editing them does nothing on
             // import. Grey the whole row so it reads as non-editable (matches the per-cell grey hint).
             var rowKind = r < table.Rows.Count ? table.Rows[r].Kind : null;
@@ -103,17 +108,31 @@ public sealed class ExcelWriter
                 var cell = row.CreateCell(c);
                 cell.SetCellValue(tc.Text);
                 // Colour precedence: grey (can't import) > blue (grouped project param, Transom applies via vary)
-                // > yellow/grey (grouped built-in param: yellow when Claude-assist on, distinct grey when off)
+                // > red (grouped built-in in a BROKEN group: dance can't run -> option 2 / Claude-Assist;
+                //        text greys when Assist is OFF — usually non-editable then)
+                // > yellow (grouped built-in in a SIMPLE group: the group dance can apply it, no Assist required)
                 // > green (bulk: edits many elements) > normal. An editable group-header cell is a bulk write -> green.
                 bool isGroupEditCell = ghe != null && c == ghe.Col;
                 var style = isGroupEditCell ? GreenOf(tc.Style)
                     : nonImportableRow ? GreyOf(tc.Style)
                     : frozen != null && frozen.Contains(c) ? GreyOf(tc.Style)
                     : groupProjectCols != null && groupProjectCols.Contains(c) ? BlueOf(tc.Style)
-                    : groupBuiltinCols != null && groupBuiltinCols.Contains(c)
-                        ? (table.ClaudeAssistEnabled ? YellowOf(tc.Style) : GreyBuiltinOf(tc.Style))
+                    : groupBrokenCols != null && groupBrokenCols.Contains(c)
+                        ? (table.ClaudeAssistEnabled ? RedOf(tc.Style) : RedGreyOf(tc.Style))
+                    : groupBuiltinCols != null && groupBuiltinCols.Contains(c) ? YellowOf(tc.Style)
                     : bulk != null && bulk.Contains(c) ? GreenOf(tc.Style)
                     : tc.Style;
+
+                // Run-results overlay (post-apply): if this cell carried an applied change, mark its outcome —
+                // bold (kept fill) for Applied, italic on a red fill for Failed/Unverified.
+                if (outcomes != null && r < table.Rows.Count && !string.IsNullOrEmpty(table.Rows[r].UniqueId)
+                    && c < table.Columns.Count
+                    && outcomes.TryGetValue((table.Rows[r].UniqueId!, table.Columns[c].ParameterId), out var oc))
+                {
+                    if (oc == ApplyOutcome.Applied) style = BoldOf(style);
+                    else if (oc is ApplyOutcome.Failed or ApplyOutcome.Unverified) style = FailedOf(style);
+                }
+
                 cell.CellStyle = GetStyle(wb, cache, style, xls);
             }
 
@@ -176,13 +195,25 @@ public sealed class ExcelWriter
         BorderTop = s.BorderTop, BorderBottom = s.BorderBottom, BorderLeft = s.BorderLeft, BorderRight = s.BorderRight,
     };
 
-    /// <summary>A muted tan-grey copy for grouped BUILT-IN-parameter cells when Claude-assist is OFF — the yellow
-    /// (Claude) path is unavailable, so they read as non-editable but stay visually distinct from the plain
-    /// can't-ever-edit grey (<see cref="GreyOf"/>).</summary>
-    private static CellStyleInfo GreyBuiltinOf(CellStyleInfo s) => new()
+    /// <summary>A red-tinted-FILL copy for grouped BUILT-IN-parameter cells whose model group is BROKEN — the
+    /// definition-swap dance can't reproduce it (a member anchored outside the group, a nested group, or mixed
+    /// instance orientation), so the edit must use option 2 (a new type parameter) or Claude-Assist. Keeps the
+    /// original (black) text colour.</summary>
+    private static CellStyleInfo RedOf(CellStyleInfo s) => new()
     {
         FontName = s.FontName, TextSize = s.TextSize, Bold = s.Bold, Italic = s.Italic, Underline = s.Underline,
-        HAlign = s.HAlign, VAlign = s.VAlign, TextColor = 0x9A9A9A, BackColor = 0xEDE8D8,
+        HAlign = s.HAlign, VAlign = s.VAlign, TextColor = s.TextColor, BackColor = 0xF8D2D5,
+        BorderTop = s.BorderTop, BorderBottom = s.BorderBottom, BorderLeft = s.BorderLeft, BorderRight = s.BorderRight,
+    };
+
+    /// <summary>Red fill but GREY text — a BROKEN-group built-in cell when Claude-Assist is OFF. Without Assist the
+    /// definition-swap dance can't run, so the cell usually can't be edited (option 2 aside, which depends on
+    /// import-time value alignment not known at export); the greyed text reads as effectively non-editable until
+    /// Assist is enabled.</summary>
+    private static CellStyleInfo RedGreyOf(CellStyleInfo s) => new()
+    {
+        FontName = s.FontName, TextSize = s.TextSize, Bold = s.Bold, Italic = s.Italic, Underline = s.Underline,
+        HAlign = s.HAlign, VAlign = s.VAlign, TextColor = 0x9A9A9A, BackColor = 0xF8D2D5,
         BorderTop = s.BorderTop, BorderBottom = s.BorderBottom, BorderLeft = s.BorderLeft, BorderRight = s.BorderRight,
     };
 
@@ -192,6 +223,24 @@ public sealed class ExcelWriter
     {
         FontName = s.FontName, TextSize = s.TextSize, Bold = s.Bold, Italic = s.Italic, Underline = s.Underline,
         HAlign = s.HAlign, VAlign = s.VAlign, TextColor = s.TextColor, BackColor = 0xDDF0DD,
+        BorderTop = s.BorderTop, BorderBottom = s.BorderBottom, BorderLeft = s.BorderLeft, BorderRight = s.BorderRight,
+    };
+
+    /// <summary>A BOLD copy of a cell style for run-results cells that APPLIED — keeps the cell's existing fill
+    /// (the hint colour from the export pass) and only turns the text bold.</summary>
+    private static CellStyleInfo BoldOf(CellStyleInfo s) => new()
+    {
+        FontName = s.FontName, TextSize = s.TextSize, Bold = true, Italic = s.Italic, Underline = s.Underline,
+        HAlign = s.HAlign, VAlign = s.VAlign, TextColor = s.TextColor, BackColor = s.BackColor,
+        BorderTop = s.BorderTop, BorderBottom = s.BorderBottom, BorderLeft = s.BorderLeft, BorderRight = s.BorderRight,
+    };
+
+    /// <summary>An ITALIC, red-FILL copy of a cell style for run-results cells that FAILED or stayed UNVERIFIED —
+    /// keeps the original text colour, turns the text italic, and tints the background red (0xF8D2D5).</summary>
+    private static CellStyleInfo FailedOf(CellStyleInfo s) => new()
+    {
+        FontName = s.FontName, TextSize = s.TextSize, Bold = s.Bold, Italic = true, Underline = s.Underline,
+        HAlign = s.HAlign, VAlign = s.VAlign, TextColor = s.TextColor, BackColor = 0xF8D2D5,
         BorderTop = s.BorderTop, BorderBottom = s.BorderBottom, BorderLeft = s.BorderLeft, BorderRight = s.BorderRight,
     };
 

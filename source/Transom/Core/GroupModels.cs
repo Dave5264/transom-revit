@@ -34,7 +34,10 @@ public sealed class GroupResolutionPrompt
 {
     public string Field = "";              // schedule column header / parameter name (for the heading)
     public int ParameterId;
-    public bool IsBuiltin;                 // true = yellow (built-in, no vary); false = blue (project)
+    public bool IsBuiltin;                 // true = built-in (no vary, option 1); false = project (blue)
+    public bool IsBroken;                  // true = "broken" group (member anchored outside the group, a nested
+                                           // group, or mixed instance orientation) → dance can't run; RED, opts 2/4/5
+    public string BrokenReason = "";       // what makes the group broken (offending elements), for the dialog note
     public bool Option2Available;          // values align per type across this whole column
     public bool AssistEnabled;             // Claude-assist on (gates the Claude-Assist option)
     public List<ProposedChange> Changes = new();
