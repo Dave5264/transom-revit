@@ -55,6 +55,10 @@ public sealed class ProposedChange
     public bool Selected { get; set; } = true;
     public string ElementName { get; set; } = "";
     public string Field { get; set; } = "";
+    /// <summary>The source schedule column's DISPLAY heading (ScheduleField.ColumnHeading), when known.
+    /// Used by option 2 to give the new column a clean visible title instead of the verbose param name.
+    /// Empty falls back to Field.</summary>
+    public string SourceHeading { get; set; } = "";
     public string OldValue { get; set; } = "";
     public string NewValue { get; set; } = "";
     public int InstancesAffected { get; set; } = 1;
@@ -700,11 +704,35 @@ public sealed class Importer
                     continue;
                 }
 
+                // Idempotency: drop instances that ALREADY hold the new value (e.g. a prior option-1
+                // vary apply already wrote them). Without this, a re-preview re-proposes the change —
+                // the baseline is the frozen export value, so cellText != baseline stays true forever;
+                // only a live-value compare can tell the write already happened. Mirrors the live-value
+                // no-op guards on the normal-element path (String/Int/Double) and ResolveTypeGroups.
+                var pending = new List<string>();
+                int already = 0;
+                foreach (var uid in ids)
+                {
+                    var inst = doc.GetElement(uid);
+                    var ip = inst == null ? null : GetParam(inst, col.ParameterId);
+                    if (ip != null && AlreadyHas(ip, isString, str, isInt, iv, dbl)) { already++; continue; }
+                    pending.Add(uid);
+                }
+                // Every targeted instance already matches -> nothing to write. Surface it as drift so the
+                // user still sees the cell "changed since export", consistent with the normal/type paths.
+                if (pending.Count == 0)
+                {
+                    if (already > 0)
+                        cs.Diagnostics.Add(Diag(sheet, row, col, label, "yellow",
+                            $"changed since export (model already set to '{cellText}')", cellText));
+                    continue;
+                }
+
                 // Group members can't be written directly — split them out so the rest still applies.
                 var ungrouped = new List<string>();
                 var grouped = new List<string>();
                 string gName = "";
-                foreach (var uid in ids)
+                foreach (var uid in pending)
                 {
                     var inst = doc.GetElement(uid);
                     var (gi, gn) = inst == null ? (false, "") : GroupInfo(doc, inst);
@@ -820,7 +848,7 @@ public sealed class Importer
         string oldDisp, string newDisp, bool isString, string str, double dbl, bool isInt, int iv) => new()
     {
         ParameterId = col.ParameterId, Binding = "instance", BulkInstanceIds = instanceIds,
-        ElementName = SafeName(typeEl), Field = col.FieldName, OldValue = oldDisp, NewValue = newDisp,
+        ElementName = SafeName(typeEl), Field = col.FieldName, SourceHeading = col.Header, OldValue = oldDisp, NewValue = newDisp,
         InstancesAffected = instanceIds.Count, IsString = isString, NewString = str, NewDouble = dbl, IsInt = isInt, NewInt = iv,
     };
 
@@ -1248,7 +1276,7 @@ public sealed class Importer
 
             // Only surface the new column on schedules if at least one value actually landed — never leave a
             // junk field on a column that wrote nothing.
-            if (wroteHere > 0) fields += AddFieldToSchedules(doc, paramId, scheduleNames);
+            if (wroteHere > 0) fields += AddFieldToSchedules(doc, paramId, scheduleNames, CleanHeading(sample));
         }
 
         return created == 0 ? "" :
@@ -1363,8 +1391,13 @@ public sealed class Importer
         catch { return false; }
     }
 
+    /// <summary>Visible column title for the new option-2 field: the source column's display heading when we
+    /// captured it, else the parameter/field name — WITHOUT the "(Transom)" suffix the underlying param carries.</summary>
+    private static string CleanHeading(ProposedChange sample) =>
+        !string.IsNullOrWhiteSpace(sample.SourceHeading) ? sample.SourceHeading : sample.Field;
+
     /// <summary>Adds the new parameter as a field to each named schedule that can show it (matching category).</summary>
-    private static int AddFieldToSchedules(Document doc, ElementId paramId, List<string> scheduleNames)
+    private static int AddFieldToSchedules(Document doc, ElementId paramId, List<string> scheduleNames, string heading)
     {
         int added = 0;
         var schedules = new FilteredElementCollector(doc).OfClass(typeof(ViewSchedule)).Cast<ViewSchedule>()
@@ -1378,7 +1411,12 @@ public sealed class Importer
                 if (present) continue;
                 var sf = def.GetSchedulableFields().FirstOrDefault(f => f.ParameterId == paramId);
                 if (sf == null) continue; // not schedulable here (category mismatch)
-                def.AddField(sf);
+                var newField = def.AddField(sf);               // AddField returns the added ScheduleField
+                if (!string.IsNullOrWhiteSpace(heading))
+                {
+                    try { newField.ColumnHeading = heading; }  // new field only — pre-existing untouched
+                    catch { /* heading is cosmetic; never fail the add over it */ }
+                }
                 added++;
             }
             catch { /* a schedule that won't take the field — skip it */ }
@@ -1404,13 +1442,31 @@ public sealed class Importer
         catch { return false; }
     }
 
+    /// <summary>True when a parameter already holds the value a change would write (within unit tolerance).
+    /// Lets the bulk-instance path skip already-applied writes so a re-preview after an option-1 vary apply
+    /// doesn't re-propose the change (string trimmed to match Revit's storage trim, doubles to 1e-9).</summary>
+    private static bool AlreadyHas(Parameter p, bool isString, string str, bool isInt, int iv, double dbl)
+    {
+        try
+        {
+            if (p.StorageType == StorageType.String && isString)
+                return (p.AsString() ?? "").Trim() == (str ?? "").Trim();
+            if (p.StorageType == StorageType.Integer && isInt)
+                return p.AsInteger() == iv;
+            if (p.StorageType == StorageType.Double && !isString && !isInt)
+                return Math.Abs(p.AsDouble() - dbl) <= 1e-9;
+            return false;
+        }
+        catch { return false; }
+    }
+
     // --- helpers ---
 
     private static ProposedChange InstanceChange(Element el, ImportColumn col, string oldDisp, string newDisp,
         bool isString, string str, double dbl) => new()
     {
         UniqueId = el.UniqueId, ParameterId = col.ParameterId, Binding = "instance", ElementName = SafeName(el),
-        Field = col.FieldName, OldValue = oldDisp, NewValue = newDisp, IsString = isString, NewString = str, NewDouble = dbl,
+        Field = col.FieldName, SourceHeading = col.Header, OldValue = oldDisp, NewValue = newDisp, IsString = isString, NewString = str, NewDouble = dbl,
     };
 
     /// <summary>An edited cell whose field can't be written by import (read-only / family- or type-driven). Shown greyed, never applied.</summary>
