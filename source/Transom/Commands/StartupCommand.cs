@@ -26,22 +26,30 @@ public class StartupCommand : ExternalCommand
     /// <see cref="SettingsCommand"/> so the Settings button reuses the exact same window.</summary>
     internal static TransomView OpenOrActivate(Autodesk.Revit.UI.UIApplication app)
     {
+        var uiDoc = app.ActiveUIDocument;
+        var doc = uiDoc?.Document;
+
+        // Re-read the LIVE document state so a re-invoke after a doc close/reopen rebinds the Hub
+        // instead of showing the previous document's stale schedule list / filter (code3 fix).
+        var projects = new List<string>();
+        if (app.Application?.Documents != null)
+            foreach (Document d in app.Application.Documents)
+                if (!d.IsLinked && !d.IsFamilyDocument)
+                    projects.Add(d.Title);
+
+        var active = uiDoc?.ActiveView as ViewSchedule;
+        var schedules = doc != null ? DocUtil.UserSchedules(doc) : new List<(long id, string name)>();
+
         if (TransomView.Instance != null)
         {
+            // Existing window: rebind to the current document (rebuild projects, reload schedules,
+            // clear stale filter), then focus it.
+            if (TransomView.Instance.DataContext is TransomViewModel existingVm)
+                existingVm.RefreshFromDocument(
+                    projects, doc?.Title ?? "", active?.Id.Value ?? 0, schedules);
             TransomView.Instance.Activate();
             return TransomView.Instance;
         }
-
-        var uiDoc = app.ActiveUIDocument;
-        var doc = uiDoc.Document;
-        var active = uiDoc.ActiveView as ViewSchedule;
-
-        var projects = new List<string>();
-        foreach (Document d in app.Application.Documents)
-            if (!d.IsLinked && !d.IsFamilyDocument)
-                projects.Add(d.Title);
-
-        var schedules = DocUtil.UserSchedules(doc);
 
         var exportHandler = new ExportEventHandler();
         var exportEvent = Autodesk.Revit.UI.ExternalEvent.Create(exportHandler);
@@ -51,7 +59,7 @@ public class StartupCommand : ExternalCommand
         var loadEvent = Autodesk.Revit.UI.ExternalEvent.Create(loadHandler);
 
         var viewModel = new TransomViewModel(
-            projects, doc.Title, active?.Id.Value ?? 0, schedules,
+            projects, doc?.Title ?? "", active?.Id.Value ?? 0, schedules,
             exportEvent, exportHandler, importEvent, importHandler, loadEvent, loadHandler);
         var view = new TransomView(viewModel);
         new WindowInteropHelper(view) { Owner = app.MainWindowHandle };

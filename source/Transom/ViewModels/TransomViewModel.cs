@@ -157,6 +157,26 @@ public sealed partial class TransomViewModel : ObservableObject
         UpdateSelectionInfo();
     }
 
+    /// <summary>
+    ///     Rebinds the Hub to the (possibly new) active document — used when the Schedule Hub button is
+    ///     pressed again after a document close/reopen. Rebuilds the project list, reloads the schedule
+    ///     list for the active document, and clears any stale filter so the fresh list isn't hidden.
+    ///     (code3 fix for the Hub doc-rebind / stale-filter defect.)
+    /// </summary>
+    public void RefreshFromDocument(
+        List<string> projects, string activeProjectTitle,
+        long activeScheduleId, List<(long id, string name)> schedules)
+    {
+        Projects.Clear();
+        foreach (var p in projects) Projects.Add(p);
+
+        _selectedProject = activeProjectTitle; // backing field: skip OnSelectedProjectChanged's async reload
+        OnPropertyChanged(nameof(SelectedProject));
+
+        ScheduleFilter = "";                   // clear stale filter so the fresh list isn't hidden
+        SetSchedules(activeScheduleId, schedules);
+    }
+
     partial void OnSelectedProjectChanged(string value)
     {
         if (!_initialized) return;
@@ -349,11 +369,14 @@ public sealed partial class TransomViewModel : ObservableObject
         {
             var list = grp.ToList();
             bool isBuiltin = list[0].GroupMode == GroupMode.BuiltinDance;
+            var broken = list.FirstOrDefault(c => c.GroupBroken);
             var prompt = new GroupResolutionPrompt
             {
                 Field = grp.Key.Field,
                 ParameterId = grp.Key.ParameterId,
                 IsBuiltin = isBuiltin,
+                IsBroken = broken != null,
+                BrokenReason = broken?.GroupBrokenReason ?? "",
                 Option2Available = eligible.Contains(Core.ChangeSet.ColumnKey(grp.Key.ParameterId, grp.Key.Field)),
                 AssistEnabled = assist,
                 Changes = list,
