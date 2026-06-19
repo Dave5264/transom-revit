@@ -489,6 +489,10 @@ public sealed class ExcelWriter
                 category = p.t.Category,
                 roundTrippable = p.t.RoundTrippable,
                 anchorColumnHeader = ScheduleReader.AnchorSentinel,
+                // The workbook row holding the PER-COLUMN captions (= each column's ColumnHeading). For a multi-row
+                // header (super-header band over the caption row) this is NOT row 0 — the importer must read column
+                // captions from here, not the rendered top row (which carries super-headers). -1 = no real header row.
+                captionRowExcel = CaptionRowExcel(p.t),
                 columns = p.t.Columns.Select(c => new
                 {
                     col = c.Col, fieldName = c.FieldName, header = c.Header, parameterId = c.ParameterId,
@@ -521,6 +525,19 @@ public sealed class ExcelWriter
             }).ToArray(),
         };
         return System.Text.Json.JsonSerializer.Serialize(meta);
+    }
+
+    /// <summary>The workbook row index (0-based) of the PER-COLUMN caption row — the LAST 'columnHeader' row in the
+    /// table (a multi-row header has super-header rows above it). The exporter writes rows 1:1 to the workbook only
+    /// when there's a real header band (synth adds a row, but synth = headers-off = no caption row), so the table
+    /// index equals the workbook index here. Returns -1 when there's no real header row (the round-trip skips it).</summary>
+    private static int CaptionRowExcel(ScheduleTable t)
+    {
+        if (!t.HasHeaderRow) return -1;
+        int last = -1;
+        for (int r = 0; r < t.Rows.Count; r++)
+            if (t.Rows[r].Kind == "columnHeader") last = r;
+        return last;
     }
 
     /// <summary>The grouped super-headers (merged header-band cells) of a table, as rectangles + caption text, for

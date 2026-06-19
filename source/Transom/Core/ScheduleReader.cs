@@ -351,6 +351,68 @@ public sealed class ScheduleReader
         for (int rr = 0; rr < table.RowCount; rr++)
             if (anchors[rr] != null) { firstDataRow = rr; break; }
 
+        // HIDDEN-GROUP INSTANCE RESOLUTION (user-ratified 2026-06-19): a type that renders on MULTIPLE rows
+        // (typeRowCount > 1) splits by its GROUP-FIELD values — including HIDDEN group fields with no column
+        // (e.g. WINDOW grouped by Level + Type Mark, but Level has no column → "F3T" renders once per level).
+        // Resolve EACH such row's true instance subset so it can be written/coloured by parameter nature (no
+        // "ambiguous scope" skip/grey).
+        //
+        // For every multi-row type: partition its instances by the FULL group key (all sort/group fields). Then map
+        // each of the type's rendered rows to a partition, PREFERRING a value match on the VISIBLE group columns the
+        // row actually shows (reliable, order-independent); only when the visible columns don't distinguish the rows
+        // (the splitting field is fully HIDDEN, the WINDOW case) fall back to the schedule's sort order. The sort
+        // order respects each group field's ascending/descending flag. (Live-verify caveat: numeric/elevation
+        // collation of a hidden level field — that's the remaining order-fallback risk.)
+        var rowInstanceQueues = new Dictionary<string, Queue<List<string>>>();          // hidden-split: ordered partitions
+        var rowInstanceByVisible = new Dictionary<string, Dictionary<string, List<string>>>(); // visible-split: type → (visibleKey → subset)
+        // Visible group fields = the sort/group params that ARE a visible column (sgCols >= 0), in field order.
+        var visGroupPids = new List<int>();
+        for (int gi = 0; gi < sgParams.Count; gi++) if (gi < sgCols.Count && sgCols[gi] >= 0) visGroupPids.Add(sgParams[gi]);
+        if (grouped && sgParams.Count > 0)
+            foreach (var kv in typeRowCount)
+            {
+                if (kv.Value <= 1) continue;                          // single-row type → no split needed
+                if (!typeToInstances.TryGetValue(kv.Key, out var members) || members.Count == 0) continue;
+                var els2 = members.Select(uid => uidToElement.TryGetValue(uid, out var e) ? e : _doc.GetElement(uid))
+                                  .Where(e => e != null).ToList();
+                // Does the VISIBLE group key uniquely identify each partition? (distinct full-key count == distinct visible-key count)
+                int fullKeys = els2.Select(e => GroupKeyOf(e!, sgParams)).Distinct().Count();
+                int visKeys = visGroupPids.Count > 0 ? els2.Select(e => GroupKeyOf(e!, visGroupPids)).Distinct().Count() : 1;
+                if (visGroupPids.Count > 0 && visKeys == fullKeys)
+                {
+                    // visible columns distinguish the rows → match by value (order-independent, reliable)
+                    var map = new Dictionary<string, List<string>>();
+                    foreach (var uid in members)
+                    {
+                        var el = uidToElement.TryGetValue(uid, out var e) ? e : _doc.GetElement(uid);
+                        if (el == null) continue;
+                        var vk = GroupKeyOf(el, visGroupPids);
+                        if (!map.TryGetValue(vk, out var lst)) { lst = new List<string>(); map[vk] = lst; }
+                        lst.Add(uid);
+                    }
+                    rowInstanceByVisible[kv.Key] = map;
+                }
+                else
+                {
+                    // splitting field is fully HIDDEN → order-based fallback: partition by full group key, order the
+                    // partitions ordinal-ascending (the common grouped row order). LIVE-VERIFY caveat: descending sort
+                    // or numeric/elevation collation of a hidden field could mis-order; confirm the WINDOW F3T case
+                    // maps right (1st-floor 8 vs 2nd-floor 1) before trusting writes here.
+                    var byKey = new SortedDictionary<string, List<string>>(System.StringComparer.Ordinal);
+                    foreach (var uid in members)
+                    {
+                        var el = uidToElement.TryGetValue(uid, out var e) ? e : _doc.GetElement(uid);
+                        if (el == null) continue;
+                        var gkey = GroupKeyOf(el, sgParams);
+                        if (!byKey.TryGetValue(gkey, out var lst)) { lst = new List<string>(); byKey[gkey] = lst; }
+                        lst.Add(uid);
+                    }
+                    var q = new Queue<List<string>>();
+                    foreach (var part in byKey.Values) q.Enqueue(part);
+                    rowInstanceQueues[kv.Key] = q;
+                }
+            }
+
         // Cache GroupSafety verdicts per group-TYPE for this pass: built-in group-member cells in a BROKEN group
         // (anchored/sketch members, nested, or mixed orientation) color RED (option 2 / Claude-Assist) instead
         // of yellow (dance available). See GroupSafety.
@@ -383,7 +445,12 @@ public sealed class ScheduleReader
                 if (grouped)
                 {
                     if (typeRowCount[anchors[r]!] == 1 && typeToInstances.TryGetValue(anchors[r]!, out var insts))
-                        meta.InstanceIds = insts;          // unambiguous -> bulk-instance allowed
+                        meta.InstanceIds = insts;          // single-row type -> all its instances
+                    else if (rowInstanceByVisible.TryGetValue(anchors[r]!, out var vmap)
+                             && vmap.TryGetValue(RowKey(r), out var vsub))
+                        meta.InstanceIds = vsub;           // multi-row, VISIBLE split -> match this row's visible group key
+                    else if (rowInstanceQueues.TryGetValue(anchors[r]!, out var q) && q.Count > 0)
+                        meta.InstanceIds = q.Dequeue();    // multi-row, HIDDEN split -> this row's subset in sort order
                     representative.TryGetValue(anchors[r]!, out host); // resolve bindings against an instance
                 }
                 // Resolve binding per (element, field): a shared param can be instance in one family/category
@@ -432,13 +499,20 @@ public sealed class ScheduleReader
                         if (!col.ImportEditable) { frozen.Add(col.Col); continue; }      // read-only / family-type
                         if ((inGroup || anyMemberGrouped) && bind == "instance")
                         {
-                            // BLUE = a grouped instance param Transom can resolve WITHOUT AI (user contract 2026-06-18).
-                            // project/shared params (positive id) resolve via "vary by group instance"; grouped BUILT-IN
-                            // instance params can't vary but ARE replaceable via option 2b (new instance param) —
-                            // live-proven (Comments, 1594 values). Both are Transom-resolvable → BLUE. (YELLOW dropped:
-                            // there's no grouped built-in that needs AI; Claude-Assist stays a resolution OPTION, not a
-                            // color. Grouped built-in TYPE cols are handled in the `type` branch below → GREEN.)
-                            groupProjectCols.Add(col.Col);
+                            // Colour a grouped instance cell by the PARAMETER's nature (user rule 2026-06-19: decide per
+                            // parameter; there is NO "ambiguous" outcome). A multi-row type's row now carries its own
+                            // hidden-group instance subset (resolved above), so row count is no longer a factor.
+                            if (IsGeometryDrivingBuiltin(GetParamOn(host, col.ParameterId)))
+                                // YELLOW = a grouped GEOMETRY-driving built-in instance param (Sill/Head Height, offsets):
+                                // can't vary (built-in) and can't be safely replaced via 2b (a new param wouldn't drive the
+                                // model — the schedule would desync from the 3D geometry). The only honest in-group edit is
+                                // Revit's Edit Group mode → Claude-Assist (option 3). Option 2 is suppressed (ComputeOption2*).
+                                groupBuiltinCols.Add(col.Col);
+                            else
+                                // BLUE = a grouped instance param Transom resolves WITHOUT AI: project/shared (positive id)
+                                // via option 1 (vary by group instance); built-in DATA (string/int — Comments, Mark, Finish)
+                                // via option 2b (new instance param). Grouped built-in TYPE cols → GREEN (the `type` branch).
+                                groupProjectCols.Add(col.Col);
                         }
                         else if (bind == "type")
                         {
@@ -528,9 +602,14 @@ public sealed class ScheduleReader
                 if (!col.ImportEditable) { frozen.Add(col.Col); continue; }
                 if (anyMemberGrouped && bind == "instance")
                 {
-                    // BLUE = grouped instance param Transom resolves without AI (user contract 2026-06-18): project/
-                    // shared via vary, built-in via option 2b (new instance param). Both → blue; yellow dropped.
-                    groupProject.Add(col.Col);
+                    if (IsGeometryDrivingBuiltin(GetParamOn(repr, col.ParameterId)))
+                        // YELLOW = grouped geometry-driving built-in instance param (Sill/Head Height): can't vary, can't
+                        // safely 2b-replace (would desync 3D) → Claude-Assist only. See IsGeometryDrivingBuiltin.
+                        groupBuiltin.Add(col.Col);
+                    else
+                        // BLUE = grouped instance param Transom resolves without AI: project/shared via vary (preserves
+                        // geometry), built-in DATA via option 2b (new instance param).
+                        groupProject.Add(col.Col);
                 }
                 else if (bind == "type")
                 {
@@ -696,8 +775,11 @@ public sealed class ScheduleReader
                         if (!col.Writable || !col.ImportEditable) (rm.FrozenCols ??= new HashSet<int>()).Add(destCol);
                         else if (inGroup && bind == "instance")
                         {
-                            if (col.ParameterId >= 0) (rm.GroupProjectCols ??= new HashSet<int>()).Add(destCol);
-                            else (rm.GroupBuiltinCols ??= new HashSet<int>()).Add(destCol);
+                            // YELLOW only for geometry-driving built-ins (can't vary, can't safely 2b-replace);
+                            // project/shared AND built-in DATA params resolve without AI → BLUE. (See IsGeometryDrivingBuiltin.)
+                            if (IsGeometryDrivingBuiltin(GetParamOn(el, col.ParameterId)))
+                                (rm.GroupBuiltinCols ??= new HashSet<int>()).Add(destCol);
+                            else (rm.GroupProjectCols ??= new HashSet<int>()).Add(destCol);
                         }
                         else if (bind == "type") (rm.BulkCols ??= new HashSet<int>()).Add(destCol);
                     }
@@ -739,6 +821,32 @@ public sealed class ScheduleReader
         p.StorageType == StorageType.String
         || p.StorageType == StorageType.Integer
         || (p.StorageType == StorageType.Double && spec != null);
+
+    /// <summary>
+    ///     True when a parameter is a BUILT-IN INSTANCE param that DRIVES GEOMETRY / a model quantity — i.e. a
+    ///     measurable Double (length/offset/height, via <see cref="UnitUtils.IsMeasurableSpec"/>) on a built-in
+    ///     (negative-id) param. These can't round-trip inside a group by any safe automatic path: built-ins can't
+    ///     "vary by group instance", and replacing the column with a NEW instance param (option 2b) would desync the
+    ///     schedule from the actual geometry (the new param isn't wired to the model — e.g. Sill/Head Height drive the
+    ///     window's position). The only honest edit is in Revit's Edit Group mode (Claude-Assist). So these colour
+    ///     YELLOW (not blue) and option 2 is suppressed for them. (Project/shared instance params — positive id — vary
+    ///     instead, which preserves geometry, so they stay blue even when geometric. Built-in DATA params — string/int,
+    ///     e.g. Comments/Mark/Finish — are safely 2b-replaceable, so they stay blue.)
+    /// </summary>
+    private static bool IsGeometryDrivingBuiltin(Parameter p)
+    {
+        if (p == null) return false;
+        int pid;
+        try { pid = (int)p.Id.Value; } catch { return false; }
+        if (pid >= 0) return false;                       // project/shared params vary → not this case
+        if (p.StorageType != StorageType.Double) return false;  // geometry/quantities are Doubles
+        try
+        {
+            var s = p.Definition.GetDataType();
+            return s != null && !s.Empty() && UnitUtils.IsMeasurableSpec(s);
+        }
+        catch { return false; }
+    }
 
     /// <summary>Itemized schedules: anchor each row to its element via a rolled-back UID stamp.</summary>
     private void ReadInstanceAnchors(ViewSchedule vs, ScheduleTable table, System.Collections.Generic.IList<Element> els, string?[] anchors)

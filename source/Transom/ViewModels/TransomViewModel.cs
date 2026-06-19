@@ -632,6 +632,7 @@ public sealed partial class TransomViewModel : ObservableObject
                 Option2Mode = mode,
                 BindingNote = BindingNoteFor(mode),
                 AssistEnabled = assist,
+                IsGeometryDriven = list.Any(c => c.GeometryDriven),
                 Changes = list,
             };
 

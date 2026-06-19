@@ -58,6 +58,9 @@ public sealed class GroupResolutionPrompt
     public Option2Mode Option2Mode = Option2Mode.None; // how type-vs-instance was inferred (drives the radios offered)
     public string BindingNote = "";        // muted explanation of the recommended binding, shown under the option-2 radios
     public bool AssistEnabled;             // Claude-assist on (gates the Claude-Assist option)
+    public bool IsGeometryDriven;          // true = a geometry-driving built-in instance param (Sill/Head Height):
+                                           // option 2 is suppressed (replacing it desyncs the 3D) → Claude-Assist or
+                                           // Skip only; drives the accurate "why option 2 is unavailable" message.
     public List<ProposedChange> Changes = new();
 
     public List<string> GroupNames => Changes

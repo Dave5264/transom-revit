@@ -53,6 +53,12 @@ public sealed class ImportSheet
     public bool RoundTrippable;
     public int AnchorCol = -1;
     public string[] CurrentHeaders = System.Array.Empty<string>();
+    /// <summary>Workbook row (0-based) holding the per-column captions (each column's ColumnHeading). For a multi-row
+    /// header this is BELOW the super-header row, so it differs from row 0 (where CurrentHeaders is read). -1 = none.</summary>
+    public int CaptionRowExcel = -1;
+    /// <summary>Current per-column caption text read from <see cref="CaptionRowExcel"/> — used by the column-caption
+    /// rename round-trip (NOT row 0, which carries super-headers on a multi-band header). Empty when no caption row.</summary>
+    public string[] CurrentCaptions = System.Array.Empty<string>();
     public bool FormattingChanged;   // headers renamed or reordered vs the exported metadata
     public List<ImportColumn> Columns = new();
     public List<ImportRow> Rows = new();
@@ -261,6 +267,9 @@ public sealed class ExcelReader
                     }
                 }
 
+            if (sheetMeta.TryGetProperty("captionRowExcel", out var crEl) && crEl.ValueKind == JsonValueKind.Number)
+                imp.CaptionRowExcel = crEl.GetInt32();
+
             // Grouped super-headers (merged header-band cells) — rectangle + exported caption, for header round-trip.
             if (sheetMeta.TryGetProperty("headerGroups", out var hgEl) && hgEl.ValueKind == JsonValueKind.Array)
                 foreach (var hg in hgEl.EnumerateArray())
@@ -332,6 +341,14 @@ public sealed class ExcelReader
         for (int c = 0; c < anchorCol; c++)
             headers[c] = header?.GetCell(c)?.ToString() ?? "";
         imp.CurrentHeaders = headers;
+
+        // Per-column captions for the header-rename round-trip: read from the CAPTION row (below any super-header
+        // band), NOT row 0. Falls back to row 0 only when there's no distinct caption row (single-row header).
+        var caps = new string[anchorCol];
+        var capRow = imp.CaptionRowExcel >= 0 ? ws.GetRow(imp.CaptionRowExcel) : header;
+        for (int c = 0; c < anchorCol; c++)
+            caps[c] = capRow?.GetCell(c)?.ToString() ?? "";
+        imp.CurrentCaptions = caps;
 
         // ID-PRIMARY column matching (user directive 2026-06-14, supersedes the FIX-1 dup-header Pass-0):
         // a column's IDENTITY is its parameterId — it travels with the column regardless of header text or position,

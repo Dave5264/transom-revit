@@ -83,8 +83,12 @@ public partial class GroupResolutionDialog : Window
                 break;
 
             default: // None — option 2 doesn't apply to this column
-                unavailable.Add("• Option 2 (new parameter) is unavailable here: values differ between instances " +
-                                "of the same type, so they can’t live in a single type parameter.");
+                unavailable.Add(p.IsGeometryDriven
+                    ? "• Option 2 (new parameter) is unavailable here: this is a geometry-driving parameter " +
+                      "(e.g. sill/head height), so replacing it would desync the schedule from the 3D model. " +
+                      "Edit it in Revit's Edit Group mode, or use Claude-Assist."
+                    : "• Option 2 (new parameter) is unavailable here: values differ between instances " +
+                      "of the same type, so they can’t live in a single type parameter.");
                 break;
         }
 

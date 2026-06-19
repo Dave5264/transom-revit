@@ -67,6 +67,11 @@ public sealed class ProposedChange
     public string FrozenReason = "";
     public bool Selectable => !Frozen;
 
+    /// <summary>True = a GEOMETRY-driving built-in instance param (Sill/Head Height, offsets) inside a group. Option 2
+    /// is suppressed (replacing it would desync the schedule from the 3D model); the only in-group edit is Claude-
+    /// Assist. Drives the resolution dialog's accurate "why option 2 is unavailable" message. (Export colours it yellow.)</summary>
+    public bool GeometryDriven;
+
     /// <summary>Raised whenever any change's <see cref="Selected"/> toggles (incl. the per-cell DataGrid checkbox).
     /// The viewmodel subscribes once to re-evaluate each affected-schedule row's tri-state so cell edits and the
     /// per-schedule checkbox stay visually consistent (UX_SPEC §5 C-3). Static = one subscription, no per-instance churn.</summary>
@@ -358,6 +363,10 @@ public sealed class Importer
     {
         var cs = new ChangeSet { CrossModel = wb.SourceModelGuid != doc.CreationGUID.ToString() };
         var units = doc.GetUnits();
+        // TEMP HANG-DIAG (2026-06-19): fresh marker at entry; phases append below. Remove after root-cause.
+        var _diagSw = System.Diagnostics.Stopwatch.StartNew();
+        try { System.IO.File.WriteAllText(@"C:\Users\daveo\dev\Revit Coding\ScheduleExcel\clickhelper-test\_HANGDIAG.txt",
+            $"{System.DateTime.Now:HH:mm:ss}  BuildChangeSet START — {wb.Sheets.Count} sheet(s)\n"); } catch { }
 
         foreach (var sheet in wb.Sheets)
         {
@@ -454,11 +463,22 @@ public sealed class Importer
             //    write a heading onto a schedule whose headers are turned off.
             //  • merged super-headers (e.g. DOOR / FRAME): handled by the GROUP-HEADER path just below (they round-trip
             //    via ViewSchedule.GroupHeaders, not ColumnHeading).
-            foreach (var col in sheet.Columns.Where(c => c.Matched && c.ExcelCol >= 0 && c.ExcelCol < sheet.CurrentHeaders.Length))
+            // Compare against the CAPTION row (per-column headings), NOT row 0 — row 0 carries super-headers on a
+            // multi-band header, so comparing it to the exported per-column caption fired SPURIOUS renames that
+            // overwrote real headings with super-header text (bug, 2026-06-19). CurrentCaptions reads the caption row.
+            // A column whose CAPTION-row cell falls inside a MULTI-column super-header merge isn't a per-column
+            // caption — it's the super-header spanning that cell (e.g. WINDOW's single-band header puts the merged
+            // "1ST FLOOR" ON the caption row, so col 0 reads "1ST FLOOR" not "TYPE"). Skip those here; the super-
+            // header round-trips via the GROUP-HEADER path below. (Guards the WINDOW spurious-rename bug, 2026-06-19.)
+            bool InMultiColSuperHeader(int excelCol) => sheet.HeaderGroups.Any(hg =>
+                hg.Left < hg.Right && excelCol >= hg.Left && excelCol <= hg.Right
+                && sheet.CaptionRowExcel >= hg.Top && sheet.CaptionRowExcel <= hg.Bottom);
+            foreach (var col in sheet.Columns.Where(c => c.Matched && c.ExcelCol >= 0 && c.ExcelCol < sheet.CurrentCaptions.Length))
             {
-                var currentHeader = sheet.CurrentHeaders[col.ExcelCol] ?? "";
+                var currentHeader = sheet.CurrentCaptions[col.ExcelCol] ?? "";
                 if (string.IsNullOrEmpty(col.Header) || string.IsNullOrEmpty(currentHeader) || currentHeader == col.Header)
                     continue;
+                if (InMultiColSuperHeader(col.ExcelCol)) continue;   // cell is a super-header, not this column's caption
                 cs.HeaderChanges.Add(new HeaderChange
                 {
                     Kind = HeaderChangeKind.ColumnCaption,
@@ -467,7 +487,7 @@ public sealed class Importer
                     SheetTabName = sheet.SheetTabName,
                     ParameterId = col.ParameterId,
                     ExcelCol = col.ExcelCol,
-                    ExcelRow = 0,                       // the workbook header row (ExcelReader reads captions from row 0)
+                    ExcelRow = sheet.CaptionRowExcel >= 0 ? sheet.CaptionRowExcel : 0,   // the workbook caption row
                     OldHeading = col.Header,
                     NewHeading = currentHeader,
                 });
@@ -663,10 +683,30 @@ public sealed class Importer
         }
 
         cs.ImportedScheduleNames = wb.Sheets.Select(s => s.ScheduleName).Distinct().ToList();
-        ComputeOption2Eligibility(doc, cs);
-        ComputeOption2Mode(doc, cs);
-        ComputeGroupBroken(doc, cs);
-        ComputeDependents(doc, cs);   // CHANGE 2 (§9.4): dependent schedules per driving schedule (API thread, one pass)
+        try { System.IO.File.AppendAllText(@"C:\Users\daveo\dev\Revit Coding\ScheduleExcel\clickhelper-test\_HANGDIAG.txt",
+            $"{System.DateTime.Now:HH:mm:ss}  per-sheet loop DONE: {_diagSw.ElapsedMilliseconds} ms total so far\n"); } catch { }
+        // TEMP HANG-DIAG (2026-06-19): time each post-loop phase to a file as it COMPLETES, so a hang shows the
+        // last phase that finished. Remove once the analyze-hang is root-caused.
+        void Phase(string label, System.Action work)
+        {
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            try { work(); }
+            finally
+            {
+                sw.Stop();
+                try { System.IO.File.AppendAllText(@"C:\Users\daveo\dev\Revit Coding\ScheduleExcel\clickhelper-test\_HANGDIAG.txt",
+                    $"{System.DateTime.Now:HH:mm:ss}  {label}: {sw.ElapsedMilliseconds} ms\n"); } catch { }
+            }
+        }
+        Phase("ComputeOption2Eligibility", () => ComputeOption2Eligibility(doc, cs));
+        Phase("ComputeOption2Mode", () => ComputeOption2Mode(doc, cs));
+        // Stamp geometry-driving built-in instance changes so the resolution dialog shows the right message + path
+        // (Claude-Assist only; option 2 already suppressed above). Matches the export's yellow colouring.
+        foreach (var ch in cs.Changes)
+            if (!ch.Frozen && ch.GroupMode == GroupMode.BuiltinDance && IsGeometryDrivingBuiltinChange(doc, ch))
+                ch.GeometryDriven = true;
+        Phase("ComputeGroupBroken", () => ComputeGroupBroken(doc, cs));
+        Phase("ComputeDependents", () => ComputeDependents(doc, cs));   // CHANGE 2 (§9.4): dependent schedules per driving schedule (API thread, one pass)
 
         // CHANGE 2 §3b surface-3: keep wb + doc GUID so the copy-log diagnostic can be rebuilt scoped post-selection.
         cs.SourceWorkbook = wb;
@@ -886,6 +926,12 @@ public sealed class Importer
             if (drivingSchedUids.Count == 0) return;   // nothing drives anything → no dependents
             bool anyInstanceDrivers = drivingInstUidsBySched.Count > 0;
 
+            // TEMP HANG-DIAG (2026-06-19): granular timing INSIDE ComputeDependents to locate the 102s. Remove after.
+            void DepLog(string m) { try { System.IO.File.AppendAllText(@"C:\Users\daveo\dev\Revit Coding\ScheduleExcel\clickhelper-test\_HANGDIAG.txt", $"        [dep] {m}\n"); } catch { } }
+            var _depSw = System.Diagnostics.Stopwatch.StartNew();
+            DepLog($"drivers gathered: {drivingSchedUids.Count} driving schedule(s), anyInstanceDrivers={anyInstanceDrivers}, changes={cs.Changes.Count}");
+            int _candN = 0; long _enumMs = 0, _nameMs = 0; var _stepSw = new System.Diagnostics.Stopwatch();
+
             // 2. One pass over project schedules (excluding templates + the driving schedules themselves). For each,
             //    derive its displayed TYPE ids and (only if needed) displayed instance uids.
             foreach (var vs in new FilteredElementCollector(doc).OfClass(typeof(ViewSchedule)).Cast<ViewSchedule>())
@@ -893,21 +939,25 @@ public sealed class Importer
                 if (vs.IsTemplate) continue;
                 var candUid = vs.UniqueId;
                 if (drivingSchedUids.Contains(candUid)) continue;   // a driving schedule is never its own dependent
+                _candN++;
 
                 HashSet<long> shownTypeIds = new();
                 HashSet<string>? shownInstUids = anyInstanceDrivers ? new HashSet<string>() : null;
                 try
                 {
+                    _stepSw.Restart();
                     foreach (var el in new FilteredElementCollector(doc, vs.Id).WhereElementIsNotElementType())
                     {
                         var tid = el.GetTypeId();
                         if (tid != null && tid != ElementId.InvalidElementId) shownTypeIds.Add(tid.Value);
                         shownInstUids?.Add(el.UniqueId);
                     }
+                    _enumMs += _stepSw.ElapsedMilliseconds;
                 }
                 catch { continue; }   // a schedule that won't enumerate (linked / odd) → skip it as a candidate
 
                 // 3. Attribute this candidate to each driving (parent) schedule it shares a type/instance with.
+                _stepSw.Restart();
                 foreach (var parentUid in drivingSchedUids)
                 {
                     bool depends =
@@ -915,9 +965,11 @@ public sealed class Importer
                         || (shownInstUids != null && drivingInstUidsBySched.TryGetValue(parentUid, out var pinsts) && shownInstUids.Overlaps(pinsts));
                     if (!depends) continue;
                     if (!cs.Dependents.TryGetValue(parentUid, out var list)) cs.Dependents[parentUid] = list = new List<DependentScheduleRef>();
-                    list.Add(new DependentScheduleRef { ScheduleName = vs.Name, ScheduleUid = candUid });
+                    list.Add(new DependentScheduleRef { ScheduleName = vs.Name, ScheduleUid = candUid });  // vs.Name access
                 }
+                _nameMs += _stepSw.ElapsedMilliseconds;
             }
+            DepLog($"candidate loop done: {_candN} candidates, enum-total={_enumMs}ms, attribute+name-total={_nameMs}ms, dependents-found={cs.Dependents.Count}, WHOLE ComputeDependents={_depSw.ElapsedMilliseconds}ms");
         }
         catch { /* dependents are an informational overlay — never block the change set on them */ }
     }
@@ -933,6 +985,9 @@ public sealed class Importer
                      .Where(c => !c.Frozen && c.GroupMode is GroupMode.ProjectVary or GroupMode.BuiltinDance)
                      .GroupBy(c => ChangeSet.ColumnKey(c.ParameterId, c.Field)))
         {
+            // A geometry-driving built-in instance param can't be moved to a new param without desyncing the model
+            // from the schedule (Sill/Head Height drive the 3D) — never offer option 2 for it (Claude-Assist only).
+            if (pg.Any(c => IsGeometryDrivingBuiltinChange(doc, c))) continue;
             // If any element's type can't be resolved (deleted/odd), the column isn't safely movable to a type param.
             if (pg.Any(c => ElementTypeIdOf(doc, c) < 0)) continue;
 
@@ -960,6 +1015,9 @@ public sealed class Importer
                      .GroupBy(c => ChangeSet.ColumnKey(c.ParameterId, c.Field)))
         {
             var sample = pg.First();
+            // Geometry-driving built-in instance params get NO option 2 (replacing them desyncs the 3D) → leave None
+            // so only Claude-Assist/Skip are offered, matching the yellow cell colour.
+            if (pg.Any(c => IsGeometryDrivingBuiltinChange(doc, c))) continue;
             var vs = ResolveSchedule(doc, sample.SourceScheduleUid, sample.SourceScheduleName);
             if (vs == null) continue; // can't resolve the schedule → leave None (option 2 not offered)
 
@@ -1191,6 +1249,27 @@ public sealed class Importer
         catch { return -1; }
     }
 
+    /// <summary>True when a change targets a GEOMETRY-driving built-in INSTANCE parameter (a measurable Double on a
+    /// negative-id built-in — Sill/Head Height, offsets). These can't be resolved by option 2 (a new instance param
+    /// wouldn't drive the model → the schedule desyncs from the 3D geometry), so option 2 must NOT be offered for
+    /// them; the only honest in-group edit is Claude-Assist (Edit Group mode). Mirrors ScheduleReader's export rule
+    /// (yellow), so the import's option-gating matches the cell colour. Resolves the param off a representative
+    /// element of the change.</summary>
+    private static bool IsGeometryDrivingBuiltinChange(Document doc, ProposedChange ch)
+    {
+        if (ch.ParameterId >= 0) return false;   // project/shared params vary → not this case
+        try
+        {
+            var uid = ch.BulkInstanceIds is { Count: > 0 } ? ch.BulkInstanceIds[0] : ch.UniqueId;
+            var el = string.IsNullOrEmpty(uid) ? null : doc.GetElement(uid);
+            var p = el == null ? null : GetParam(el, ch.ParameterId);
+            if (p == null || p.StorageType != StorageType.Double) return false;
+            var s = p.Definition.GetDataType();
+            return s != null && !s.Empty() && UnitUtils.IsMeasurableSpec(s);
+        }
+        catch { return false; }
+    }
+
     /// <summary>
     ///     Builds a copyable plain-text diagnostic: per-sheet column matching + anchor resolution, then the
     ///     change/skip/conflict/diagnostic tallies. Surfaces the common failure modes (no header row, renamed
@@ -1408,10 +1487,12 @@ public sealed class Importer
                 bool edited = baseline != null ? cellText != baseline : !string.IsNullOrEmpty(cellText);
                 if (!edited) continue;
 
+                // Multi-row grouped types now carry their own hidden-group instance subset (resolved at export), so a
+                // null/empty list is a genuine resolution failure (not the old "ambiguous scope" — that case is gone).
                 if (row.InstanceIds == null || row.InstanceIds.Count == 0)
                 {
-                    cs.Skipped.Add(new SkippedItem { Reason = "ambiguous instance scope", Detail = $"{col.FieldName} ({label}) — type spans multiple rows" });
-                    cs.Diagnostics.Add(Diag(sheet, row, col, label, "blue", "skipped — instance scope ambiguous (type spans rows)", cellText));
+                    cs.Skipped.Add(new SkippedItem { Reason = "instances unresolved", Detail = $"{col.FieldName} ({label}) — couldn't resolve this row's instances" });
+                    cs.Diagnostics.Add(Diag(sheet, row, col, label, "red", "skipped — couldn't resolve this row's instances", cellText));
                     continue;
                 }
 
