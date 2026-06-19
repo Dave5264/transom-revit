@@ -363,10 +363,6 @@ public sealed class Importer
     {
         var cs = new ChangeSet { CrossModel = wb.SourceModelGuid != doc.CreationGUID.ToString() };
         var units = doc.GetUnits();
-        // TEMP HANG-DIAG (2026-06-19): fresh marker at entry; phases append below. Remove after root-cause.
-        var _diagSw = System.Diagnostics.Stopwatch.StartNew();
-        try { System.IO.File.WriteAllText(@"C:\Users\daveo\dev\Revit Coding\ScheduleExcel\clickhelper-test\_HANGDIAG.txt",
-            $"{System.DateTime.Now:HH:mm:ss}  BuildChangeSet START — {wb.Sheets.Count} sheet(s)\n"); } catch { }
 
         foreach (var sheet in wb.Sheets)
         {
@@ -683,30 +679,15 @@ public sealed class Importer
         }
 
         cs.ImportedScheduleNames = wb.Sheets.Select(s => s.ScheduleName).Distinct().ToList();
-        try { System.IO.File.AppendAllText(@"C:\Users\daveo\dev\Revit Coding\ScheduleExcel\clickhelper-test\_HANGDIAG.txt",
-            $"{System.DateTime.Now:HH:mm:ss}  per-sheet loop DONE: {_diagSw.ElapsedMilliseconds} ms total so far\n"); } catch { }
-        // TEMP HANG-DIAG (2026-06-19): time each post-loop phase to a file as it COMPLETES, so a hang shows the
-        // last phase that finished. Remove once the analyze-hang is root-caused.
-        void Phase(string label, System.Action work)
-        {
-            var sw = System.Diagnostics.Stopwatch.StartNew();
-            try { work(); }
-            finally
-            {
-                sw.Stop();
-                try { System.IO.File.AppendAllText(@"C:\Users\daveo\dev\Revit Coding\ScheduleExcel\clickhelper-test\_HANGDIAG.txt",
-                    $"{System.DateTime.Now:HH:mm:ss}  {label}: {sw.ElapsedMilliseconds} ms\n"); } catch { }
-            }
-        }
-        Phase("ComputeOption2Eligibility", () => ComputeOption2Eligibility(doc, cs));
-        Phase("ComputeOption2Mode", () => ComputeOption2Mode(doc, cs));
+        ComputeOption2Eligibility(doc, cs);
+        ComputeOption2Mode(doc, cs);
         // Stamp geometry-driving built-in instance changes so the resolution dialog shows the right message + path
         // (Claude-Assist only; option 2 already suppressed above). Matches the export's yellow colouring.
         foreach (var ch in cs.Changes)
             if (!ch.Frozen && ch.GroupMode == GroupMode.BuiltinDance && IsGeometryDrivingBuiltinChange(doc, ch))
                 ch.GeometryDriven = true;
-        Phase("ComputeGroupBroken", () => ComputeGroupBroken(doc, cs));
-        Phase("ComputeDependents", () => ComputeDependents(doc, cs));   // CHANGE 2 (§9.4): dependent schedules per driving schedule (API thread, one pass)
+        ComputeGroupBroken(doc, cs);
+        ComputeDependents(doc, cs);   // CHANGE 2 (§9.4): dependent schedules per driving schedule (API thread, one pass)
 
         // CHANGE 2 §3b surface-3: keep wb + doc GUID so the copy-log diagnostic can be rebuilt scoped post-selection.
         cs.SourceWorkbook = wb;
@@ -926,12 +907,6 @@ public sealed class Importer
             if (drivingSchedUids.Count == 0) return;   // nothing drives anything → no dependents
             bool anyInstanceDrivers = drivingInstUidsBySched.Count > 0;
 
-            // TEMP HANG-DIAG (2026-06-19): granular timing INSIDE ComputeDependents to locate the 102s. Remove after.
-            void DepLog(string m) { try { System.IO.File.AppendAllText(@"C:\Users\daveo\dev\Revit Coding\ScheduleExcel\clickhelper-test\_HANGDIAG.txt", $"        [dep] {m}\n"); } catch { } }
-            var _depSw = System.Diagnostics.Stopwatch.StartNew();
-            DepLog($"drivers gathered: {drivingSchedUids.Count} driving schedule(s), anyInstanceDrivers={anyInstanceDrivers}, changes={cs.Changes.Count}");
-            int _candN = 0; long _enumMs = 0, _nameMs = 0; var _stepSw = new System.Diagnostics.Stopwatch();
-
             // 2. One pass over project schedules (excluding templates + the driving schedules themselves). For each,
             //    derive its displayed TYPE ids and (only if needed) displayed instance uids.
             foreach (var vs in new FilteredElementCollector(doc).OfClass(typeof(ViewSchedule)).Cast<ViewSchedule>())
@@ -939,25 +914,21 @@ public sealed class Importer
                 if (vs.IsTemplate) continue;
                 var candUid = vs.UniqueId;
                 if (drivingSchedUids.Contains(candUid)) continue;   // a driving schedule is never its own dependent
-                _candN++;
 
                 HashSet<long> shownTypeIds = new();
                 HashSet<string>? shownInstUids = anyInstanceDrivers ? new HashSet<string>() : null;
                 try
                 {
-                    _stepSw.Restart();
                     foreach (var el in new FilteredElementCollector(doc, vs.Id).WhereElementIsNotElementType())
                     {
                         var tid = el.GetTypeId();
                         if (tid != null && tid != ElementId.InvalidElementId) shownTypeIds.Add(tid.Value);
                         shownInstUids?.Add(el.UniqueId);
                     }
-                    _enumMs += _stepSw.ElapsedMilliseconds;
                 }
                 catch { continue; }   // a schedule that won't enumerate (linked / odd) → skip it as a candidate
 
                 // 3. Attribute this candidate to each driving (parent) schedule it shares a type/instance with.
-                _stepSw.Restart();
                 foreach (var parentUid in drivingSchedUids)
                 {
                     bool depends =
@@ -965,11 +936,9 @@ public sealed class Importer
                         || (shownInstUids != null && drivingInstUidsBySched.TryGetValue(parentUid, out var pinsts) && shownInstUids.Overlaps(pinsts));
                     if (!depends) continue;
                     if (!cs.Dependents.TryGetValue(parentUid, out var list)) cs.Dependents[parentUid] = list = new List<DependentScheduleRef>();
-                    list.Add(new DependentScheduleRef { ScheduleName = vs.Name, ScheduleUid = candUid });  // vs.Name access
+                    list.Add(new DependentScheduleRef { ScheduleName = vs.Name, ScheduleUid = candUid });
                 }
-                _nameMs += _stepSw.ElapsedMilliseconds;
             }
-            DepLog($"candidate loop done: {_candN} candidates, enum-total={_enumMs}ms, attribute+name-total={_nameMs}ms, dependents-found={cs.Dependents.Count}, WHOLE ComputeDependents={_depSw.ElapsedMilliseconds}ms");
         }
         catch { /* dependents are an informational overlay — never block the change set on them */ }
     }
