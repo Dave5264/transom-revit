@@ -10,9 +10,9 @@
     ResizeMode="CanResize"
     WindowStartupLocation="CenterOwner"
     Title="Transom"
-    Height="800"
-    Width="620"
-    MinHeight="420"
+    Height="880"
+    Width="720"
+    MinHeight="480"
     MinWidth="380"
     Background="{DynamicResource Bg}"
     FontFamily="Segoe UI">
@@ -199,9 +199,9 @@
                             <TextBlock Text="In the exported file:" Foreground="{DynamicResource Hint}" FontSize="11.5" Margin="0,0,0,4" />
                             <Grid Margin="0,1">
                                 <Grid.ColumnDefinitions><ColumnDefinition Width="16" /><ColumnDefinition Width="56" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
-                                <Border Grid.Column="0" Width="12" Height="12" CornerRadius="2" Background="#E6E6E6" BorderBrush="#CFCDC4" BorderThickness="1" VerticalAlignment="Top" Margin="0,1,0,0" />
-                                <TextBlock Grid.Column="1" Text="grey" FontWeight="SemiBold" Foreground="{DynamicResource Muted}" FontSize="11.5" />
-                                <TextBlock Grid.Column="2" Text="can't be imported — read-only or driven by the family/type" Foreground="{DynamicResource Muted}" FontSize="11.5" TextWrapping="Wrap" />
+                                <Border Grid.Column="0" Width="12" Height="12" CornerRadius="2" Background="#FFFFFF" BorderBrush="#CFCDC4" BorderThickness="1" VerticalAlignment="Top" Margin="0,1,0,0" />
+                                <TextBlock Grid.Column="1" Text="normal" FontWeight="SemiBold" Foreground="{DynamicResource Muted}" FontSize="11.5" />
+                                <TextBlock Grid.Column="2" Text="edits one element" Foreground="{DynamicResource Muted}" FontSize="11.5" TextWrapping="Wrap" />
                             </Grid>
                             <Grid Margin="0,1">
                                 <Grid.ColumnDefinitions><ColumnDefinition Width="16" /><ColumnDefinition Width="56" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
@@ -213,25 +213,13 @@
                                 <Grid.ColumnDefinitions><ColumnDefinition Width="16" /><ColumnDefinition Width="56" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
                                 <Border Grid.Column="0" Width="12" Height="12" CornerRadius="2" Background="#DDEBF7" BorderBrush="#CFCDC4" BorderThickness="1" VerticalAlignment="Top" Margin="0,1,0,0" />
                                 <TextBlock Grid.Column="1" Text="blue" FontWeight="SemiBold" Foreground="{DynamicResource Accent}" FontSize="11.5" />
-                                <TextBlock Grid.Column="2" Text="grouped element's project parameter — Transom applies it by enabling “vary by group instance”" Foreground="{DynamicResource Muted}" FontSize="11.5" TextWrapping="Wrap" />
+                                <TextBlock Grid.Column="2" Text="grouped element's instance parameter — Transom resolves it on import (a project/shared param by enabling “vary by group instance”; a built-in by replacing the column with a new instance parameter, or via Claude-Assist)" Foreground="{DynamicResource Muted}" FontSize="11.5" TextWrapping="Wrap" />
                             </Grid>
                             <Grid Margin="0,1">
                                 <Grid.ColumnDefinitions><ColumnDefinition Width="16" /><ColumnDefinition Width="56" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
-                                <Border Grid.Column="0" Width="12" Height="12" CornerRadius="2" Background="#FFF2CC" BorderBrush="#CFCDC4" BorderThickness="1" VerticalAlignment="Top" Margin="0,1,0,0" />
-                                <TextBlock Grid.Column="1" Text="yellow" FontWeight="SemiBold" Foreground="{DynamicResource LegendYellow}" FontSize="11.5" />
-                                <TextBlock Grid.Column="2" Text="grouped built-in parameter in a simple group — the group dance can apply it (no Assist required)" Foreground="{DynamicResource Muted}" FontSize="11.5" TextWrapping="Wrap" />
-                            </Grid>
-                            <Grid Margin="0,1">
-                                <Grid.ColumnDefinitions><ColumnDefinition Width="16" /><ColumnDefinition Width="56" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
-                                <Border Grid.Column="0" Width="12" Height="12" CornerRadius="2" Background="#F8D2D5" BorderBrush="#CFCDC4" BorderThickness="1" VerticalAlignment="Top" Margin="0,1,0,0" />
-                                <TextBlock Grid.Column="1" Text="red" FontWeight="SemiBold" Foreground="{DynamicResource LegendRed}" FontSize="11.5" />
-                                <TextBlock Grid.Column="2" Text="grouped built-in parameter in a “broken” group (a member anchored outside the group, a nested group, or mixed instance orientation) — the dance can't reproduce it; use a new type parameter or Claude-Assist (text greys out when Assist mode is off, since it usually can't be changed without it)" Foreground="{DynamicResource Muted}" FontSize="11.5" TextWrapping="Wrap" />
-                            </Grid>
-                            <Grid Margin="0,1">
-                                <Grid.ColumnDefinitions><ColumnDefinition Width="16" /><ColumnDefinition Width="56" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
-                                <Border Grid.Column="0" Width="12" Height="12" CornerRadius="2" Background="#FFFFFF" BorderBrush="#CFCDC4" BorderThickness="1" VerticalAlignment="Top" Margin="0,1,0,0" />
-                                <TextBlock Grid.Column="1" Text="normal" FontWeight="SemiBold" Foreground="{DynamicResource Muted}" FontSize="11.5" />
-                                <TextBlock Grid.Column="2" Text="edits one element" Foreground="{DynamicResource Muted}" FontSize="11.5" TextWrapping="Wrap" />
+                                <Border Grid.Column="0" Width="12" Height="12" CornerRadius="2" Background="#E6E6E6" BorderBrush="#CFCDC4" BorderThickness="1" VerticalAlignment="Top" Margin="0,1,0,0" />
+                                <TextBlock Grid.Column="1" Text="grey" FontWeight="SemiBold" Foreground="{DynamicResource Muted}" FontSize="11.5" />
+                                <TextBlock Grid.Column="2" Text="can't be imported — read-only or driven by the family/type" Foreground="{DynamicResource Muted}" FontSize="11.5" TextWrapping="Wrap" />
                             </Grid>
                         </StackPanel>
 
@@ -371,11 +359,15 @@
                             <StackPanel Orientation="Horizontal" HorizontalAlignment="Left">
                                 <Button Content="Preview changes" Height="32" Padding="12,0" Command="{Binding PreviewCommand}"
                                         ToolTip="Compare the workbook to the live model (read-only) and list what would change" />
+                                <!-- Apply hidden during step 1 (select tabs): you resolve+preview before applying (Change 1, §8.3) -->
                                 <Button Content="Apply selected" Height="32" Padding="16,0" Margin="8,0,0,0"
                                         Background="{DynamicResource Accent}" Foreground="White" BorderThickness="0" Command="{Binding ApplyCommand}"
+                                        Visibility="{Binding InPreviewStep, Converter={StaticResource BoolToVis}}"
                                         ToolTip="Write the ticked changes into the model" />
                             </StackPanel>
-                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                            <!-- Cell-level All/None act on the changes grid → hidden during step 1 -->
+                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right"
+                                        Visibility="{Binding InPreviewStep, Converter={StaticResource BoolToVis}}">
                                 <Button Content="All" Height="32" Padding="12,0" Command="{Binding SelectAllCommand}" />
                                 <Button Content="None" Height="32" Padding="12,0" Margin="6,0,0,0" Command="{Binding SelectNoneCommand}" />
                             </StackPanel>
@@ -385,6 +377,44 @@
                                   IsChecked="{Binding ProduceReport}" Foreground="{DynamicResource Muted}"
                                   FontSize="12" Margin="0,0,0,10"
                                   ToolTip="Writes &lt;workbook&gt;_import-report.xlsx — blue = skipped, yellow = changed since export, red = unable to write" />
+
+                        <!-- §16 PRE-ANALYSIS TAB PICKER: choose which schedules to analyze BEFORE the (slow) diff runs.
+                             Shown only in the pick phase; analyzing only the ticked tabs avoids the ~2-min full-workbook scan. -->
+                        <Border DockPanel.Dock="Top" Margin="0,0,0,8" Padding="9,7" CornerRadius="6"
+                                Background="{DynamicResource InfoBg}" BorderBrush="{DynamicResource AccentLine}" BorderThickness="1"
+                                Visibility="{Binding InTabPickStep, Converter={StaticResource BoolToVis}}">
+                            <DockPanel>
+                                <DockPanel DockPanel.Dock="Top" Margin="0,0,0,4">
+                                    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                                        <Button Content="Select all" Command="{Binding SelectAllTabsCommand}"
+                                                Background="Transparent" BorderThickness="0" Foreground="{DynamicResource Accent}" FontSize="12" Cursor="Hand" Padding="2" />
+                                        <TextBlock Text="·" Foreground="{DynamicResource Hint}" Margin="6,0" VerticalAlignment="Center" />
+                                        <Button Content="Select none" Command="{Binding SelectNoneTabsCommand}"
+                                                Background="Transparent" BorderThickness="0" Foreground="{DynamicResource Accent}" FontSize="12" Cursor="Hand" Padding="2" />
+                                    </StackPanel>
+                                    <TextBlock Text="Choose schedules to analyze:" FontWeight="SemiBold"
+                                               FontSize="11.5" Foreground="{DynamicResource Accent}" VerticalAlignment="Center" />
+                                </DockPanel>
+                                <TextBlock DockPanel.Dock="Top" Margin="0,0,0,6" FontSize="11" TextWrapping="Wrap"
+                                           Foreground="{DynamicResource Hint}"
+                                           Text="Only the ticked schedules are analyzed and can be imported — skip the rest to avoid a long full-workbook scan." />
+                                <Button DockPanel.Dock="Bottom" Content="Analyze selected" Margin="0,8,0,0"
+                                        HorizontalAlignment="Left" Padding="16,6" Height="32" Cursor="Hand"
+                                        Command="{Binding AnalyzeSelectedCommand}"
+                                        Background="{DynamicResource Accent}" Foreground="White" BorderThickness="0" />
+                                <ScrollViewer MaxHeight="240" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                                    <ItemsControl ItemsSource="{Binding PickableTabs}">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <CheckBox IsThreeState="False" IsChecked="{Binding IsChecked, Mode=TwoWay}"
+                                                          Content="{Binding ScheduleName}" FontSize="11.5" Margin="0,1"
+                                                          Foreground="{DynamicResource Text}" VerticalContentAlignment="Center" />
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </ScrollViewer>
+                            </DockPanel>
+                        </Border>
 
 
                         <Border DockPanel.Dock="Bottom" Background="{DynamicResource InfoBg}" BorderBrush="{DynamicResource AccentLine}" BorderThickness="1"
@@ -446,6 +476,7 @@
                             </DockPanel>
                         </Border>
 
+                        <!-- Detailed skip-log: belongs to the PREVIEW step (step 2); hidden during step-1 selection (FIX B) -->
                         <Border DockPanel.Dock="Bottom" BorderBrush="{DynamicResource WarnLine}" BorderThickness="1" CornerRadius="6"
                                 Background="{DynamicResource WarnBg}" Margin="0,8,0,0" MaxHeight="84">
                             <Border.Style>
@@ -455,18 +486,40 @@
                                         <DataTrigger Binding="{Binding Skipped.Count}" Value="0">
                                             <Setter Property="Visibility" Value="Collapsed" />
                                         </DataTrigger>
+                                        <DataTrigger Binding="{Binding InSelectStep}" Value="True">
+                                            <Setter Property="Visibility" Value="Collapsed" />
+                                        </DataTrigger>
                                     </Style.Triggers>
                                 </Style>
                             </Border.Style>
-                            <ListBox ItemsSource="{Binding Skipped}" BorderThickness="0" Background="Transparent" FontSize="11">
-                                <ListBox.ItemTemplate>
-                                    <DataTemplate>
-                                        <TextBlock Foreground="{DynamicResource Warn}" TextWrapping="Wrap">
-                                            <Run Text="skip [" /><Run Text="{Binding Reason}" /><Run Text="] " /><Run Text="{Binding Detail}" />
-                                        </TextBlock>
-                                    </DataTemplate>
-                                </ListBox.ItemTemplate>
-                            </ListBox>
+                            <DockPanel>
+                                <!-- §3b surface-4: section header with a subtle "(selected schedules only)" hint in subset mode -->
+                                <TextBlock DockPanel.Dock="Top" Margin="0,0,0,3" FontSize="11" FontWeight="SemiBold"
+                                           Foreground="{DynamicResource Warn}">
+                                    <Run Text="Skipped" /><Run Text=" (selected schedules only)" FontWeight="Normal"
+                                         Foreground="{DynamicResource Hint}">
+                                        <Run.Style>
+                                            <Style TargetType="Run">
+                                                <Setter Property="Text" Value=" (selected schedules only)" />
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding SkipLogScopedToSelection}" Value="False">
+                                                        <Setter Property="Text" Value="" />
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </Run.Style>
+                                    </Run>
+                                </TextBlock>
+                                <ListBox ItemsSource="{Binding Skipped}" BorderThickness="0" Background="Transparent" FontSize="11">
+                                    <ListBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <TextBlock Foreground="{DynamicResource Warn}" TextWrapping="Wrap">
+                                                <Run Text="skip [" /><Run Text="{Binding Reason}" /><Run Text="] " /><Run Text="{Binding Detail}" />
+                                            </TextBlock>
+                                        </DataTemplate>
+                                    </ListBox.ItemTemplate>
+                                </ListBox>
+                            </DockPanel>
                         </Border>
 
                         <!-- Fix-unparseable pane: enter valid values, then Preview again to re-validate + write back -->
@@ -477,6 +530,10 @@
                                     <Setter Property="Visibility" Value="Visible" />
                                     <Style.Triggers>
                                         <DataTrigger Binding="{Binding Fixes.Count}" Value="0">
+                                            <Setter Property="Visibility" Value="Collapsed" />
+                                        </DataTrigger>
+                                        <!-- FIX B: the fix pane belongs to the PREVIEW step (step 2) — hide it during step-1 selection. -->
+                                        <DataTrigger Binding="{Binding InSelectStep}" Value="True">
                                             <Setter Property="Visibility" Value="Collapsed" />
                                         </DataTrigger>
                                     </Style.Triggers>
@@ -531,25 +588,94 @@
                             </TextBlock>
                         </Border>
 
-                        <!-- Which schedules this import will change (shown on Preview) -->
+                        <!-- Which schedules this import will change (shown on Preview) — per-schedule selection -->
                         <Border DockPanel.Dock="Top" Margin="0,0,0,8" Padding="9,7" CornerRadius="6"
                                 Background="{DynamicResource InfoBg}" BorderBrush="{DynamicResource AccentLine}" BorderThickness="1"
                                 Visibility="{Binding HasAffected, Converter={StaticResource BoolToVis}}">
                             <DockPanel>
-                                <TextBlock DockPanel.Dock="Top" Text="Schedules this import will change:" FontWeight="SemiBold"
-                                           FontSize="11.5" Foreground="{DynamicResource Accent}" Margin="0,0,0,4" />
+                                <!-- Header: title + right-aligned Select all/none (only when >1 schedule) -->
+                                <DockPanel DockPanel.Dock="Top" Margin="0,0,0,4">
+                                    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal"
+                                                Visibility="{Binding HasMultipleAffected, Converter={StaticResource BoolToVis}}">
+                                        <Button Content="Select all" Command="{Binding SelectAllAffectedCommand}"
+                                                Background="Transparent" BorderThickness="0" Foreground="{DynamicResource Accent}" FontSize="12" Cursor="Hand" Padding="2" />
+                                        <TextBlock Text="·" Foreground="{DynamicResource Hint}" Margin="6,0" VerticalAlignment="Center" />
+                                        <Button Content="Select none" Command="{Binding SelectNoneAffectedCommand}"
+                                                Background="Transparent" BorderThickness="0" Foreground="{DynamicResource Accent}" FontSize="12" Cursor="Hand" Padding="2" />
+                                    </StackPanel>
+                                    <TextBlock Text="Schedules this import will change:" FontWeight="SemiBold"
+                                               FontSize="11.5" Foreground="{DynamicResource Accent}" VerticalAlignment="Center" />
+                                </DockPanel>
+                                <!-- Helper line: shown only when at least one schedule is fully deselected -->
+                                <TextBlock DockPanel.Dock="Bottom" Margin="0,4,0,0" FontSize="11" TextWrapping="Wrap"
+                                           Foreground="{DynamicResource Hint}" Text="{Binding AffectedSelectionInfo}"
+                                           Visibility="{Binding SomeAffectedDeselected, Converter={StaticResource BoolToVis}}" />
+                                <!-- Per-schedule rows: a checkbox driving the schedule's changes' Selected, with read-only
+                                     dependent ("inherited-change") schedules indented underneath (Change 2).
+                                     Change 1: wrap in a ScrollViewer (MaxHeight + Auto vbar) so a long affected-schedules
+                                     list scrolls instead of pushing the window past the screen — mirrors the export ListBox /
+                                     fix-pane scroll behaviour. -->
+                                <ScrollViewer MaxHeight="220" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
                                 <ItemsControl ItemsSource="{Binding AffectedSchedules}">
                                     <ItemsControl.ItemTemplate>
                                         <DataTemplate>
-                                            <TextBlock Foreground="{DynamicResource Text}" FontSize="11.5" TextWrapping="Wrap"
-                                                       Text="{Binding Display}" />
+                                            <StackPanel Margin="0,1">
+                                                <DockPanel>
+                                                    <!-- Disclosure toggle for the dependent subtree (only when there are dependents);
+                                                         glyph swaps ▸/▾ via a trigger on IsChecked (no converter needed) -->
+                                                    <ToggleButton DockPanel.Dock="Left" IsChecked="{Binding IsExpanded, Mode=TwoWay}"
+                                                                  Visibility="{Binding HasDependents, Converter={StaticResource BoolToVis}}"
+                                                                  Background="Transparent" BorderThickness="0" Cursor="Hand"
+                                                                  Foreground="{DynamicResource Hint}" Width="14" Padding="0"
+                                                                  VerticalAlignment="Center">
+                                                        <ToggleButton.Style>
+                                                            <Style TargetType="ToggleButton">
+                                                                <Setter Property="Content" Value="▸" />
+                                                                <Style.Triggers>
+                                                                    <Trigger Property="IsChecked" Value="True">
+                                                                        <Setter Property="Content" Value="▾" />
+                                                                    </Trigger>
+                                                                </Style.Triggers>
+                                                            </Style>
+                                                        </ToggleButton.Style>
+                                                    </ToggleButton>
+                                                    <!-- Change 2: IsThreeState="False" so a direct user CLICK cycles only
+                                                         checked↔unchecked (never produces the indeterminate null the setter
+                                                         ignores — which was why a click couldn't uncheck a schedule). The
+                                                         indeterminate visual still shows when the bound bool? is null (mixed
+                                                         per-cell selection) — IsThreeState only governs click-produced values. -->
+                                                    <CheckBox IsThreeState="False" IsChecked="{Binding SelectionState, Mode=TwoWay}"
+                                                              Content="{Binding Display}" FontSize="11.5"
+                                                              Foreground="{DynamicResource Text}" VerticalContentAlignment="Center" />
+                                                </DockPanel>
+                                                <!-- Dependents: read-only, indented, greyed; visible only when this parent is selected + expanded (§9.5 deselect cascade) -->
+                                                <ItemsControl ItemsSource="{Binding Dependents}" Margin="22,0,0,0"
+                                                              Visibility="{Binding ShowDependents, Converter={StaticResource BoolToVis}}">
+                                                    <ItemsControl.ItemTemplate>
+                                                        <DataTemplate>
+                                                            <TextBlock Text="{Binding Display}" FontSize="11" TextWrapping="Wrap"
+                                                                       Foreground="{DynamicResource Hint}" Margin="0,1" />
+                                                        </DataTemplate>
+                                                    </ItemsControl.ItemTemplate>
+                                                </ItemsControl>
+                                            </StackPanel>
                                         </DataTemplate>
                                     </ItemsControl.ItemTemplate>
                                 </ItemsControl>
+                                </ScrollViewer>
+                                <!-- Step 1 → step 2: resolve conflicts on selected tabs, then show the changes preview.
+                                     FIX A: size-to-content (no fixed/Max Width) + roomy padding so the full label isn't clipped. -->
+                                <Button DockPanel.Dock="Bottom" Content="Resolve &amp; preview selected" Margin="0,8,0,0"
+                                        HorizontalAlignment="Left" Padding="16,6" Height="32" Cursor="Hand"
+                                        Command="{Binding ResolveAndPreviewCommand}"
+                                        Background="{DynamicResource Accent}" Foreground="White" BorderThickness="0"
+                                        Visibility="{Binding InSelectStep, Converter={StaticResource BoolToVis}}" />
                             </DockPanel>
                         </Border>
 
+                        <!-- Changes grid hidden during step 1 (select tabs); shown after Resolve & preview (Change 1, §8.3) -->
                         <DataGrid ItemsSource="{Binding Changes}" AutoGenerateColumns="False" CanUserAddRows="False"
+                                  Visibility="{Binding InPreviewStep, Converter={StaticResource BoolToVis}}"
                                   HeadersVisibility="Column" GridLinesVisibility="Horizontal" BorderBrush="{DynamicResource Line}"
                                   BorderThickness="1" FontSize="11.5" RowHeight="24" ColumnHeaderHeight="26"
                                   Background="{DynamicResource Surface}" RowBackground="{DynamicResource Surface}"
@@ -611,9 +737,7 @@
                                            VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
                             </Border>
                         </DockPanel>
-                        <Button Content="Write Claude instructions to exchange folder" Command="{Binding WriteClaudeGuideCommand}"
-                                Height="32" Padding="12,0" Margin="0,0,0,16" HorizontalAlignment="Left"
-                                ToolTip="Drops a step-by-step .md into the exchange folder explaining how to apply the staged group-edits file with Claude. Enabled once a folder is selected." />
+                        <!-- (Claude instructions are now written automatically next to the staged group-edits JSON when Claude-Assist runs — no separate button needed.) -->
 
                         <Border Background="{DynamicResource InfoBg}" BorderBrush="{DynamicResource AccentLine}" BorderThickness="1" CornerRadius="6" Padding="10">
                             <TextBlock Text="{Binding BridgeStatus}" Foreground="{DynamicResource Accent}" FontSize="12" TextWrapping="Wrap" />

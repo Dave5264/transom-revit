@@ -20,15 +20,30 @@ public sealed class ProposedChange
     /// <summary>When set, this is a bulk instance write: NewValue is applied to each of these instance UniqueIds.</summary>
     public List<string>? BulkInstanceIds;
 
+    /// <summary>W2 (H3 report-overlay): the UniqueId of the SCHEDULE ROW this change is displayed on (the type/group
+    /// row for a bulk-instance cell). A bulk cell's own <see cref="UniqueId"/> is empty (its targets live in
+    /// <see cref="BulkInstanceIds"/>, which are instance uids that are NOT rows in a grouped schedule), so the
+    /// run-results overlay — keyed by visible row uid — couldn't place it and rendered partial-bulk cells as flat
+    /// failures. RunResultsWriter falls back to this row uid for bulk cells so the cell's true Outcome + the C4
+    /// "N of M instances persisted" note land on the correct rendered cell. Empty for non-bulk changes (they use
+    /// <see cref="UniqueId"/>).</summary>
+    public string ReportRowUid = "";
+
     /// <summary>True when this change targets element(s) inside a Revit group (can't be written directly).</summary>
     public bool InGroup;
     public string GroupName = "";
 
-    /// <summary>True when this change's model group is BROKEN — the definition-swap dance can't reproduce it
-    /// (a member anchored outside the group, a nested group, or mixed instance orientation). Such columns drop
-    /// the dance (option 3) and route to option 2 / Claude-Assist, and color RED. Set by <c>ComputeGroupBroken</c>.</summary>
+    /// <summary>True when this change's model group trips the HARD dance gate — the definition-swap dance can't
+    /// reproduce it (a level-anchored "broken family", true rotation, or multi-level placement). Such columns drop
+    /// the dance (option 3) and route to option 2 / Claude-Assist. Mirror-only and bystander-nested groups do NOT
+    /// set this (they dance). Set by <c>ComputeGroupBroken</c> from <c>GroupSafetyResult.IsDanceGateBroken</c>.</summary>
     public bool GroupBroken;
     public string GroupBrokenReason = "";
+
+    /// <summary>The named level-anchored families that gate the dance (e.g. "CW_Closet Shelf and Pole (Casework) ×2"),
+    /// joined for display. Tells the user exactly what to re-host to unlock option 3. Set by <c>ComputeGroupBroken</c>
+    /// when the group is gated by anchored families; empty otherwise.</summary>
+    public string GroupBrokenFamilies = "";
 
     /// <summary>How a grouped edit gets written durably. ProjectVary = Transom applies in-process (vary flag);
     /// BuiltinDance = staged for Claude-assist (definition swap). Set only when <see cref="InGroup"/> is true.
@@ -52,7 +67,17 @@ public sealed class ProposedChange
     public string FrozenReason = "";
     public bool Selectable => !Frozen;
 
-    public bool Selected { get; set; } = true;
+    /// <summary>Raised whenever any change's <see cref="Selected"/> toggles (incl. the per-cell DataGrid checkbox).
+    /// The viewmodel subscribes once to re-evaluate each affected-schedule row's tri-state so cell edits and the
+    /// per-schedule checkbox stay visually consistent (UX_SPEC §5 C-3). Static = one subscription, no per-instance churn.</summary>
+    public static event System.Action? SelectionChanged;
+
+    private bool _selected = true;
+    public bool Selected
+    {
+        get => _selected;
+        set { if (_selected == value) return; _selected = value; SelectionChanged?.Invoke(); }
+    }
     public string ElementName { get; set; } = "";
     public string Field { get; set; } = "";
     /// <summary>The source schedule column's DISPLAY heading (ScheduleField.ColumnHeading), when known.
@@ -62,6 +87,13 @@ public sealed class ProposedChange
     public string OldValue { get; set; } = "";
     public string NewValue { get; set; } = "";
     public int InstancesAffected { get; set; } = 1;
+
+    /// <summary>The source schedule this change came from — its display name. Set once in <c>Summarize()</c>
+    /// (one choke point), used by option 2 to resolve the schedule whose column it replaces. Named to avoid
+    /// the transient <c>ChangeSet.ScheduleName</c> cursor (which only holds the LAST sheet after the loop).</summary>
+    public string SourceScheduleName = "";
+    /// <summary>The source schedule's UniqueId (preferred over the name when resolving — survives renames).</summary>
+    public string SourceScheduleUid = "";
     /// <summary>Preview "Scope" cell. Group-conflicted (blue project / yellow built-in) rows say "choose on
     /// Apply" so the preview is consistent with the per-parameter resolution dialog they'll trigger — they
     /// are NOT applied silently.</summary>
@@ -90,6 +122,19 @@ public sealed class SkippedItem
 {
     public string Reason { get; set; } = "";
     public string Detail { get; set; } = "";
+    /// <summary>CHANGE 2 §3b (FULL skip-log scoping, integ1-2 final ruling): the source schedule's Excel tab — lets
+    /// the preview scope the skip-log to the SELECTED schedules in subset mode. Stamped in BULK in
+    /// BuildChangeSet.Summarize() via the per-sheet skp0 boundary (so the dozens of cs.Skipped.Add sites need no
+    /// change); conflict-skips stamp it inline in ResolveSelectedAndFinalize. Empty = not attributable → never hidden
+    /// (fail-open).</summary>
+    public string SheetTabName = "";
+    /// <summary>§12 (user rule 2026-06-14): is this skip a USER DATA edit that won't apply (true → SHOW), or
+    /// schedule STRUCTURE/DEFINITION the user didn't edit as data (false → HIDE)? All skip surfaces (panel, status
+    /// count, diagnostic) show ONLY UserRelevant==true. Default TRUE = honesty floor: never silently hide a dropped
+    /// user edit — only the three structural sites (display-only schedule, column-header-not-importable INCL.
+    /// user-edited headers, duplicate-row) are explicitly set false. This filter is INDEPENDENT of and PRIOR to the
+    /// §11.1 selected-scope filter: drop structural skips first, then subset-scope the remainder to selected.</summary>
+    public bool UserRelevant = true;
 }
 
 public sealed class ConflictOption
@@ -110,9 +155,15 @@ public sealed class TypeConflict
     public string CurrentDisplay = "";
     public int InstancesAffected;
     public List<ConflictOption> Options = new();
+    /// <summary>C-7: the source schedule this conflict came from, carried through so the resolved change
+    /// (ResolveToChange) is stamped with its schedule and rolls up under the per-schedule selection.</summary>
+    public string ScheduleName = "";
+    public string ScheduleUid = "";
 }
 
-/// <summary>A flagged cell for the colour-coded import report. Severity: "red" (can't write) or "yellow" (changed since export).</summary>
+/// <summary>A flagged cell for the colour-coded import report. Severity: "red" (can't write) or "yellow".
+/// Yellow splits by <see cref="Category"/>: "drift" (model actually changed since export) vs "advisory"
+/// (a heads-up — sort/filter-key edit, missing instances, …) so the status line never calls an advisory "drift".</summary>
 public sealed class CellDiagnostic
 {
     public string SheetTabName = "";
@@ -121,6 +172,7 @@ public sealed class CellDiagnostic
     public string FieldName = "";
     public string ElementLabel = "";
     public string Severity = "";   // red | yellow
+    public string Category = "advisory";   // drift | advisory (meaningful for yellow only)
     public string Reason = "";
     public string Value = "";
 }
@@ -129,12 +181,34 @@ public sealed class CellDiagnostic
 public sealed class SheetSummary
 {
     public string ScheduleName = "";
+    /// <summary>The source schedule's UniqueId — lets the preview's per-schedule selection match this summary to
+    /// its <see cref="ProposedChange"/>s by uid (rename-safe), falling back to name when empty (cross-model/legacy).</summary>
+    public string ScheduleUid = "";
+    /// <summary>CHANGE 2 §3b: the schedule's Excel tab name — the join key for scoping Fixes/Skipped (which carry a
+    /// tab, not a schedule uid) to the SELECTED schedules.</summary>
+    public string SheetTabName = "";
     public int Changes;
     public int Skipped;
+    /// <summary>CHANGE 1 (§8.2): unresolved TYPE conflicts this schedule contributes (counted in <c>Summarize()</c>
+    /// via a cfl0 boundary, BEFORE the user resolves them at the dialog). Kept SEPARATE from <see cref="Changes"/>
+    /// — a conflict isn't a change until resolved — so a conflict-only tab still appears in the selection step
+    /// (filter is Changes>0 || Conflicts>0) without mis-advertising "N change(s)" (the §5c count-trap).</summary>
+    public int Conflicts;
     public bool RoundTrippable = true;
 
     // Bound in XAML (WPF binding ignores public fields, so expose a property).
-    public string Display => $"{ScheduleName} — {Changes} change(s)" + (Skipped > 0 ? $", {Skipped} skipped" : "");
+    public string Display => $"{ScheduleName} — {Changes} change(s)"
+                             + (Conflicts > 0 ? $", {Conflicts} conflict(s) to resolve" : "")
+                             + (Skipped > 0 ? $", {Skipped} skipped" : "");
+}
+
+/// <summary>CHANGE 2 (§9): one dependent ("inherited-change") schedule — a schedule that displays elements a
+/// driving (edited) schedule's TYPE/instance edits change, so it inherits the change without being edited. Shown
+/// read-only/indented under its driving parent in the selection step; never an apply target.</summary>
+public sealed class DependentScheduleRef
+{
+    public string ScheduleName = "";
+    public string ScheduleUid = "";
 }
 
 public sealed class ChangeSet
@@ -155,6 +229,11 @@ public sealed class ChangeSet
     /// Keyed by (ParameterId, Field) to match the per-column picker, not by parameter id alone.</summary>
     public HashSet<string> Option2EligibleParams = new();
 
+    /// <summary>How each Option-2-eligible column's TYPE-vs-INSTANCE binding was inferred from the source
+    /// schedule's organization (see <c>Importer.ComputeOption2Mode</c>). Keyed by <see cref="ColumnKey"/>
+    /// (same key as <see cref="Option2EligibleParams"/>). Absent/None ⇒ option 2 not offered for that column.</summary>
+    public Dictionary<string, Option2Mode> Option2Modes = new();
+
     /// <summary>The (ParameterId, Field) key used to identify one resolvable group-conflict column.</summary>
     public static string ColumnKey(int parameterId, string field) => parameterId + "|" + field;
 
@@ -164,6 +243,86 @@ public sealed class ChangeSet
 
     /// <summary>Full plain-text diagnostic of this import (column matching, anchors, skips, results) for the Copy log button.</summary>
     public string DiagnosticLog = "";
+
+    /// <summary>CHANGE 2 §3b surface-3: the source workbook + doc GUID captured at build time, so the copy-log
+    /// diagnostic can be REBUILT post-selection (subset mode) — scoped to the selected sheets + skips — on the UI
+    /// thread without a live Document (uses the captured GUID). See <c>Importer.BuildDiagnosticLog(cs, selectedUids)</c>.</summary>
+    public ImportWorkbook? SourceWorkbook;
+    public string DocCreationGuid = "";
+
+    /// <summary>CHANGE 2 (§9): dependent ("inherited-change") schedules per driving (edited) schedule — the OTHER
+    /// project schedules that display elements a driving schedule's TYPE/instance edits change. Keyed by the
+    /// driving schedule's UniqueId → its dependents. Computed once in <c>BuildChangeSet</c> (API thread, one
+    /// collector pass per schedule, see <c>ComputeDependents</c>); read-only display in the selection step. Empty
+    /// when no type/instance edge is justified (grouped/shared/computed never infer an edge — §9.2).</summary>
+    public Dictionary<string, List<DependentScheduleRef>> Dependents = new();
+
+    /// <summary>Revit warnings/errors raised during the apply commit (the ApplyFailureCollector's messages), kept so
+    /// the FINAL by-uid log (rebuilt post-VerifyApplied) can still include them — see <c>FinalizeApplyReport</c>.</summary>
+    public List<string> RevitApplyMessages = new();
+
+    /// <summary>W1 (Task #17): elements Revit DELETED during apply that we did NOT ask to delete — captured from the
+    /// <c>DocumentChanged</c> committed delta and scope-filtered to Transom's apply transactions. These are Revit's
+    /// own family-regeneration auto-fixes ("Delete Splitting Element" etc.), which are pre-collector and unpreventable,
+    /// so a "successful" apply can silently remove geometry. Surfaced in the apply log + run report so it is never
+    /// silent. Each entry is "Name (id)" (name best-effort — a deleted element is usually un-queryable). Empty = none.</summary>
+    public List<string> RevitDeletions = new();
+
+    /// <summary>§10 mandatory per-(schedule,type) warnings recorded while applying option 2 — each a type left
+    /// blank because the column was converted to a TYPE param and that type's instances had varying values.
+    /// Surfaced in the apply status note AND the copyable apply log (it survives the post-apply log rebuild).</summary>
+    public List<string> Option2Warnings = new();
+
+    /// <summary>D1/D2 (option-2 apply-log honesty): the conversion counts from <c>ApplyNewParam</c> — params
+    /// created, values written (edits + carried-forward originals), source columns replaced, columns appended.
+    /// Set only when an option-2 (NewTypeParam/NewInstanceParam) conversion ran. Surfaced as a dedicated section
+    /// in the apply log so a conversion that wrote N edits is never reported as "applied: 0". Null = no option-2
+    /// conversion this apply. The per-change list of edited cells is derived from <see cref="Changes"/> (those
+    /// with an option-2 Resolution) in BuildApplyLog; this carries only the aggregate counts.</summary>
+    public Option2Summary? Option2Result;
+
+    /// <summary>Header edits to round-trip: the user renamed a column caption (or a grouped super-header) in the
+    /// workbook. Both ARE settable through the API (verified): per-column captions via <c>ScheduleField.ColumnHeading</c>,
+    /// merged super-headers via <c>ViewSchedule.GroupHeaders(top,left,bottom,right,caption)</c>. (The schedule body's
+    /// <c>SetCellText</c> is forbidden, so neither uses it.) Applied in the same apply transaction. Built in
+    /// <c>BuildChangeSet</c>; headers-off (synthesized) columns never produce an entry.</summary>
+    public List<HeaderChange> HeaderChanges = new();
+}
+
+/// <summary>A round-trippable header rename. Two kinds:
+/// • <see cref="HeaderChangeKind.ColumnCaption"/> — a per-column heading; the live <c>ScheduleField</c> is resolved by
+///   (ScheduleUid, ParameterId), rename-safe; applied via <c>field.ColumnHeading = NewHeading</c>.
+/// • <see cref="HeaderChangeKind.GroupHeader"/> — a merged super-header spanning a cell rectangle; applied via
+///   <c>ViewSchedule.GroupHeaders(Top,Left,Bottom,Right,NewHeading)</c> (keyed by the rectangle, since a super-header
+///   isn't tied to one field). The rectangle is in Body-section grid coordinates (matches the exported merge region).</summary>
+public enum HeaderChangeKind { ColumnCaption, GroupHeader }
+
+public sealed class HeaderChange
+{
+    public HeaderChangeKind Kind = HeaderChangeKind.ColumnCaption;
+    public string ScheduleUid = "";
+    public string ScheduleName = "";
+    public string SheetTabName = "";
+    public int ParameterId;        // ColumnCaption: the column's stable identity
+    public int ExcelCol;           // workbook column (run-results overlay / report coloring)
+    public int ExcelRow;           // workbook header row the caption lives on
+    // GroupHeader: the merged super-header's Body-section rectangle (matches the exported MergeRegion).
+    public int Top, Left, Bottom, Right;
+    public string OldHeading = "";
+    public string NewHeading = "";
+    public ApplyOutcome Outcome = ApplyOutcome.Pending;
+    public string OutcomeNote = "";
+    public bool Selected = true;
+}
+
+/// <summary>D1/D2: aggregate counts of what an option-2 (NewTypeParam/NewInstanceParam) conversion did, for honest
+/// apply-log reporting. Counts are across all converted columns in one apply.</summary>
+public sealed class Option2Summary
+{
+    public int ParamsCreated;
+    public int ValuesWritten;     // edits + carried-forward originals actually written to the new param(s)
+    public int ColumnsReplaced;   // source field replaced by the new '(Transom)' column
+    public int ColumnsAppended;   // new column added alongside (key-guard / no-source-to-replace)
 }
 
 /// <summary>
@@ -174,10 +333,18 @@ public sealed class ChangeSet
 /// </summary>
 public sealed class Importer
 {
+    /// <summary>Revit's rendered placeholder for an aggregated cell whose instances hold differing values. The
+    /// export baseline records it verbatim (no named constant exists in the exporter — the string comes from
+    /// Revit's own renderer), so it can never equal a single element's live display: drift checks must skip it
+    /// or they flag phantom "changed since export" on every preview.</summary>
+    private const string VariesSentinel = "<varies>";
+
     private sealed class TypeCandidate
     {
         public ImportColumn Col = null!;
         public string SheetTab = "";
+        public string ScheduleName = "";   // C-7: carried so a resolved type-conflict change can be matched to its schedule.
+        public string ScheduleUid = "";    // C-7: (rename-safe uid; name fallback) — see ChangesForSchedule / per-schedule selection.
         public string TypeName = "";
         public bool IsString;
         public string? SpecTypeId;
@@ -195,32 +362,137 @@ public sealed class Importer
         foreach (var sheet in wb.Sheets)
         {
             cs.ScheduleName = sheet.ScheduleName;
-            int chg0 = cs.Changes.Count, skp0 = cs.Skipped.Count;
-            void Summarize() => cs.SheetSummaries.Add(new SheetSummary
+            // CHANGE 1 (§8.2): cfl0 mirrors chg0/skp0 — ResolveTypeGroups (which appends cs.Conflicts) runs before
+            // Summarize() per sheet, so (Conflicts - cfl0) is this sheet's conflict count. Kept separate from Changes
+            // so a conflict-only tab surfaces in the selection step without inflating "N change(s)".
+            int chg0 = cs.Changes.Count, skp0 = cs.Skipped.Count, cfl0 = cs.Conflicts.Count;
+            void Summarize()
             {
-                ScheduleName = sheet.ScheduleName, RoundTrippable = sheet.RoundTrippable,
-                Changes = cs.Changes.Count - chg0, Skipped = cs.Skipped.Count - skp0,
-            });
+                // §4a: stamp every change this sheet produced with its source schedule (one choke point — the
+                // change factories don't know the sheet). Option 2 resolves the schedule to replace from here.
+                for (int i = chg0; i < cs.Changes.Count; i++)
+                {
+                    cs.Changes[i].SourceScheduleName = sheet.ScheduleName;
+                    cs.Changes[i].SourceScheduleUid = sheet.ScheduleUniqueId;
+                }
+                // CHANGE 1 (C-7 reuse): stamp this sheet's CONFLICTS with their source schedule too, so the affected
+                // predicate + conflict-scoping (§8.4) can attribute a conflict to its tab.
+                for (int i = cfl0; i < cs.Conflicts.Count; i++)
+                {
+                    cs.Conflicts[i].ScheduleName = sheet.ScheduleName;
+                    cs.Conflicts[i].ScheduleUid = sheet.ScheduleUniqueId;
+                }
+                // CHANGE 2 §3b (FULL): stamp this sheet's SKIPS with their tab via the existing skp0 boundary — ONE
+                // place, so the dozens of cs.Skipped.Add sites need no change — so the preview can scope the skip-log
+                // to the SELECTED schedules. Conflict-skips added later (ResolveSelectedAndFinalize) stamp their tab inline.
+                for (int i = skp0; i < cs.Skipped.Count; i++)
+                    cs.Skipped[i].SheetTabName = sheet.SheetTabName;
+                cs.SheetSummaries.Add(new SheetSummary
+                {
+                    ScheduleName = sheet.ScheduleName, ScheduleUid = sheet.ScheduleUniqueId,
+                    SheetTabName = sheet.SheetTabName,   // bridge for the fix-pane + skip-log filters (tab→schedule)
+                    RoundTrippable = sheet.RoundTrippable,
+                    // §12 (step-1 surface): the per-schedule selection-list "M skipped" (SheetSummary.Display →
+                    // AffectedScheduleRow.Display) must show ONLY user-relevant skips, like every other skip surface —
+                    // count user-relevant skips in THIS sheet's appended [skp0..end) range, excluding back-end/structural
+                    // (UserRelevant==false). The Changes/Conflicts counts are unchanged. ATTIC → 0 (its 3 header skips
+                    // are structural), and Display drops the ", N skipped" segment when 0.
+                    Changes = cs.Changes.Count - chg0, Skipped = cs.Skipped.Skip(skp0).Count(s => s.UserRelevant),
+                    Conflicts = cs.Conflicts.Count - cfl0,
+                });
+            }
 
-            if (!sheet.RoundTrippable)
+            // Item B (user-committed default = B2): a non-round-trippable schedule whose ROWS nonetheless anchored
+            // (a TYPE schedule whose multi-type collapse blocked a single-anchor verdict but whose rows still carry
+            // a type uid + AggregatedTypeUids — e.g. PARTITION TYPE R) CAN still write its writable TYPE cells: the
+            // edit fans to every aggregated type (HandleTypeRow → RecordTypeAll, the same machinery itemized
+            // multi-type rows use). So only WHOLESALE-skip a non-round-trippable sheet when NOTHING anchored at all
+            // (genuinely display-only: material takeoffs, un-anchorable areas/rooms). A sheet with ≥1 anchored row
+            // flows into the per-row loop, where each row's binding/edited/read-only/<varies> guards already decide
+            // per-cell (read-only stays skipped, an unchanged <varies> writes nothing, per-type rejects are reported).
+            bool anyAnchored = sheet.Rows.Any(r => !string.IsNullOrEmpty(r.UniqueId));
+            if (!sheet.RoundTrippable && !anyAnchored)
             {
                 cs.Skipped.Add(new SkippedItem
                 {
                     Reason = "display-only schedule",
-                    Detail = $"{sheet.ScheduleName} — not itemized, so rows don't map to individual elements and " +
-                             "values can't be written back. Turn on 'Itemize every instance' (the schedule's " +
-                             "Sorting/Grouping tab) and re-export to round-trip.",
+                    Detail = $"{sheet.ScheduleName} — not itemized and no row maps to an element/type, so values can't " +
+                             "be written back. Turn on 'Itemize every instance' (the schedule's Sorting/Grouping tab) " +
+                             "and re-export to round-trip.",
+                    UserRelevant = false,   // §12 HIDE: structural (the schedule can't round-trip); not a user data edit
                 });
                 Summarize();
                 continue;
             }
 
             foreach (var unmatched in sheet.Columns.Where(c => c.Writable && !c.Matched))
+            {
+                var colLabel = string.IsNullOrEmpty(unmatched.Header) ? unmatched.FieldName : unmatched.Header;
+                // ID-PRIMARY matching (2026-06-14) RETIRES the FIX-1 ambiguous-duplicate stopgap: a duplicate-NAME
+                // column now resolves to its distinct paramId in ExcelReader's same-header group, so it always lands —
+                // it never reaches here as an "ambiguous" skip. A writable column that's STILL unmatched is genuinely
+                // renamed/removed (or a count mismatch under a shared header), so its edits dropped → §12 SHOW
+                // (UserRelevant=true, the default), user-framed wording (§12.4): it's the user's own model change.
                 cs.Skipped.Add(new SkippedItem
                 {
                     Reason = "column not in spreadsheet",
-                    Detail = $"'{(string.IsNullOrEmpty(unmatched.Header) ? unmatched.FieldName : unmatched.Header)}' (renamed or removed)",
+                    Detail = $"Your edits in column '{colLabel}' couldn't be applied — that column was renamed or " +
+                             "removed in the model since you exported.",
                 });
+            }
+
+            // Column-HEADER (caption) edits NOW round-trip (user directive 2026-06-18: any header editable through the
+            // API should be editable-and-round-tripped). A per-column caption is settable via ScheduleField.ColumnHeading
+            // (verified live; the body section itself rejects SetCellText, so DATA cells stay non-importable). Detect a
+            // changed header (current sheet heading != the exported ColumnHeading for a matched column) and record a
+            // HeaderChange — applied in the apply transaction by setting field.ColumnHeading (field resolved by
+            // ParameterId, NOT by the old heading, so the rename can't break the column match).
+            //
+            // Excluded from the COLUMN-CAPTION path:
+            //  • headers-off / synthesized-header schedules: col.Header is empty (no real ColumnHeading existed), and
+            //    the workbook's row-0 is a Transom-synthesized field-name row, not a user caption. Editing it must not
+            //    write a heading onto a schedule whose headers are turned off.
+            //  • merged super-headers (e.g. DOOR / FRAME): handled by the GROUP-HEADER path just below (they round-trip
+            //    via ViewSchedule.GroupHeaders, not ColumnHeading).
+            foreach (var col in sheet.Columns.Where(c => c.Matched && c.ExcelCol >= 0 && c.ExcelCol < sheet.CurrentHeaders.Length))
+            {
+                var currentHeader = sheet.CurrentHeaders[col.ExcelCol] ?? "";
+                if (string.IsNullOrEmpty(col.Header) || string.IsNullOrEmpty(currentHeader) || currentHeader == col.Header)
+                    continue;
+                cs.HeaderChanges.Add(new HeaderChange
+                {
+                    Kind = HeaderChangeKind.ColumnCaption,
+                    ScheduleUid = sheet.ScheduleUniqueId,
+                    ScheduleName = sheet.ScheduleName,
+                    SheetTabName = sheet.SheetTabName,
+                    ParameterId = col.ParameterId,
+                    ExcelCol = col.ExcelCol,
+                    ExcelRow = 0,                       // the workbook header row (ExcelReader reads captions from row 0)
+                    OldHeading = col.Header,
+                    NewHeading = currentHeader,
+                });
+            }
+
+            // Grouped SUPER-HEADER edits also round-trip (verified): a merged header-band caption (e.g. "DOOR"/"FRAME")
+            // is settable via ViewSchedule.GroupHeaders(top,left,bottom,right,caption). Detect a changed super-header by
+            // comparing the workbook's current top-left text to the exported caption; apply by rectangle (super-headers
+            // aren't tied to a field, so the rectangle is the key — robust when the sheet wasn't reordered).
+            foreach (var hg in sheet.HeaderGroups)
+            {
+                if (string.IsNullOrEmpty(hg.Caption) || string.IsNullOrEmpty(hg.CurrentCaption) || hg.CurrentCaption == hg.Caption)
+                    continue;
+                cs.HeaderChanges.Add(new HeaderChange
+                {
+                    Kind = HeaderChangeKind.GroupHeader,
+                    ScheduleUid = sheet.ScheduleUniqueId,
+                    ScheduleName = sheet.ScheduleName,
+                    SheetTabName = sheet.SheetTabName,
+                    Top = hg.Top, Left = hg.Left, Bottom = hg.Bottom, Right = hg.Right,
+                    ExcelCol = hg.Left, ExcelRow = hg.Top,
+                    OldHeading = hg.Caption,
+                    NewHeading = hg.CurrentCaption,
+                });
+            }
 
             // A duplicated anchor (a row copied in Excel) would write one element twice — all copies were dropped.
             foreach (var dupUid in sheet.DuplicateUids)
@@ -229,6 +501,7 @@ public sealed class Importer
                     Reason = "duplicate row",
                     Detail = $"anchor …{(dupUid.Length > 6 ? dupUid.Substring(dupUid.Length - 6) : dupUid)} appears on " +
                              "more than one row — all copies skipped so the element isn't written twice",
+                    UserRelevant = false,   // §12 HIDE: a copied row is a structural input artifact, not a distinct user data edit
                 });
 
             var typeGroups = new Dictionary<(long, int), TypeCandidate>();
@@ -269,6 +542,16 @@ public sealed class Importer
                     if (MergedSkip(sheet, row, col, cs, label, cellText)) continue;
                     var baseline = baseRow != null && baseRow.TryGetValue(col.Col, out var bv) ? bv : null;
 
+                    // §17: a COMBINED column has no single parameter — route an edited combined cell through the
+                    // fail-closed parse→distribute path (NEVER GetParam on the combined column). FORK 3 (per-field
+                    // component-wins): if any of this field's component columns was edited directly in this row, the
+                    // combined parse is suppressed for the whole field (the explicit component edit lands instead).
+                    if (col.CombinedParts != null)
+                    {
+                        HandleCombinedColumn(doc, sheet, row, cs, col, el, baseRow, baseline, label, units, elInGroup, elGroupName, cellText);
+                        continue;
+                    }
+
                     // Resolve against the live model so a stale/wrong exported binding can't misroute the write.
                     var binding = ResolveBindingLive(doc, el, col.ParameterId, col.Binding);
 
@@ -290,20 +573,23 @@ public sealed class Importer
                     var current = CurrentDisplay(param);
                     bool edited = baseline != null ? cellText != baseline : cellText != current;
 
-                    if (param.IsReadOnly)
-                    {
-                        if (edited)
-                        {
-                            cs.Changes.Add(FrozenChange(SafeName(el), col, current, cellText, "read-only — driven by the family or type"));
-                            cs.Diagnostics.Add(Diag(sheet, row, col, label, "blue", "frozen — read-only (family/type driven)", cellText));
-                        }
-                        continue;
-                    }
+                    // §15-E: an edit to a READ-ONLY (family/type-driven) cell DROPS SILENTLY — not a change, not a
+                    // skip, not shown, no "frozen" tally. A read-only cell is never the user's editable edit, so per
+                    // the guiding principle (alert only to deviations on cells that CAN be edited) we surface nothing.
+                    if (param.IsReadOnly) continue;
 
-                    // Drift: current model value differs from what was exported (only knowable with a baseline).
-                    if (baseline != null && Drifted(param, baseline, units, col.SpecTypeId))
+                    // Drift: current model value differs from what was exported. §15-C: only flag drift on a cell the
+                    // user did NOT edit — a cell the user is CHANGING is intent, not drift. (Never knowable without a
+                    // baseline, and never with the "<varies>" sentinel — it compares unequal to any single live display.)
+                    // §15-C gap fix: ALSO suppress drift when the workbook cell ALREADY MATCHES the current model value
+                    // (`!Drifted(param, cellText, …)` = the same no-op-write equality). This is the user's own earlier-
+                    // applied edit (workbook==model now), which the current-preview `edited` check misses (cellText==current
+                    // → edited=false) — so drift only fires when the model holds something the user did NOT put there.
+                    if (!edited && baseline != null && baseline != VariesSentinel
+                        && Drifted(param, baseline, units, col.SpecTypeId)
+                        && Drifted(param, cellText, units, col.SpecTypeId))
                         cs.Diagnostics.Add(Diag(sheet, row, col, label, "yellow",
-                            $"changed since export (was '{baseline}', now '{current}')", cellText));
+                            $"changed since export (was '{baseline}', now '{current}')", cellText, category: "drift"));
 
                     if (!edited) continue; // not edited -> no write (never revert model drift)
 
@@ -344,12 +630,9 @@ public sealed class Importer
                                 cs.Changes.Add(Mark(InstanceChange(el, col, param.AsValueString() ?? "", cellText, false, "", parsed), elInGroup, elGroupName));
                         }
                     }
-                    else
-                    {
-                        // Non-text, non-numeric (e.g. an ElementId / family-or-type selection) — can't be set from a cell.
-                        cs.Changes.Add(FrozenChange(SafeName(el), col, current, cellText, "set by a family/type selection, not by text"));
-                        cs.Diagnostics.Add(Diag(sheet, row, col, label, "blue", "frozen — set by family/type (can't import)", cellText));
-                    }
+                    // else: non-text/non-numeric (an ElementId / family-or-type selection) can't be set from a cell.
+                    // §15-E: such an edit to a non-editable cell DROPS SILENTLY (no frozen change, no diagnostic, no
+                    // tally) — it isn't an editable-cell edit, so the principle says surface nothing.
                 }
             }
 
@@ -381,10 +664,262 @@ public sealed class Importer
 
         cs.ImportedScheduleNames = wb.Sheets.Select(s => s.ScheduleName).Distinct().ToList();
         ComputeOption2Eligibility(doc, cs);
+        ComputeOption2Mode(doc, cs);
         ComputeGroupBroken(doc, cs);
+        ComputeDependents(doc, cs);   // CHANGE 2 (§9.4): dependent schedules per driving schedule (API thread, one pass)
 
+        // CHANGE 2 §3b surface-3: keep wb + doc GUID so the copy-log diagnostic can be rebuilt scoped post-selection.
+        cs.SourceWorkbook = wb;
+        cs.DocCreationGuid = doc.CreationGUID.ToString();
         cs.DiagnosticLog = BuildDiagnosticLog(doc, wb, cs);
         return cs;
+    }
+
+    /// <summary>
+    ///     §17 FAIL-CLOSED combined-parameter distribution. An edited COMBINED cell is split back into its component
+    ///     parts and each part written — but ONLY when the parse is PROVABLY safe (§17.2). The one outcome we must
+    ///     never produce is a SILENT WRONG distribution (separator-in-value collision), so this auto-distributes only
+    ///     when ALL of (a)-(d) hold; ANY doubt → write NOTHING, surface a user-relevant non-importable diagnostic, and
+    ///     let the (hidden) component columns be the editable fallback.
+    ///       (a) the separator is PROVABLY ABSENT from every component's CURRENT value AND every edited token,
+    ///       (b) every part resolves to a settable param on the element/type,
+    ///       (c) every parsed token re-parses cleanly to its component's spec/units,
+    ///       (d) the edited string matches the prefix/suffix/separator template EXACTLY (splits into exactly N tokens).
+    ///     FORK 3 (per-FIELD component-wins): if ANY of this field's component columns was edited DIRECTLY in this row,
+    ///     the combined parse is suppressed for the WHOLE field (the explicit component edit lands instead).
+    /// </summary>
+    private void HandleCombinedColumn(Document doc, ImportSheet sheet, ImportRow row, ChangeSet cs, ImportColumn col,
+        Element el, Dictionary<int, string>? baseRow, string? baseline, string label, Units units,
+        bool elInGroup, string elGroupName, string cellText)
+    {
+        var parts = col.CombinedParts!;
+
+        // Only act on an EDITED combined cell. Unedited → no-op (drift on a combined cell isn't surfaced — its
+        // components carry their own drift if any). baseline null → compare against the rendered current value.
+        bool edited = baseline != null ? cellText != baseline : !string.IsNullOrEmpty(cellText);
+        if (!edited) return;
+
+        // FORK 3: did the user edit any of this field's component columns directly in THIS row? If so, suppress the
+        // whole field's combined parse (component-wins per field) — the component columns import on their own.
+        foreach (var part in parts)
+        {
+            var compCol = sheet.Columns.FirstOrDefault(c => c.CombinedParts == null && c.Matched
+                && c.ParameterId == part.ParamId && c.ExcelCol >= 0 && c.ExcelCol < row.Cells.Length);
+            if (compCol == null) continue;
+            var compText = row.Cells[compCol.ExcelCol] ?? "";
+            var compBase = baseRow != null && baseRow.TryGetValue(compCol.Col, out var cbv) ? cbv : null;
+            bool compEdited = compBase != null ? compText != compBase : !string.IsNullOrEmpty(compText);
+            if (compEdited)
+            {
+                // Component-wins: ignore the combined cell for this field; note it so the user knows why.
+                cs.Skipped.Add(new SkippedItem
+                {
+                    Reason = "combined value ignored",
+                    Detail = $"You edited a component column of '{col.FieldName}' directly, so the combined value was " +
+                             "ignored for that field — edit the combined cell OR the component columns, not both.",
+                });
+                return;
+            }
+        }
+
+        void Refuse(string why)
+        {
+            // Fail closed: write NOTHING, surface as a user-relevant non-importable (the user edited it, it won't land).
+            cs.Skipped.Add(new SkippedItem
+            {
+                Reason = "can't split combined value",
+                Detail = $"Your edit to '{col.FieldName}' ({label}) couldn't be split into its parts safely — {why}. " +
+                         "Edit the component columns directly instead (unhide them).",
+            });
+            cs.Diagnostics.Add(Diag(sheet, row, col, label, "yellow",
+                $"combined value can't be split safely — {why}", cellText, category: "advisory"));
+        }
+
+        // (d) template split: walk the parts in order, peeling prefix + value + suffix, using the separator BETWEEN
+        // consecutive parts. The split must consume the whole string into exactly N tokens.
+        var tokens = new string[parts.Count];
+        string rest = cellText;
+        for (int i = 0; i < parts.Count; i++)
+        {
+            var p = parts[i];
+            if (!string.IsNullOrEmpty(p.Prefix))
+            {
+                if (!rest.StartsWith(p.Prefix)) { Refuse($"it doesn't match the expected format (prefix '{p.Prefix}')"); return; }
+                rest = rest.Substring(p.Prefix.Length);
+            }
+            string token;
+            bool last = i == parts.Count - 1;
+            string sep = p.Separator ?? "";
+            if (last || string.IsNullOrEmpty(sep))
+            {
+                token = rest;
+                rest = "";
+            }
+            else
+            {
+                // (a) separator-in-value collision: if the separator occurs more than once in what remains, the split
+                // point is ambiguous → refuse. We require EXACTLY one occurrence at the boundary for this part.
+                int first = rest.IndexOf(sep, StringComparison.Ordinal);
+                if (first < 0) { Refuse($"it doesn't match the expected format (separator '{sep}' missing)"); return; }
+                token = rest.Substring(0, first);
+                rest = rest.Substring(first + sep.Length);
+            }
+            // strip suffix
+            if (!string.IsNullOrEmpty(p.Suffix))
+            {
+                if (!token.EndsWith(p.Suffix)) { Refuse($"it doesn't match the expected format (suffix '{p.Suffix}')"); return; }
+                token = token.Substring(0, token.Length - p.Suffix.Length);
+            }
+            tokens[i] = token.Trim();
+        }
+        if (rest.Length > 0) { Refuse("it has extra text after the last part"); return; }
+
+        // Resolve each part live + (a) prove the separator is absent from every CURRENT component value + (c) re-parse
+        // each token. Build the would-be writes; commit none until ALL parts pass.
+        var pending = new List<ProposedChange>();
+        for (int i = 0; i < parts.Count; i++)
+        {
+            var p = parts[i];
+            string token = tokens[i];
+
+            var binding = ResolveBindingLive(doc, el, p.ParamId, p.Binding);
+            var host = binding == "type"
+                ? (el.GetTypeId() != ElementId.InvalidElementId ? doc.GetElement(el.GetTypeId()) : null)
+                : binding == "instance" ? el : null;
+            var param = host == null ? null : GetParam(host, p.ParamId);
+            if (param == null || param.IsReadOnly) { Refuse("one of its parts can't be written on this element"); return; }   // (b)
+
+            // (a) the separator must not appear inside this part's CURRENT value (it would make a future split ambiguous)
+            string curVal = param.StorageType == StorageType.String ? (param.AsString() ?? "") : (param.AsValueString() ?? "");
+            var psep = p.Separator ?? "";
+            if (!string.IsNullOrEmpty(psep) && (curVal.Contains(psep) || token.Contains(psep)))
+            { Refuse($"a value contains the separator '{psep}'"); return; }
+
+            // (c) re-parse the token to the part's storage type/spec — same parse the importer uses for a normal write.
+            if (param.StorageType == StorageType.String)
+            {
+                if ((param.AsString() ?? "") == token) continue;   // no-op for this part
+                pending.Add(new ProposedChange
+                {
+                    UniqueId = host!.UniqueId, ParameterId = p.ParamId, Binding = binding, ElementName = SafeName(el),
+                    Field = col.FieldName + " · " + (param.Definition?.Name ?? ("part " + p.ParamId)),
+                    OldValue = param.AsString() ?? "", NewValue = token, IsString = true, NewString = token,
+                });
+            }
+            else if (param.StorageType == StorageType.Integer)
+            {
+                if (!TryParseInteger(IsYesNo(param), token, out int iv)) { Refuse($"the part '{token}' isn't a valid number"); return; }
+                if (param.AsInteger() == iv) continue;
+                pending.Add(new ProposedChange
+                {
+                    UniqueId = host!.UniqueId, ParameterId = p.ParamId, Binding = binding, ElementName = SafeName(el),
+                    Field = col.FieldName + " · " + (param.Definition?.Name ?? ("part " + p.ParamId)),
+                    OldValue = CurrentDisplay(param), NewValue = token, IsInt = true, NewInt = iv,
+                });
+            }
+            else if (param.StorageType == StorageType.Double && p.SpecTypeId != null)
+            {
+                if (!UnitFormatUtils.TryParse(units, new ForgeTypeId(p.SpecTypeId), token, out double parsed))
+                { Refuse($"the part '{token}' isn't a valid value"); return; }
+                if (Math.Abs(param.AsDouble() - parsed) < 1e-9) continue;
+                pending.Add(new ProposedChange
+                {
+                    UniqueId = host!.UniqueId, ParameterId = p.ParamId, Binding = binding, ElementName = SafeName(el),
+                    Field = col.FieldName + " · " + (param.Definition?.Name ?? ("part " + p.ParamId)),
+                    OldValue = param.AsValueString() ?? "", NewValue = token, NewDouble = parsed,
+                });
+            }
+            else { Refuse("one of its parts has an unsupported value type"); return; }   // (b)/(c)
+        }
+
+        // All parts passed the gate → commit the (changed) component writes via the normal by-uid apply path.
+        foreach (var ch in pending) cs.Changes.Add(Mark(ch, elInGroup, elGroupName));
+    }
+
+    /// <summary>
+    ///     CHANGE 2 (§9.4): for each EDITED (driving) schedule, find the OTHER project schedules that would inherit
+    ///     its edits and store them on <see cref="ChangeSet.Dependents"/> (read-only display in the selection step).
+    ///     Propagation (§9.2, evidence-based): a TYPE-bound write changes every instance of the type project-wide, so
+    ///     any schedule displaying any such instance depends; an INSTANCE/bulk write only reaches the written
+    ///     instances, so only a schedule showing one of those exact uids depends. Grouped/shared/computed writes are
+    ///     NOT type/instance-keyed → no edge inferred (never a false dependent). A driving schedule is never its own
+    ///     dependent. ONE collector pass per project schedule (templates + driving schedules excluded); cost is
+    ///     O(sum of displayed elements + driving instances) — no per-type rescan. Runs on the API thread.
+    /// </summary>
+    private static void ComputeDependents(Document doc, ChangeSet cs)
+    {
+        try
+        {
+            // 1. Driving edits keyed per source schedule: type ids (type writes) + instance uids (instance writes).
+            //    Only non-frozen, directly-applicable changes drive a dependency (a frozen/blue change writes nothing).
+            var drivingTypeIdsBySched = new Dictionary<string, HashSet<long>>();
+            var drivingInstUidsBySched = new Dictionary<string, HashSet<string>>();
+            foreach (var ch in cs.Changes)
+            {
+                // §9.2: drivers are ONLY ungrouped, directly-applicable changes. Skip frozen (writes nothing) AND
+                // grouped (InGroup covers ProjectVary + BuiltinDance + shared-in-group — set by Mark()): a grouped
+                // change is not a clean type/instance-keyed direct write (a BuiltinDance isn't even applied in the
+                // direct pass), so inferring a dependent from it would be a FALSE edge. (At this preview-time point
+                // no option-2 Resolution is set yet, so a grouped change can't be reclassified to a direct type
+                // write here anyway — staying conservative matches §9.2's "don't infer what we can't justify".)
+                if (ch.Frozen || ch.InGroup) continue;
+                var schedUid = !string.IsNullOrEmpty(ch.SourceScheduleUid) ? ch.SourceScheduleUid : ch.SourceScheduleName;
+                if (string.IsNullOrEmpty(schedUid)) continue;
+                // TYPE-bound write (incl. option-2 NewTypeParam) → key on the written type id.
+                bool typeKeyed = ch.Binding == "type" || ch.Resolution == GroupResolution.NewTypeParam;
+                if (typeKeyed && ch.TypeId != 0)
+                {
+                    if (!drivingTypeIdsBySched.TryGetValue(schedUid, out var set)) drivingTypeIdsBySched[schedUid] = set = new HashSet<long>();
+                    set.Add(ch.TypeId);
+                }
+                else
+                {
+                    // INSTANCE/bulk write → the specific instance uids it touches.
+                    var uids = ch.BulkInstanceIds ?? (string.IsNullOrEmpty(ch.UniqueId) ? null : new List<string> { ch.UniqueId });
+                    if (uids == null) continue;
+                    if (!drivingInstUidsBySched.TryGetValue(schedUid, out var set)) drivingInstUidsBySched[schedUid] = set = new HashSet<string>();
+                    foreach (var u in uids) if (!string.IsNullOrEmpty(u)) set.Add(u);
+                }
+            }
+
+            var drivingSchedUids = new HashSet<string>(drivingTypeIdsBySched.Keys.Concat(drivingInstUidsBySched.Keys));
+            if (drivingSchedUids.Count == 0) return;   // nothing drives anything → no dependents
+            bool anyInstanceDrivers = drivingInstUidsBySched.Count > 0;
+
+            // 2. One pass over project schedules (excluding templates + the driving schedules themselves). For each,
+            //    derive its displayed TYPE ids and (only if needed) displayed instance uids.
+            foreach (var vs in new FilteredElementCollector(doc).OfClass(typeof(ViewSchedule)).Cast<ViewSchedule>())
+            {
+                if (vs.IsTemplate) continue;
+                var candUid = vs.UniqueId;
+                if (drivingSchedUids.Contains(candUid)) continue;   // a driving schedule is never its own dependent
+
+                HashSet<long> shownTypeIds = new();
+                HashSet<string>? shownInstUids = anyInstanceDrivers ? new HashSet<string>() : null;
+                try
+                {
+                    foreach (var el in new FilteredElementCollector(doc, vs.Id).WhereElementIsNotElementType())
+                    {
+                        var tid = el.GetTypeId();
+                        if (tid != null && tid != ElementId.InvalidElementId) shownTypeIds.Add(tid.Value);
+                        shownInstUids?.Add(el.UniqueId);
+                    }
+                }
+                catch { continue; }   // a schedule that won't enumerate (linked / odd) → skip it as a candidate
+
+                // 3. Attribute this candidate to each driving (parent) schedule it shares a type/instance with.
+                foreach (var parentUid in drivingSchedUids)
+                {
+                    bool depends =
+                        (drivingTypeIdsBySched.TryGetValue(parentUid, out var ptypes) && shownTypeIds.Overlaps(ptypes))
+                        || (shownInstUids != null && drivingInstUidsBySched.TryGetValue(parentUid, out var pinsts) && shownInstUids.Overlaps(pinsts));
+                    if (!depends) continue;
+                    if (!cs.Dependents.TryGetValue(parentUid, out var list)) cs.Dependents[parentUid] = list = new List<DependentScheduleRef>();
+                    list.Add(new DependentScheduleRef { ScheduleName = vs.Name, ScheduleUid = candUid });
+                }
+            }
+        }
+        catch { /* dependents are an informational overlay — never block the change set on them */ }
     }
 
     /// <summary>
@@ -411,10 +946,197 @@ public sealed class Importer
     }
 
     /// <summary>
-    ///     Flags every grouped change whose model group is BROKEN — one the definition-swap dance cannot
-    ///     faithfully reproduce (a member anchored outside the group, a nested model group, or instances at
-    ///     mixed orientations; see <see cref="GroupSafety"/>). Broken columns drop option 3 (dance) and route
-    ///     to option 2 / Claude-Assist, and color RED on export. Cached per group TYPE across the change set.
+    ///     §4b: per Option-2 column, infers the TYPE-vs-INSTANCE binding from the SOURCE schedule's organization
+    ///     and writes it to <see cref="ChangeSet.Option2Modes"/>. A schedule that is grouped-by-type (not itemized
+    ///     and has sort/group fields) AND whose source values are uniform per type AND whose edits align per type
+    ///     ⇒ <see cref="Option2Mode.AutoType"/> (one type-param option). Otherwise ambiguous: prefer TYPE when the
+    ///     schedule is organized by type, else prefer INSTANCE (itemized / not grouped). Columns whose source
+    ///     schedule can't be resolved get no entry (treated as None ⇒ option 2 not offered).
+    /// </summary>
+    private static void ComputeOption2Mode(Document doc, ChangeSet cs)
+    {
+        foreach (var pg in cs.Changes
+                     .Where(c => !c.Frozen && c.GroupMode is GroupMode.ProjectVary or GroupMode.BuiltinDance)
+                     .GroupBy(c => ChangeSet.ColumnKey(c.ParameterId, c.Field)))
+        {
+            var sample = pg.First();
+            var vs = ResolveSchedule(doc, sample.SourceScheduleUid, sample.SourceScheduleName);
+            if (vs == null) continue; // can't resolve the schedule → leave None (option 2 not offered)
+
+            bool organizedByType;
+            try
+            {
+                var def = vs.Definition;
+                organizedByType = !def.IsItemized && def.GetSortGroupFields().Count > 0;
+            }
+            catch { organizedByType = false; }
+
+            bool editsAligned = cs.Option2EligibleParams.Contains(pg.Key);
+            bool sourceAligned = SourceUniformPerType(doc, vs, sample.ParameterId);
+
+            var mode = organizedByType && sourceAligned && editsAligned ? Option2Mode.AutoType
+                     : organizedByType ? Option2Mode.AmbiguousPreferType
+                     : Option2Mode.AmbiguousPreferInstance;
+            cs.Option2Modes[pg.Key] = mode;
+        }
+    }
+
+    /// <summary>
+    ///     True when, for every type appearing in <paramref name="vs"/>'s elements, the source parameter's STORED
+    ///     value is uniform (≤1 distinct canonical value per type). Uses the SAME canonicalization as the merge
+    ///     write (trimmed string / int / double rounded to 1e-9 — <see cref="CanonicalParsed"/>), not rendered
+    ///     cell text, so the uniformity test and the carry-forward write agree.
+    /// </summary>
+    private static bool SourceUniformPerType(Document doc, ViewSchedule vs, int paramId)
+    {
+        try
+        {
+            var byType = new Dictionary<long, HashSet<string>>();
+            foreach (var el in new FilteredElementCollector(doc, vs.Id).WhereElementIsNotElementType())
+            {
+                var tid = el.GetTypeId();
+                long k = tid != null && tid != ElementId.InvalidElementId ? tid.Value : -1;
+                if (!byType.TryGetValue(k, out var set)) byType[k] = set = new HashSet<string>();
+                set.Add(CanonicalParsed(ReadLive(el, paramId)));
+                if (set.Count > 1) return false; // a type with two distinct stored values → not uniform
+            }
+            return true;
+        }
+        catch { return false; }
+    }
+
+    /// <summary>
+    ///     Applies the round-trippable column-caption edits (<see cref="ChangeSet.HeaderChanges"/>) by setting
+    ///     <c>ScheduleField.ColumnHeading</c> on the live schedule. Must run inside an open transaction. The field
+    ///     is located by ParameterId (rename-safe — the edited heading is NOT used to match); for a combined column
+    ///     (no single parameter, ParameterId &lt; 0) it falls back to the visible field at the change's column index.
+    ///     Each write is verified by re-read. Returns the count newly Applied; appends Failed/Unverified labels to
+    ///     the shared lists (so they fold into the apply headline + log exactly like data changes).
+    /// </summary>
+    private int ApplyHeaderChanges(Document doc, ChangeSet cs, List<string> failed, List<string> unverified)
+    {
+        int applied = 0;
+        foreach (var hc in cs.HeaderChanges)
+        {
+            if (!hc.Selected || hc.OutcomeNote == "skipped") continue;
+            string label = $"header '{hc.OldHeading}' → '{hc.NewHeading}'" +
+                           (string.IsNullOrEmpty(hc.ScheduleName) ? "" : $" ({hc.ScheduleName})");
+            var vs = ResolveSchedule(doc, hc.ScheduleUid, hc.ScheduleName);
+            if (vs == null)
+            {
+                failed.Add(label + " — schedule not found");
+                hc.Outcome = ApplyOutcome.Failed; hc.OutcomeNote = "schedule not found";
+                continue;
+            }
+
+            if (hc.Kind == HeaderChangeKind.GroupHeader)
+            {
+                // Merged super-header: change its caption via GroupHeaders. An ALREADY-grouped span must be
+                // UNgrouped first — Revit's CanGroupHeaders is false until then and GroupHeaders throws "Headers
+                // could not be grouped" (live-verified). So ungroup (if grouped) then re-group with the new caption.
+                try
+                {
+                    if (vs.CanUngroupHeaders(hc.Top, hc.Left, hc.Bottom, hc.Right))
+                        vs.UngroupHeaders(hc.Top, hc.Left, hc.Bottom, hc.Right);
+                    vs.GroupHeaders(hc.Top, hc.Left, hc.Bottom, hc.Right, hc.NewHeading);
+                }
+                catch (Exception ex)
+                {
+                    failed.Add(label + " — " + ex.Message);
+                    hc.Outcome = ApplyOutcome.Failed; hc.OutcomeNote = ex.Message;
+                    continue;
+                }
+                string afterG;
+                try { afterG = vs.GetCellText(SectionType.Body, hc.Top, hc.Left) ?? ""; } catch { afterG = ""; }
+                hc.Outcome = ApplyOutcome.Applied; applied++;
+                if (!string.IsNullOrEmpty(afterG) && afterG != hc.NewHeading) hc.OutcomeNote = $"saved as '{afterG}'";
+                continue;
+            }
+
+            var field = ResolveHeaderField(vs.Definition, hc);
+            if (field == null)
+            {
+                failed.Add(label + " — column not found");
+                hc.Outcome = ApplyOutcome.Failed; hc.OutcomeNote = "column not found";
+                continue;
+            }
+
+            try
+            {
+                field.ColumnHeading = hc.NewHeading;
+            }
+            catch (Exception ex)
+            {
+                // A caption Revit refuses (e.g. a duplicate-heading constraint on some schedule kinds): report, don't crash.
+                failed.Add(label + " — " + ex.Message);
+                hc.Outcome = ApplyOutcome.Failed; hc.OutcomeNote = ex.Message;
+                continue;
+            }
+
+            // Verify by re-read — ColumnHeading can be trimmed/normalized by Revit.
+            string after;
+            try { after = field.ColumnHeading ?? ""; } catch { after = ""; }
+            if (after == hc.NewHeading)
+            {
+                hc.Outcome = ApplyOutcome.Applied; applied++;
+            }
+            else
+            {
+                // Revit accepted but coerced the text (e.g. whitespace-normalized) — treat as applied-with-note,
+                // not failed, since the heading DID change; record what actually stuck.
+                hc.Outcome = ApplyOutcome.Applied; applied++;
+                if (!string.IsNullOrEmpty(after) && after != hc.NewHeading)
+                    hc.OutcomeNote = $"saved as '{after}'";
+            }
+        }
+        return applied;
+    }
+
+    /// <summary>Finds the <see cref="ScheduleField"/> a <see cref="HeaderChange"/> targets: by ParameterId (the
+    /// column's stable identity), or — for a combined column (ParameterId &lt; 0, no single param) — the visible
+    /// field at the change's exported column index. Null when no field matches (column removed since export).</summary>
+    private static ScheduleField? ResolveHeaderField(ScheduleDefinition def, HeaderChange hc)
+    {
+        if (hc.ParameterId >= 0)
+        {
+            foreach (var fid in def.GetFieldOrder())
+            {
+                var f = def.GetField(fid);
+                if (f != null && !f.IsHidden && (int)f.ParameterId.Value == hc.ParameterId) return f;
+            }
+            return null;
+        }
+        // Combined / no-paramId column: match by visible position (same ordering ExcelReader exported).
+        int vc = 0;
+        foreach (var fid in def.GetFieldOrder())
+        {
+            var f = def.GetField(fid);
+            if (f == null || f.IsHidden) continue;
+            if (vc == hc.ExcelCol) return f;
+            vc++;
+        }
+        return null;
+    }
+
+    /// <summary>Resolves a source schedule by UniqueId first (survives renames), else by Name; never a template.</summary>
+    private static ViewSchedule? ResolveSchedule(Document doc, string uid, string name)
+    {
+        if (!string.IsNullOrEmpty(uid) && doc.GetElement(uid) is ViewSchedule byUid && !byUid.IsTemplate)
+            return byUid;
+        if (!string.IsNullOrEmpty(name))
+            return new FilteredElementCollector(doc).OfClass(typeof(ViewSchedule)).Cast<ViewSchedule>()
+                .FirstOrDefault(v => !v.IsTemplate && v.Name == name);
+        return null;
+    }
+
+    /// <summary>
+    ///     Flags every grouped change whose model group trips the HARD dance gate — one the definition-swap dance
+    ///     cannot faithfully reproduce (a level-anchored "broken family", true rotation, or multi-level placement;
+    ///     see <see cref="GroupSafety"/>). Gated columns drop option 3 (dance) and route to option 2 / Claude-Assist.
+    ///     Mirror-only and bystander-nested groups are NOT gated here (they dance — STEP-14b is the arbiter). When a
+    ///     group is gated by anchored families, the named families are carried so the dialog/report can tell the user
+    ///     exactly what to re-host. Cached per group TYPE across the change set. (Export RED colour is computed
+    ///     separately from the broader <see cref="GroupSafetyResult.IsBroken"/> in ScheduleReader.)
     /// </summary>
     private static void ComputeGroupBroken(Document doc, ChangeSet cs)
     {
@@ -436,7 +1158,14 @@ public sealed class Importer
                 if (gid == null || gid == ElementId.InvalidElementId) continue;
                 if (doc.GetElement(gid) is not Group g) continue;
                 var s = Safety(g.GetTypeId());
-                if (s.IsBroken) { ch.GroupBroken = true; ch.GroupBrokenReason = s.Explain(); break; }
+                if (s.IsDanceGateBroken)
+                {
+                    ch.GroupBroken = true;
+                    ch.GroupBrokenReason = s.Explain();
+                    if (s.HasAnchored)
+                        ch.GroupBrokenFamilies = string.Join("; ", s.BrokenFamilies.Select(f => f.ToString()));
+                    break;
+                }
             }
         }
     }
@@ -468,15 +1197,48 @@ public sealed class Importer
     ///     columns, missing anchor, cross-model) in words, so a failed import can be diagnosed from the log alone.
     /// </summary>
     private static string BuildDiagnosticLog(Document doc, ImportWorkbook wb, ChangeSet cs)
-    {
-        var sb = new System.Text.StringBuilder();
-        sb.AppendLine("Transom import diagnostic — " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
-        sb.AppendLine("Workbook: " + wb.Path);
-        sb.AppendLine($"Source model GUID: {wb.SourceModelGuid}  |  current doc: {doc.CreationGUID}"
-                      + (cs.CrossModel ? "  ⚠ CROSS-MODEL (matched by name)" : ""));
-        sb.AppendLine($"Sheets: {wb.Sheets.Count}");
+        => BuildDiagnosticLog(wb, doc.CreationGUID.ToString(), cs, null);
 
-        foreach (var sheet in wb.Sheets)
+    /// <summary>
+    ///     CHANGE 2 §3b surface-3: the copy-log diagnostic. <paramref name="selectedScheduleUids"/> null = the full
+    ///     pre-selection log (unchanged). Non-null (SUBSET mode) = REBUILT scoped to the selected schedules: only
+    ///     their sheet sections are enumerated, the "skipped:" count + listing is filtered to skips whose tab belongs
+    ///     to a selected schedule (FAIL-OPEN: an unattributed/unknown-tab skip is kept), and the header says
+    ///     "skipped (selected schedules only): N". Doc-free (uses the captured GUID) so the VM can call it on the UI
+    ///     thread post-selection. The three skip surfaces (panel, status count, this) all read the same selected set,
+    ///     so their counts agree.
+    /// </summary>
+    public static string BuildDiagnosticLog(ImportWorkbook wb, string docGuid, ChangeSet cs,
+        IReadOnlyCollection<string>? selectedScheduleUids)
+    {
+        bool subset = selectedScheduleUids != null;
+        // Map a tab → its schedule uid (via the sheet metadata) so skips (tab-keyed) can be tested against the
+        // selected-schedule-uid set. A selected schedule's sheet always passes; an unattributed/unknown tab is kept.
+        bool SheetSelected(string scheduleUid) => !subset || selectedScheduleUids!.Contains(scheduleUid);
+        bool SkipSelected(string tab)
+        {
+            if (!subset || string.IsNullOrEmpty(tab)) return true;   // all-selected, or unattributed → keep (fail-open)
+            var sh = wb.Sheets.FirstOrDefault(s => s.SheetTabName == tab);
+            if (sh == null) return true;                              // unknown tab → keep (fail-open)
+            return selectedScheduleUids!.Contains(sh.ScheduleUniqueId);
+        }
+        // §12 (user rule 2026-06-14): the user-facing diagnostic shows ONLY the user's data-edit skips — drop
+        // structural/back-end skips (UserRelevant==false) FIRST, in BOTH modes (this filter is independent of and
+        // prior to the subset selected-scope, exactly as the on-screen panel composes them in ShowPreview). So the
+        // diagnostic "skipped: N" + listing matches the panel + status count (all three off the same UserRelevant set).
+        var userSkips = cs.Skipped.Where(s => s.UserRelevant);
+        var scopedSkips = subset ? userSkips.Where(s => SkipSelected(s.SheetTabName)).ToList() : userSkips.ToList();
+        var shownSheets = subset ? wb.Sheets.Where(s => SheetSelected(s.ScheduleUniqueId)).ToList() : wb.Sheets.ToList();
+
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine("Transom import diagnostic — " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")
+                      + (subset ? "  (selected schedules only)" : ""));
+        sb.AppendLine("Workbook: " + wb.Path);
+        sb.AppendLine($"Source model GUID: {wb.SourceModelGuid}  |  current doc: {docGuid}"
+                      + (cs.CrossModel ? "  ⚠ CROSS-MODEL (matched by name)" : ""));
+        sb.AppendLine($"Sheets: {(subset ? $"{shownSheets.Count} selected of {wb.Sheets.Count}" : wb.Sheets.Count.ToString())}");
+
+        foreach (var sheet in shownSheets)
         {
             sb.AppendLine();
             sb.AppendLine($"== Sheet: {sheet.ScheduleName}  (tab '{sheet.SheetTabName}') ==");
@@ -510,16 +1272,37 @@ public sealed class Importer
                               + "Transom won't guess a position in that case.");
         }
 
+        // §3b EXHAUSTIVE scope (integ1-2 mandate): every Result count + list reads the SELECTED-scoped collection in
+        // subset mode (else global). A change is selected by SourceScheduleUid; a conflict by ScheduleUid; a
+        // diagnostic/reformat by its SheetTabName (same SkipSelected fail-open rule). All-selected → these reduce to
+        // the global collections (no behavior change).
+        var scopedChanges = subset ? cs.Changes.Where(c => selectedScheduleUids!.Contains(c.SourceScheduleUid)).ToList() : cs.Changes.ToList();
+        var scopedConflicts = subset ? cs.Conflicts.Where(c => selectedScheduleUids!.Contains(c.ScheduleUid)).ToList() : cs.Conflicts.ToList();
+        var scopedDiags = subset ? cs.Diagnostics.Where(d => SkipSelected(d.SheetTabName)).ToList() : cs.Diagnostics.ToList();
+        var scopedReformats = subset ? cs.Reformats.Where(r => SkipSelected(r.SheetTabName)).ToList() : cs.Reformats.ToList();
+
         sb.AppendLine();
-        sb.AppendLine("== Result ==");
-        sb.AppendLine($"  changes proposed: {cs.Changes.Count} (frozen: {cs.Changes.Count(c => c.Frozen)})");
-        sb.AppendLine($"  conflicts: {cs.Conflicts.Count}");
-        int red = cs.Diagnostics.Count(d => d.Severity == "red");
-        int yellow = cs.Diagnostics.Count(d => d.Severity == "yellow");
-        sb.AppendLine($"  cell diagnostics: {cs.Diagnostics.Count} ({red} red / {yellow} yellow)");
-        sb.AppendLine($"  skipped: {cs.Skipped.Count}");
-        foreach (var s in cs.Skipped)
+        sb.AppendLine("== Result ==" + (subset ? "  (selected schedules only)" : ""));
+        sb.AppendLine($"  changes proposed: {scopedChanges.Count}");   // §15-E: no "frozen" — read-only edits drop silently
+        sb.AppendLine($"  conflicts: {scopedConflicts.Count}");
+        int red = scopedDiags.Count(d => d.Severity == "red");
+        int drift = scopedDiags.Count(d => d.Severity == "yellow" && d.Category == "drift");
+        int advisory = scopedDiags.Count(d => d.Severity == "yellow" && d.Category != "drift");
+        // C3 (H4): the leading total previously dropped the BLUE severity, so the breakdown didn't sum to it
+        // (retest read "7 (0 red / 0 drift / 6 advisory)" — the 7th was the hidden frozen cell). Count blue and
+        // label it "frozen/skipped": most blue sites pair with a FrozenChange, but the "instance scope ambiguous"
+        // site emits a blue diagnostic with no FrozenChange, so blue ≥ the (frozen: N) count above — the broader
+        // label stays honest. Now red+drift+advisory+frozen == diagnostics count exactly. (ux1 wording.)
+        int frozen = scopedDiags.Count(d => d.Severity == "blue");
+        sb.AppendLine($"  cell diagnostics: {scopedDiags.Count} ({red} red / {drift} drift / {advisory} advisory / {frozen} frozen/skipped)");
+        // §3b surface-3: scoped skip count + listing in subset mode; the header names the scope so a copied log
+        // is self-explanatory (and the count agrees with the on-screen panel + status count, all off the same set).
+        sb.AppendLine(subset ? $"  skipped (selected schedules only): {scopedSkips.Count}" : $"  skipped: {scopedSkips.Count}");
+        foreach (var s in scopedSkips)
             sb.AppendLine($"    - [{s.Reason}] {s.Detail}");
+        sb.AppendLine($"  reformat suggestions (parse OK, wrong unit format — confirm in the fix pane): {scopedReformats.Count}");
+        foreach (var r in scopedReformats)
+            sb.AppendLine($"    - tab '{r.SheetTabName}' R{r.ExcelRow}C{r.ExcelCol} '{r.FieldName}' on {r.ElementLabel}: entered '{r.Entered}' → suggested '{r.Canonical}'");
 
         return sb.ToString();
     }
@@ -594,18 +1377,16 @@ public sealed class Importer
                 }
                 var current = CurrentDisplay(param);
                 bool edited = baseline != null ? cellText != baseline : cellText != current;
-                if (param.IsReadOnly)
-                {
-                    if (edited)
-                    {
-                        cs.Changes.Add(FrozenChange(SafeName(typeEl!), col, current, cellText, "read-only — driven by the family or type"));
-                        cs.Diagnostics.Add(Diag(sheet, row, col, label, "blue", "frozen — read-only (family/type driven)", cellText));
-                    }
-                    continue;
-                }
-                if (baseline != null && Drifted(param, baseline, units, col.SpecTypeId))
+                // §15-E: an edit to a READ-ONLY type cell DROPS SILENTLY (no change, no skip, no diagnostic, no tally).
+                if (param.IsReadOnly) continue;
+                // §15-C: drift only on a cell the user did NOT edit. (Skip the "<varies>" sentinel — see element-row site.)
+                // §15-C gap fix: also suppress drift when the workbook cell ALREADY MATCHES the current model value
+                // (`Drifted(param, cellText, …)` false) — the user's own earlier-applied edit, not a model deviation.
+                if (!edited && baseline != null && baseline != VariesSentinel
+                    && Drifted(param, baseline, units, col.SpecTypeId)
+                    && Drifted(param, cellText, units, col.SpecTypeId))
                     cs.Diagnostics.Add(Diag(sheet, row, col, label, "yellow",
-                        $"changed since export (was '{baseline}', now '{current}')", cellText));
+                        $"changed since export (was '{baseline}', now '{current}')", cellText, category: "drift"));
                 if (!edited) continue;
 
                 if (param.StorageType == StorageType.String)
@@ -620,11 +1401,7 @@ public sealed class Importer
                     }
                     RecordTypeAll(col, cellText);
                 }
-                else
-                {
-                    cs.Changes.Add(FrozenChange(SafeName(typeEl!), col, current, cellText, "set by a family/type selection, not by text"));
-                    cs.Diagnostics.Add(Diag(sheet, row, col, label, "blue", "frozen — set by family/type (can't import)", cellText));
-                }
+                // else: non-text/non-numeric type cell — §15-E drops the edit silently (no frozen change/diagnostic).
             }
             else if (binding == "instance")
             {
@@ -658,12 +1435,8 @@ public sealed class Importer
                     cs.Diagnostics.Add(Diag(sheet, row, col, label, "red", "parameter not found", cellText));
                     continue;
                 }
-                if (rparam.IsReadOnly)
-                {
-                    cs.Changes.Add(FrozenChange(SafeName(nameEl), col, "(varies)", cellText, "read-only — driven by the family or type"));
-                    cs.Diagnostics.Add(Diag(sheet, row, col, label, "blue", "frozen — read-only (family/type driven)", cellText));
-                    continue;
-                }
+                // §15-E: an edit to a READ-ONLY instance-bulk cell DROPS SILENTLY (no change, skip, diagnostic, tally).
+                if (rparam.IsReadOnly) continue;
 
                 var oldDisp = string.IsNullOrEmpty(baseline) ? "(varies)" : baseline;
                 bool isString = false, isInt = false;
@@ -698,11 +1471,8 @@ public sealed class Importer
                     dbl = parsed;
                 }
                 else
-                {
-                    cs.Changes.Add(FrozenChange(SafeName(nameEl), col, oldDisp, cellText, "set by a family/type selection, not by text"));
-                    cs.Diagnostics.Add(Diag(sheet, row, col, label, "blue", "frozen — set by family/type (can't import)", cellText));
+                    // §15-E: non-text/non-numeric instance-bulk cell — the edit DROPS SILENTLY (no frozen change/diagnostic).
                     continue;
-                }
 
                 // Idempotency: drop instances that ALREADY hold the new value (e.g. a prior option-1
                 // vary apply already wrote them). Without this, a re-preview re-proposes the change —
@@ -718,15 +1488,11 @@ public sealed class Importer
                     if (ip != null && AlreadyHas(ip, isString, str, isInt, iv, dbl)) { already++; continue; }
                     pending.Add(uid);
                 }
-                // Every targeted instance already matches -> nothing to write. Surface it as drift so the
-                // user still sees the cell "changed since export", consistent with the normal/type paths.
+                // Every targeted instance already matches -> nothing to write. §15-C: this is an EDITED cell (the user's
+                // intended value already present), so it is NOT drift — surface nothing (drift is only for cells the
+                // user did NOT edit).
                 if (pending.Count == 0)
-                {
-                    if (already > 0)
-                        cs.Diagnostics.Add(Diag(sheet, row, col, label, "yellow",
-                            $"changed since export (model already set to '{cellText}')", cellText));
                     continue;
-                }
 
                 // Group members can't be written directly — split them out so the rest still applies.
                 var ungrouped = new List<string>();
@@ -740,9 +1506,9 @@ public sealed class Importer
                     else ungrouped.Add(uid);
                 }
                 if (ungrouped.Count > 0)
-                    cs.Changes.Add(BulkChange(nameEl, col, ungrouped, oldDisp, cellText, isString, str, dbl, isInt, iv));
+                    cs.Changes.Add(BulkChange(nameEl, col, ungrouped, oldDisp, cellText, isString, str, dbl, isInt, iv, row.UniqueId));
                 if (grouped.Count > 0)
-                    cs.Changes.Add(Mark(BulkChange(nameEl, col, grouped, oldDisp, cellText, isString, str, dbl, isInt, iv), true, gName));
+                    cs.Changes.Add(Mark(BulkChange(nameEl, col, grouped, oldDisp, cellText, isString, str, dbl, isInt, iv, row.UniqueId), true, gName));
             }
             // binding == "none" -> parameter lives on neither host for this type; nothing to write.
         }
@@ -781,11 +1547,9 @@ public sealed class Importer
             cs.Skipped.Add(new SkippedItem { Reason = "parameter not found", Detail = $"{ghe.FieldName} ({label})" });
             return;
         }
-        if (rparam.IsReadOnly)
-        {
-            cs.Skipped.Add(new SkippedItem { Reason = "read-only", Detail = $"{ghe.FieldName} ({label})" });
-            return;
-        }
+        // §15-E: a read-only group-header param → the edit DROPS SILENTLY (not a skip, not shown). Read-only cells
+        // are never the user's editable edit, so per the guiding principle we surface nothing.
+        if (rparam.IsReadOnly) return;
 
         var oldDisp = string.IsNullOrEmpty(baseline) ? CurrentDisplay(rparam) : baseline;
         bool isString = false, isInt = false; string str = ""; double dbl = 0; int iv = 0;
@@ -839,17 +1603,19 @@ public sealed class Importer
             ParameterId = ghe.ParameterId, Binding = "instance", BulkInstanceIds = bulk,
             ElementName = label, Field = ghe.FieldName, OldValue = oldDisp, NewValue = cellText,
             InstancesAffected = bulk.Count, IsString = isString, NewString = str, NewDouble = dbl, IsInt = isInt, NewInt = iv,
+            ReportRowUid = row.UniqueId,   // W2: overlay the partial-bulk outcome on this visible (type/group) row
         };
         if (ghUngrouped.Count > 0) cs.Changes.Add(MakeGh(ghUngrouped));
         if (ghGrouped.Count > 0) cs.Changes.Add(Mark(MakeGh(ghGrouped), true, ghGroupName));
     }
 
     private static ProposedChange BulkChange(Element typeEl, ImportColumn col, List<string> instanceIds,
-        string oldDisp, string newDisp, bool isString, string str, double dbl, bool isInt, int iv) => new()
+        string oldDisp, string newDisp, bool isString, string str, double dbl, bool isInt, int iv, string reportRowUid = "") => new()
     {
         ParameterId = col.ParameterId, Binding = "instance", BulkInstanceIds = instanceIds,
         ElementName = SafeName(typeEl), Field = col.FieldName, SourceHeading = col.Header, OldValue = oldDisp, NewValue = newDisp,
         InstancesAffected = instanceIds.Count, IsString = isString, NewString = str, NewDouble = dbl, IsInt = isInt, NewInt = iv,
+        ReportRowUid = reportRowUid,   // W2: visible row this bulk cell renders on, for the run-results overlay
     };
 
     private static ReformatSuggestion Reformat(ImportSheet sheet, ImportRow row, ImportColumn col, string label, string entered, string canonical) => new()
@@ -864,7 +1630,8 @@ public sealed class Importer
         var key = (host.Id.Value, col.ParameterId);
         if (!typeGroups.TryGetValue(key, out var tc))
         {
-            tc = new TypeCandidate { Col = col, SheetTab = sheet.SheetTabName, TypeName = SafeName(host), SpecTypeId = col.SpecTypeId };
+            tc = new TypeCandidate { Col = col, SheetTab = sheet.SheetTabName, TypeName = SafeName(host), SpecTypeId = col.SpecTypeId,
+                                     ScheduleName = sheet.ScheduleName, ScheduleUid = sheet.ScheduleUniqueId };
             if (param.StorageType == StorageType.String)
             {
                 tc.IsString = true;
@@ -902,6 +1669,7 @@ public sealed class Importer
                     TypeName = tc.TypeName,
                     CurrentDisplay = tc.CurDisplay,
                     InstancesAffected = affects,
+                    ScheduleName = tc.ScheduleName, ScheduleUid = tc.ScheduleUid,   // C-7
                 };
                 foreach (var v in distinct)
                 {
@@ -992,29 +1760,246 @@ public sealed class Importer
         TypeId = c.TypeId, ParameterId = c.ParameterId, Binding = "type", ElementName = c.TypeName,
         Field = c.Field, OldValue = c.CurrentDisplay, NewValue = opt.Display, InstancesAffected = c.InstancesAffected,
         IsString = opt.IsString, NewString = opt.NewString, NewDouble = opt.NewDouble,
+        // C-7: stamp the source schedule so this resolved conflict rolls up under its schedule's tri-state and a
+        // per-schedule deselect skips it (ChangesForSchedule matches on these — uid-first, name fallback).
+        SourceScheduleName = c.ScheduleName, SourceScheduleUid = c.ScheduleUid,
     };
 
-    /// <summary>Collects (and quiets) Revit's own warnings during the apply commit, so they land in the log
-    /// instead of blocking on a dialog. Warnings are deleted (commit proceeds); errors are logged as-is.</summary>
+    /// <summary>Collects (and quiets) Revit's own failures during the apply commit, so they land in the log
+    /// instead of blocking on a dialog. Warnings are deleted (commit proceeds, unchanged behavior). ERRORS that
+    /// carry a resolution are RESOLVED (logged with the resolution type) and the commit proceeds — an unresolved
+    /// Error otherwise rolls back the ENTIRE transaction silently (the GreenChanges 243-for-1 loss). Errors with
+    /// no resolution (and DocumentCorruption etc.) are logged as-is. Revit re-invokes the preprocessor after
+    /// ProceedWithCommit, so a per-transaction pass cap (3) breaks resolution loops: call <see cref="Reset"/>
+    /// immediately after every tx.Start() that uses this collector. Failure lines name the failing elements so
+    /// the log answers WHICH edit broke (Name (id), up to 8, then "+K more").</summary>
     private sealed class ApplyFailureCollector : IFailuresPreprocessor
     {
         public readonly List<string> Messages = new();
+        private int _passes;
+
+        /// <summary>Resets the per-transaction pass counter. Call right after every tx.Start().</summary>
+        public void Reset() => _passes = 0;
+
         public FailureProcessingResult PreprocessFailures(FailuresAccessor a)
         {
+            _passes++;
+            int resolved = 0;
             foreach (var f in a.GetFailureMessages())
             {
                 var sev = f.GetSeverity();
                 string desc;
                 try { desc = f.GetDescriptionText(); } catch { desc = "(failure)"; }
                 int n = 0; try { n = f.GetFailingElementIds().Count; } catch { /* ignore */ }
-                Messages.Add($"[{sev}] {desc}" + (n > 0 ? $" — {n} element(s)" : ""));
-                if (sev == FailureSeverity.Warning) { try { a.DeleteWarning(f); } catch { /* ignore */ } }
+                string who = FailingElementNames(a, f);
+
+                if (sev == FailureSeverity.Warning)
+                {
+                    Messages.Add($"[{sev}] {desc}" + (n > 0 ? $" — {n} element(s)" : "") + who);
+                    try { a.DeleteWarning(f); } catch { /* ignore */ }
+                }
+                else if (sev == FailureSeverity.Error && f.HasResolutions())
+                {
+                    var rtEnum = FailureResolutionType.Default;
+                    try { rtEnum = f.GetCurrentResolutionType(); } catch { /* keep Default */ }
+                    // C1: name the resolution Revit will actually apply (caption when it's the Default query-key)
+                    // instead of the useless "resolved: Default".
+                    var rtName = ResolutionName(f, rtEnum);
+                    // C2 (H1 whitelist): FAIL-CLOSED — auto-resolve ONLY failures whose FailureDefinitionId is in a
+                    // small static allow-set, keyed on the FAILURE identity (not the resolution type, which can be
+                    // the blind `Default` query-key). Seeded with the one Error we've observed and proven benign:
+                    // JoinElementsFailures.CannotKeepJoined (default resolution = Unjoin/Detach). Every other
+                    // Error+resolution is logged-and-refused → rollback → per-change retry names it. This is the
+                    // work-order C2 SHAPE DECISION (id allow-list, not resolution-type class gate): an unseen/unknown
+                    // failure is never auto-resolved sight-unseen. (research-kb\resolution-whitelist.md §6a.)
+                    if (IsAllowedFailure(f))
+                    {
+                        Messages.Add($"[Error] {desc} — resolved: {rtName}" + (n > 0 ? $" — {n} element(s)" : "") + who);
+                        try { a.ResolveFailure(f); resolved++; } catch { /* ignore */ }
+                    }
+                    else
+                    {
+                        Messages.Add($"[Error] {desc} — NOT auto-resolved (failure id not in allow-list); left for retry/report"
+                                     + (n > 0 ? $" — {n} element(s)" : "") + who);
+                    }
+                }
+                else
+                {
+                    // Resolution-less Errors / DocumentCorruption: log only — never auto-resolve these.
+                    Messages.Add($"[{sev}] {desc}" + (n > 0 ? $" — {n} element(s)" : "") + who);
+                }
             }
-            return FailureProcessingResult.Continue;
+            return resolved > 0 && _passes < 3
+                ? FailureProcessingResult.ProceedWithCommit
+                : FailureProcessingResult.Continue;
+        }
+
+        /// <summary>": Name (id), Name (id) … +K more" for the failure's elements (best-effort, max 8).</summary>
+        private static string FailingElementNames(FailuresAccessor a, FailureMessageAccessor f)
+        {
+            try
+            {
+                var doc = a.GetDocument();
+                var ids = f.GetFailingElementIds();
+                if (ids == null || ids.Count == 0) return "";
+                var parts = new List<string>();
+                foreach (var id in ids.Take(8))
+                {
+                    var el = doc.GetElement(id);
+                    string name = "";
+                    try { name = el?.Name ?? ""; } catch { /* some elements throw on Name */ }
+                    if (string.IsNullOrEmpty(name)) { try { name = el?.Category?.Name ?? ""; } catch { /* ignore */ } }
+                    parts.Add($"{(string.IsNullOrEmpty(name) ? "?" : name)} ({id.Value})");
+                }
+                return ": " + string.Join(", ", parts) + (ids.Count > 8 ? $" … +{ids.Count - 8} more" : "");
+            }
+            catch { return ""; }
+        }
+
+        /// <summary>
+        ///     C1: an honest name for the resolution Revit will actually apply. <c>GetCurrentResolutionType()</c>
+        ///     returns the <c>Default</c> query-key when no resolution was set explicitly (our case), which logged a
+        ///     useless "resolved: Default". The Revit 2025 API has no per-message "applicable types" getter, but it
+        ///     DOES expose <c>GetDefaultResolutionCaption()</c> — the human-readable caption of the default
+        ///     resolution (e.g. "Unjoin Elements") — so when the type is Default we append that caption. Best-effort;
+        ///     falls back to the bare enum name if the caption is empty/throws, so the log never regresses. We only
+        ///     NAME it — we do not call SetCurrentResolutionType, so ResolveFailure still applies Revit's own default
+        ///     (the retest-proven behavior).
+        /// </summary>
+        internal static string ResolutionName(FailureMessageAccessor f, FailureResolutionType rt)
+        {
+            if (rt != FailureResolutionType.Default) return rt.ToString();
+            string caption = "";
+            try { caption = f.GetDefaultResolutionCaption() ?? ""; } catch { /* ignore */ }
+            return string.IsNullOrWhiteSpace(caption) ? "Default" : $"Default ({caption})";
+        }
+
+        /// <summary>
+        ///     C2 (H1 whitelist, fail-closed): true iff this failure's <see cref="FailureDefinitionId"/> is in the
+        ///     static allow-set of failures we've observed and proven benign to auto-resolve. Keying on the FAILURE
+        ///     identity (not the resolution type) is fail-closed: an unknown/unseen failure returns false → it is
+        ///     logged-and-not-resolved → honest rollback → per-change retry. It also sidesteps the <c>Default</c>
+        ///     resolution-type sentinel entirely (we never inspect the resolution to decide whether to resolve).
+        ///     Allow-set = { JoinElementsFailures.CannotKeepJoined } — the join error (default resolution = Unjoin/
+        ///     Detach, benign; research-kb\resolution-whitelist.md §1.1, §6a). Do NOT pre-add unseen ids (e.g.
+        ///     CannotKeepWallJoinToRoof); add only after observing and judging them benign.
+        /// </summary>
+        internal static bool IsAllowedFailure(FailureMessageAccessor f)
+        {
+            try { return f.GetFailureDefinitionId() == BuiltInFailures.JoinElementsFailures.CannotKeepJoined; }
+            catch { return false; }   // can't identify the failure → fail closed (do not resolve)
         }
     }
 
+    /// <summary>
+    ///     W1 (Task #17): watches <see cref="Autodesk.Revit.ApplicationServices.Application.DocumentChanged"/> around
+    ///     the apply to capture elements Revit DELETED that we never asked to delete — its own family-regeneration
+    ///     auto-fixes ("Delete Splitting Element" etc.). Those deletions commit inside the transaction's regen,
+    ///     BEFORE any IFailuresPreprocessor runs, so they're unpreventable; the honest move is to detect + surface
+    ///     them (research-kb\resolution-whitelist.md §9). DocumentChanged reports the committed DB delta per
+    ///     transaction, which includes regen/cascade deletions. The event is document-wide and per-transaction, so we
+    ///     scope-filter to our own apply transactions by name. Subscribe before the apply, <see cref="Dispose"/> in a
+    ///     finally. Read-only handler (the event forbids doc edits — we only record). NOTE: a deleted element is
+    ///     usually un-queryable even inside the handler (the delete already committed), so names are best-effort and
+    ///     most entries are id-only — the ids are authoritative regardless.
+    /// </summary>
+    private sealed class DeletionWatcher : IDisposable
+    {
+        private readonly Autodesk.Revit.ApplicationServices.Application _app;
+        private readonly Document _doc;
+        private readonly EventHandler<Autodesk.Revit.DB.Events.DocumentChangedEventArgs> _handler;
+        private readonly Dictionary<long, string> _deleted = new();   // id -> "Name (id)" (or "(id)")
+
+        // Transaction names this watcher attributes to Transom (must match the apply tx names below).
+        private static readonly string[] OurTxNames =
+        {
+            "Transom: import edits",
+            "Transom: import edit (retry)",
+            "Transom: import edits (new parameter, retried)",
+        };
+
+        public DeletionWatcher(Document doc)
+        {
+            _doc = doc;
+            _app = doc.Application;
+            _handler = OnDocumentChanged;
+            _app.DocumentChanged += _handler;
+        }
+
+        private void OnDocumentChanged(object? sender, Autodesk.Revit.DB.Events.DocumentChangedEventArgs e)
+        {
+            try
+            {
+                if (!ReferenceEquals(e.GetDocument(), _doc)) return;   // document-wide event — only our doc
+                // Scope-filter to our apply transactions so other add-ins'/concurrent transactions aren't misattributed.
+                var txNames = e.GetTransactionNames();
+                if (txNames == null || !txNames.Any(IsOurTx)) return;
+                foreach (var id in e.GetDeletedElementIds())
+                {
+                    long key = id.Value;
+                    if (_deleted.ContainsKey(key)) continue;
+                    string name = "";
+                    try { name = _doc.GetElement(id)?.Name ?? ""; } catch { /* deleted → usually un-queryable */ }
+                    _deleted[key] = string.IsNullOrEmpty(name) ? $"(id {key})" : $"{name} (id {key})";
+                }
+            }
+            catch { /* observation only — never let it affect the apply */ }
+        }
+
+        private static bool IsOurTx(string n)
+        {
+            foreach (var t in OurTxNames) if (string.Equals(n, t, StringComparison.Ordinal)) return true;
+            // The retry TransactionGroup ("Transom: import edits (retried)") assimilates into a tx whose name may be
+            // either the group or an inner name; match any "Transom: import edit" prefix as the belt.
+            return n != null && n.StartsWith("Transom: import edit", StringComparison.Ordinal);
+        }
+
+        /// <summary>The captured Revit-internal deletions as "Name (id)" strings (deduped, insertion order).</summary>
+        public List<string> Deletions => _deleted.Values.ToList();
+
+        public void Dispose()
+        {
+            try { _app.DocumentChanged -= _handler; } catch { /* ignore */ }
+        }
+    }
+
+    /// <summary>
+    ///     Applies the change set. Thin wrapper around <see cref="ApplyInner"/> that runs a <see cref="DeletionWatcher"/>
+    ///     across the WHOLE apply (fast path + per-change retry) — W1 (Task #17): captures Revit-internal geometry
+    ///     deletions from the DocumentChanged delta and surfaces them in the apply log + run report, so a "successful"
+    ///     apply that silently deleted geometry is never reported as clean. Observation only — does not touch the
+    ///     failure/resolve pipeline.
+    /// </summary>
     public string Apply(Document doc, ChangeSet cs)
+    {
+        using var watcher = new DeletionWatcher(doc);
+        try
+        {
+            return ApplyInner(doc, cs);
+        }
+        finally
+        {
+            // Surface whatever Revit deleted during the apply (best-effort; never affects the returned status).
+            try
+            {
+                cs.RevitDeletions = watcher.Deletions;
+                if (cs.RevitDeletions.Count > 0)
+                {
+                    var sb = new System.Text.StringBuilder();
+                    sb.AppendLine();
+                    sb.AppendLine($"== Revit auto-deleted geometry during apply — review ({cs.RevitDeletions.Count}) ==");
+                    sb.AppendLine("  Revit removed these element(s) it could not regenerate (family/void auto-fix). This is");
+                    sb.AppendLine("  internal to Revit and NOT preventable by the importer — surfaced so it is never silent:");
+                    foreach (var d in cs.RevitDeletions.Take(50)) sb.AppendLine("    - " + d);
+                    if (cs.RevitDeletions.Count > 50) sb.AppendLine($"    … +{cs.RevitDeletions.Count - 50} more");
+                    cs.DiagnosticLog += sb.ToString();
+                }
+            }
+            catch { /* surfacing is best-effort */ }
+        }
+    }
+
+    private string ApplyInner(Document doc, ChangeSet cs)
     {
         int applied = 0;
         var failed = new List<string>();
@@ -1024,30 +2009,30 @@ public sealed class Importer
 
         using var tx = new Transaction(doc, "Transom: import edits");
         tx.Start();
-        var fho = tx.GetFailureHandlingOptions();
-        fho.SetFailuresPreprocessor(collector);   // capture Revit warnings/errors into the log
-        fho.SetClearAfterRollback(true);
-        tx.SetFailureHandlingOptions(fho);
+        AttachCollector(tx, collector);   // capture Revit warnings/errors into the log; resets the pass counter
 
         try
         {
-            // Resolution option 2 (new type parameter) is handled in one bulk pass — create the param, write
-            // per-type values, add it to the affected schedules — not by the per-change write loop below.
-            var newParamChanges = cs.Changes.Where(c => c.Resolution == GroupResolution.NewTypeParam && !c.Frozen).ToList();
+            // Resolution option 2 (REPLACE the column with a new type/instance parameter) is handled in one
+            // bulk pass — create the param, merge originals with edits, write, then replace the source field —
+            // not by the per-change write loop below.
+            var newParamChanges = cs.Changes
+                .Where(c => c.Resolution is GroupResolution.NewTypeParam or GroupResolution.NewInstanceParam && !c.Frozen)
+                .ToList();
             if (newParamChanges.Count > 0)
-                newParamNote = ApplyNewTypeParam(doc, newParamChanges, cs.ImportedScheduleNames, failed);
+                newParamNote = ApplyNewParam(doc, newParamChanges, cs, failed);
 
             foreach (var ch in cs.Changes)
             {
                 if (ch.Frozen) continue; // can't be written — shown greyed in the preview only
-                if (ch.Resolution == GroupResolution.NewTypeParam) continue; // handled in the bulk pass above
-                if (ch.Resolution == GroupResolution.GroupDance) continue;   // handled by GroupDanceApplier AFTER this transaction
-                if (ch.GroupMode == GroupMode.BuiltinDance) continue; // built-in group param — staged for Claude-assist, not applied here
+                if (ch.Resolution is GroupResolution.NewTypeParam or GroupResolution.NewInstanceParam) continue; // handled in the bulk pass above
+                if (ch.GroupMode == GroupMode.BuiltinDance) continue; // grouped built-in — staged for resolution (option 2 / Claude-Assist), not written in the direct pass
 
                 // Bulk instance write (grouped schedule): apply to every instance the row represented.
                 if (ch.BulkInstanceIds != null)
                 {
                     bool anyFail = false, anyUnver = false;
+                    int persisted = 0, totalInst = ch.BulkInstanceIds.Count;
                     foreach (var uid in ch.BulkInstanceIds)
                     {
                         var inst = doc.GetElement(uid);
@@ -1055,12 +2040,18 @@ public sealed class Importer
                         if (ip == null || ip.IsReadOnly) { failed.Add(Label(ch)); anyFail = true; continue; }
                         // Grouped project param: allow it to vary per instance, then write each instance directly.
                         if (ch.GroupMode == GroupMode.ProjectVary && !EnsureVary(ip, doc)) { failed.Add(Label(ch) + " — can't vary by group instance"); anyFail = true; continue; }
-                        if (!SetValue(ip, ch)) { failed.Add(Label(ch)); anyFail = true; continue; }
+                        if (!TrySetValue(ip, ch, out var bulkSetErr)) { failed.Add(Label(ch) + (bulkSetErr == null ? "" : " — " + bulkSetErr)); anyFail = true; continue; }
                         if (!VerifyWrite(ip, ch)) { unverified.Add(Label(ch)); anyUnver = true; continue; }
-                        applied++;
+                        applied++; persisted++;
                     }
                     // Any failed instance fails the whole cell; else any unverified; else applied.
                     ch.Outcome = anyFail ? ApplyOutcome.Failed : anyUnver ? ApplyOutcome.Unverified : ApplyOutcome.Applied;
+                    // C4 (H3): a "Failed" bulk cell whose transaction still committed the good instances must not
+                    // read as if nothing landed — record how many of M instances actually persisted (this tx
+                    // commits, so persisted writes survive). Re-import is idempotent; the three-way compare
+                    // re-offers only the instances still differing.
+                    if (ch.Outcome != ApplyOutcome.Applied && persisted > 0)
+                        ch.OutcomeNote = $"{persisted} of {totalInst} instances persisted";
                     continue;
                 }
 
@@ -1068,28 +2059,28 @@ public sealed class Importer
                 var param = host == null ? null : GetParam(host, ch.ParameterId);
                 if (param == null || param.IsReadOnly) { failed.Add(Label(ch)); ch.Outcome = ApplyOutcome.Failed; continue; }
                 if (ch.GroupMode == GroupMode.ProjectVary && !EnsureVary(param, doc)) { failed.Add(Label(ch) + " — can't vary by group instance"); ch.Outcome = ApplyOutcome.Failed; continue; }
-                if (!SetValue(param, ch)) { failed.Add(Label(ch)); ch.Outcome = ApplyOutcome.Failed; continue; }
+                if (!TrySetValue(param, ch, out var setErr)) { failed.Add(Label(ch) + (setErr == null ? "" : " — " + setErr)); ch.Outcome = ApplyOutcome.Failed; continue; }
 
                 // H3: re-read the parameter and confirm the value actually landed (a Set can return
                 // true yet be coerced/clamped, or silently no-op on some derived parameters).
                 if (!VerifyWrite(param, ch)) { unverified.Add(Label(ch)); ch.Outcome = ApplyOutcome.Unverified; continue; }
                 applied++; ch.Outcome = ApplyOutcome.Applied;
             }
+
+            // Column-caption (header) round-trip: set ScheduleField.ColumnHeading for each selected HeaderChange,
+            // in this same transaction. Field resolved by ParameterId (rename-safe). Each is verified by re-read.
+            applied += ApplyHeaderChanges(doc, cs, failed, unverified);
+
             var commitStatus = tx.Commit();
             if (commitStatus != TransactionStatus.Committed)
             {
-                // Revit discarded the ENTIRE transaction — Commit() returns RolledBack WITHOUT throwing, so
-                // this is otherwise invisible. It happens when unresolved ERROR-severity failures can't be
-                // committed (ApplyFailureCollector only auto-deletes warnings). Nothing persisted, so report
-                // the rollback honestly instead of the in-transaction "applied" tally — which would otherwise
-                // read as a success the model never actually received.
-                // Nothing persisted: every change that thought it applied actually failed.
-                foreach (var c in cs.Changes)
-                    if (c.Outcome is ApplyOutcome.Applied or ApplyOutcome.Unverified) c.Outcome = ApplyOutcome.Failed;
-                int errCount = collector.Messages.Count(m => m.StartsWith("[Error]"));
-                cs.DiagnosticLog = BuildApplyLog(applied, failed, unverified, collector.Messages, cs, rolledBack: true);
-                return $"Apply ROLLED BACK by Revit — 0 of {applied} attempted change(s) were saved" +
-                       (errCount > 0 ? $"; {errCount} error(s) blocked the commit (see log)." : " (see log).");
+                // Revit discarded the ENTIRE transaction — Commit() returns RolledBack WITHOUT throwing (an
+                // unresolved ERROR-severity failure the collector couldn't auto-resolve). The single bulk
+                // transaction is only a fast path: atomicity must never cost a good write (user decision,
+                // 2026-06-11), so fall back automatically to one transaction per change — everything that can
+                // succeed persists, only the poisoned change(s) stay Failed, and the run-results workbook +
+                // apply log list exactly those for a targeted fix/re-import.
+                return RetryPerChange(doc, cs, collector, attempted: applied);
             }
         }
         catch (Exception ex)
@@ -1099,14 +2090,230 @@ public sealed class Importer
             return "Apply failed (rolled back): " + ex.Message;
         }
 
-        var msg = $"Applied {applied} change(s)";
+        // §18 (corrected per BUG 2, 2026-06-18): fold option-2 conversions into the headline total — but ONLY those
+        // actually APPLIED. ApplyNewParam stamps each option-2 change's Outcome (Applied/Failed), so counting by
+        // Outcome==Applied keeps the headline honest when a conversion FAILS/rolls back (e.g. option-2b on multi-
+        // instance grouped members) instead of falsely reporting it as applied.
+        int o2ConvertedStatus = cs.Changes.Count(c => c.Resolution is GroupResolution.NewTypeParam or GroupResolution.NewInstanceParam && !c.Frozen && c.Outcome == ApplyOutcome.Applied);
+        var msg = $"Applied {applied + o2ConvertedStatus} change(s)";
         if (failed.Count > 0) msg += $", {failed.Count} failed";
         if (unverified.Count > 0) msg += $", {unverified.Count} unverified (value didn't take)";
         if (collector.Messages.Count > 0) msg += $"  —  {collector.Messages.Count} Revit warning(s) (see log)";
         if (newParamNote.Length > 0) msg += $"  —  {newParamNote}";
-        msg += $". {cs.Skipped.Count} skipped.";
+        // Header renames are folded into `applied` above; call them out so the user sees the caption edits landed.
+        int hdrApplied = cs.HeaderChanges.Count(h => h.Selected && h.Outcome == ApplyOutcome.Applied);
+        if (hdrApplied > 0) msg += $"  —  {hdrApplied} column heading(s) renamed";
+        msg += $". {cs.Skipped.Count(s => s.UserRelevant)} skipped.";   // #64: post-apply count = preview UserRelevant count
 
+        cs.RevitApplyMessages = new List<string>(collector.Messages);
         cs.DiagnosticLog = BuildApplyLog(applied, failed, unverified, collector.Messages, cs);
+        return msg;
+    }
+
+    /// <summary>Wires the failure collector into a transaction and resets its per-transaction pass counter.
+    /// Call after tx.Start() and before any write.</summary>
+    private static void AttachCollector(Transaction tx, ApplyFailureCollector collector)
+    {
+        var fho = tx.GetFailureHandlingOptions();
+        fho.SetFailuresPreprocessor(collector);
+        fho.SetClearAfterRollback(true);
+        tx.SetFailureHandlingOptions(fho);
+        collector.Reset();
+    }
+
+    /// <summary>Wraps SetValue: a parameter Set can THROW outright (e.g. renaming a type to a duplicate name
+    /// raises ArgumentException immediately — unlike Type Mark's gentle warning), and an uncaught throw aborts
+    /// the entire batch via the apply's catch. Contain it here and surface it as that change's failure reason.</summary>
+    private static bool TrySetValue(Parameter param, ProposedChange ch, out string? error)
+    {
+        try { error = null; return SetValue(param, ch); }
+        catch (Exception ex) { error = ex.Message; return false; }
+    }
+
+    /// <summary>
+    ///     Fallback when the single "Transom: import edits" transaction was rolled back by Revit: re-run the
+    ///     write loop with ONE transaction per change inside a TransactionGroup (assimilated to a single undo
+    ///     entry), so every change that can succeed persists and only the change(s) Revit refuses stay Failed.
+    ///     The option-2 bulk pass (new shared parameter) is retried as one separate transaction first and is
+    ///     never split per change — a half-created parameter/field replacement is worse than none.
+    /// </summary>
+    private string RetryPerChange(Document doc, ChangeSet cs, ApplyFailureCollector collector, int attempted)
+    {
+        // Nothing from the rolled-back pass persisted — clear its optimistic stamps before re-running.
+        foreach (var c in cs.Changes)
+            if (c.Outcome is ApplyOutcome.Applied or ApplyOutcome.Unverified) c.Outcome = ApplyOutcome.Pending;
+
+        int applied = 0, total = 0;
+        var failed = new List<string>();
+        var unverified = new List<string>();
+        string newParamNote = "";
+
+        using var tg = new TransactionGroup(doc, "Transom: import edits (retried)");
+        try
+        {
+            tg.Start();
+
+            // C5 (H5): mark the pass boundary. Messages above this line came from the rolled-back first pass
+            // (those writes were DISCARDED); messages below belong to the per-change retry transactions (which
+            // persist). The "--- " prefix keeps separators out of the "[Warning]/[Error]" line counts.
+            collector.Messages.Add("--- retry pass (per-change, after rollback) ---");
+
+            var newParamChanges = cs.Changes
+                .Where(c => c.Resolution is GroupResolution.NewTypeParam or GroupResolution.NewInstanceParam && !c.Frozen)
+                .ToList();
+            if (newParamChanges.Count > 0)
+            {
+                total += newParamChanges.Count;
+                cs.Option2Warnings.Clear();   // §10 warnings from the discarded pass describe rolled-back state
+                using var ptx = new Transaction(doc, "Transom: import edits (new parameter, retried)");
+                ptx.Start();
+                AttachCollector(ptx, collector);
+                bool ok;
+                try
+                {
+                    newParamNote = ApplyNewParam(doc, newParamChanges, cs, failed);
+                    ok = ptx.Commit() == TransactionStatus.Committed;
+                }
+                catch (Exception ex)
+                {
+                    failed.Add($"option-2 bulk pass — {ex.Message}");
+                    ok = false;
+                }
+                if (!ok)
+                {
+                    try { if (ptx.GetStatus() == TransactionStatus.Started) ptx.RollBack(); } catch { /* ignore */ }
+                    foreach (var c in newParamChanges)
+                    { c.Outcome = ApplyOutcome.Failed; c.OutcomeNote = "option-2 bulk pass rolled back on retry"; }
+                    failed.Add($"option-2 bulk pass rolled back — {newParamChanges.Count} change(s) not applied");
+                }
+                else applied += newParamChanges.Count(c => c.Outcome == ApplyOutcome.Applied);
+            }
+
+            foreach (var ch in cs.Changes)
+            {
+                if (ch.Frozen) continue;
+                if (ch.Resolution is GroupResolution.NewTypeParam or GroupResolution.NewInstanceParam) continue; // bulk pass above
+                if (ch.GroupMode == GroupMode.BuiltinDance) continue;        // grouped built-in — staged for resolution, not written in the direct pass
+                total++;
+
+                using var ctx = new Transaction(doc, "Transom: import edit (retry)");
+                ctx.Start();
+                AttachCollector(ctx, collector);
+
+                bool anyFail = false, anyUnver = false;
+                int persisted = 0, totalInst = ch.BulkInstanceIds?.Count ?? 0;
+                try
+                {
+                    if (ch.BulkInstanceIds != null)
+                    {
+                        // Bulk cell: all member instances in this ONE transaction (the cell is the retry unit).
+                        foreach (var uid in ch.BulkInstanceIds)
+                        {
+                            var inst = doc.GetElement(uid);
+                            var ip = inst == null ? null : GetParam(inst, ch.ParameterId);
+                            if (ip == null || ip.IsReadOnly) { failed.Add(Label(ch)); anyFail = true; continue; }
+                            if (ch.GroupMode == GroupMode.ProjectVary && !EnsureVary(ip, doc)) { failed.Add(Label(ch) + " — can't vary by group instance"); anyFail = true; continue; }
+                            if (!TrySetValue(ip, ch, out var es)) { failed.Add(Label(ch) + (es == null ? "" : " — " + es)); anyFail = true; continue; }
+                            if (!VerifyWrite(ip, ch)) { unverified.Add(Label(ch)); anyUnver = true; continue; }
+                            persisted++;
+                        }
+                    }
+                    else
+                    {
+                        // Re-resolve from the doc — the rolled-back pass left nothing of the first resolution.
+                        var host = ch.Binding == "type" ? doc.GetElement(new ElementId(ch.TypeId)) : doc.GetElement(ch.UniqueId);
+                        var param = host == null ? null : GetParam(host, ch.ParameterId);
+                        if (param == null || param.IsReadOnly) { failed.Add(Label(ch)); anyFail = true; }
+                        else if (ch.GroupMode == GroupMode.ProjectVary && !EnsureVary(param, doc)) { failed.Add(Label(ch) + " — can't vary by group instance"); anyFail = true; }
+                        else if (!TrySetValue(param, ch, out var es)) { failed.Add(Label(ch) + (es == null ? "" : " — " + es)); anyFail = true; }
+                        else if (!VerifyWrite(param, ch)) { unverified.Add(Label(ch)); anyUnver = true; }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    failed.Add(Label(ch) + " — " + ex.Message);
+                    anyFail = true;
+                }
+
+                if (anyFail && ch.BulkInstanceIds == null)
+                {
+                    // Nothing usable was written — discard the empty transaction.
+                    try { if (ctx.GetStatus() == TransactionStatus.Started) ctx.RollBack(); } catch { /* ignore */ }
+                    ch.Outcome = ApplyOutcome.Failed;
+                    continue;
+                }
+
+                var st = TransactionStatus.RolledBack;
+                try { st = ctx.Commit(); } catch { /* treat as rolled back */ }
+                if (st != TransactionStatus.Committed)
+                {
+                    ch.Outcome = ApplyOutcome.Failed;
+                    ch.OutcomeNote = "rolled back individually (see Revit failures in log)";
+                    if (!anyFail) failed.Add(Label(ch) + " — rolled back individually (see Revit failures in log)");
+                }
+                else
+                {
+                    // Partial bulk failures keep main-loop semantics: any failed instance fails the whole cell.
+                    ch.Outcome = anyFail ? ApplyOutcome.Failed : anyUnver ? ApplyOutcome.Unverified : ApplyOutcome.Applied;
+                    if (ch.Outcome == ApplyOutcome.Applied) applied++;
+                    // C4 (H3): this tx committed, so a "Failed"/"Unverified" bulk cell's good instances really
+                    // persisted — record N of M (mirrors the main-loop note). Only here, never on the rollback
+                    // branch above where nothing survived.
+                    else if (ch.BulkInstanceIds != null && persisted > 0)
+                        ch.OutcomeNote = $"{persisted} of {totalInst} instances persisted";
+                }
+            }
+
+            // Header (caption) round-trip in its own transaction — independent of the data writes, so it persists
+            // even when the data bulk pass fell back to per-change. (Counts toward 'applied' / 'total' like a change.)
+            if (cs.HeaderChanges.Any(h => h.Selected && h.OutcomeNote != "skipped"))
+            {
+                total += cs.HeaderChanges.Count(h => h.Selected);
+                using var htx = new Transaction(doc, "Transom: import header edits (retry)");
+                htx.Start();
+                AttachCollector(htx, collector);
+                int hApplied = ApplyHeaderChanges(doc, cs, failed, unverified);
+                if (htx.Commit() == TransactionStatus.Committed) applied += hApplied;
+                else
+                {
+                    try { if (htx.GetStatus() == TransactionStatus.Started) htx.RollBack(); } catch { /* ignore */ }
+                    foreach (var h in cs.HeaderChanges.Where(h => h.Selected))
+                    { h.Outcome = ApplyOutcome.Failed; h.OutcomeNote = "rolled back"; }
+                }
+            }
+
+            tg.Assimilate();   // ONE undo entry for the whole retried apply
+        }
+        catch (Exception ex)
+        {
+            try { if (tg.GetStatus() == TransactionStatus.Started) tg.RollBack(); } catch { /* ignore */ }
+            foreach (var c in cs.Changes)
+                if (c.Outcome is ApplyOutcome.Applied or ApplyOutcome.Unverified) c.Outcome = ApplyOutcome.Failed;
+            cs.DiagnosticLog = BuildApplyLog(attempted, failed, unverified, collector.Messages, cs, rolledBack: true,
+                retryNote: $"*** Per-change retry ABORTED ({ex.Message}) — nothing persisted. ***");
+            return $"Apply ROLLED BACK by Revit — 0 of {attempted} attempted change(s) were saved; per-change retry aborted: {ex.Message} (see log).";
+        }
+
+        int failedChanges = cs.Changes.Count(c => !c.Frozen && c.Outcome == ApplyOutcome.Failed);
+
+        if (applied == 0)
+        {
+            // The retry ALSO saved nothing — keep the honest all-rolled-back reporting.
+            cs.DiagnosticLog = BuildApplyLog(attempted, failed, unverified, collector.Messages, cs, rolledBack: true,
+                retryNote: $"*** Per-change retry ran after the rollback and ALSO saved nothing: 0 applied, {failedChanges} failed individually (listed below). ***");
+            int errCount = collector.Messages.Count(m => m.StartsWith("[Error]"));
+            return $"Apply ROLLED BACK by Revit — 0 of {attempted} attempted change(s) were saved" +
+                   (errCount > 0 ? $"; {errCount} error(s) blocked the commit (see log)." : " (see log).");
+        }
+
+        cs.RevitApplyMessages = new List<string>(collector.Messages);
+        cs.DiagnosticLog = BuildApplyLog(applied, failed, unverified, collector.Messages, cs,
+            retryNote: $"*** Initial bulk commit was ROLLED BACK by Revit ({attempted} write(s) discarded); every change was retried in its own transaction. ***\n" +
+                       $"retried individually: {applied} applied, {failedChanges} failed");
+        var msg = $"Apply recovered after rollback — {applied} of {total} change(s) saved individually, {failedChanges} failed";
+        if (unverified.Count > 0) msg += $", {unverified.Count} unverified (value didn't take)";
+        msg += " (see log).";
+        if (newParamNote.Length > 0) msg += $"  —  {newParamNote}";
         return msg;
     }
 
@@ -1115,17 +2322,23 @@ public sealed class Importer
     ///     and compares it to the change's parsed value. Catches silent failures that only surface after the
     ///     transaction commits (e.g. a value Revit clamps, or a group-phase write the dance couldn't reproduce).
     ///     A mismatch stamps <see cref="ApplyOutcome.Failed"/>; a match on a still-<c>Pending</c> change stamps
-    ///     <see cref="ApplyOutcome.Applied"/>. Option-2 (NewTypeParam) changes are skipped — they store the value
-    ///     in a DIFFERENT parameter, so the original target won't reflect it; their stamp is trusted as-is.
+    ///     <see cref="ApplyOutcome.Applied"/>. Option-2 (NewTypeParam/NewInstanceParam) changes are skipped — they
+    ///     store the value in a DIFFERENT parameter, so the original target won't reflect it; stamp trusted as-is.
     /// </summary>
     public void VerifyApplied(Document doc, ChangeSet cs)
     {
         foreach (var ch in cs.Changes)
         {
             if (ch.Frozen) continue;
-            if (ch.Resolution == GroupResolution.NewTypeParam) continue; // value lives in a different param — trust its stamp
+            if (ch.Resolution is GroupResolution.NewTypeParam or GroupResolution.NewInstanceParam) continue; // value lives in a different param — trust its stamp
 
+            // FIX 3 + FIX 4: re-derive the outcome from the FINAL model state (this runs post-commit), so a
+            // type-bound param written once per itemized row sharing it is judged by its settled value — not by a
+            // mid-loop VerifyWrite that read it before a later same-type row re-wrote it (the "unverified" inflation).
+            // FIX 4: distinguish a param that is ABSENT on the element (an impossible edit — benign skip) from one
+            // that is PRESENT but whose value didn't take (a real failure); record the distinction on OutcomeNote.
             bool matches;
+            bool anyAbsent = false, anyPresentMismatch = false;
             if (ch.BulkInstanceIds != null)
             {
                 // Bulk write: every instance must currently hold the value, else the cell failed.
@@ -1134,19 +2347,194 @@ public sealed class Importer
                 {
                     var inst = doc.GetElement(uid);
                     var ip = inst == null ? null : GetParam(inst, ch.ParameterId);
-                    if (ip == null || !VerifyWrite(ip, ch)) { matches = false; break; }
+                    if (ip == null) { matches = false; anyAbsent = true; continue; }
+                    if (!VerifyWrite(ip, ch)) { matches = false; anyPresentMismatch = true; }
                 }
             }
             else
             {
                 var host = ch.Binding == "type" ? doc.GetElement(new ElementId(ch.TypeId)) : doc.GetElement(ch.UniqueId);
                 var param = host == null ? null : GetParam(host, ch.ParameterId);
-                matches = param != null && VerifyWrite(param, ch);
+                if (param == null) { matches = false; anyAbsent = true; }
+                else { matches = VerifyWrite(param, ch); if (!matches) anyPresentMismatch = true; }
             }
 
-            if (!matches) ch.Outcome = ApplyOutcome.Failed;
-            else if (ch.Outcome == ApplyOutcome.Pending) ch.Outcome = ApplyOutcome.Applied;
+            if (!matches)
+            {
+                ch.Outcome = ApplyOutcome.Failed;
+                // FIX 4: precise, honest cause. Present-but-mismatch wins the label when both occur (a real failure
+                // is the more serious signal than a benign absent-param). Preserve any existing note (e.g. the C4
+                // "N of M instances persisted" partial-bulk note) by appending rather than clobbering.
+                string cause = anyPresentMismatch
+                    ? "write did not take (value did not persist)"
+                    : anyAbsent
+                        ? "no such parameter on this element (skipped — nothing to write)"
+                        : "";
+                if (cause.Length > 0)
+                    ch.OutcomeNote = string.IsNullOrEmpty(ch.OutcomeNote) ? cause : ch.OutcomeNote + "; " + cause;
+            }
+            else if (ch.Outcome == ApplyOutcome.Pending || ch.Outcome == ApplyOutcome.Unverified)
+                // FIX 3: a mid-loop "Unverified" whose FINAL value is correct is Applied — clear the inflated stamp.
+                ch.Outcome = ApplyOutcome.Applied;
         }
+    }
+
+    /// <summary>
+    ///     FIX 3 + FIX 4: after <see cref="VerifyApplied"/> has re-stamped every change from the FINAL model state,
+    ///     rebuild the apply log and the one-line status so their counts match the by-uid truth — not the mid-loop
+    ///     tally that over-counts type-bound params written once per itemized row (FIX 3). The non-applied changes
+    ///     are split into honest buckets (FIX 4): a real "write did not take (failed)" vs a benign "no such
+    ///     parameter on this element (skipped)". Replaces the stale <see cref="ChangeSet.DiagnosticLog"/> in place
+    ///     and returns the corrected status line. No-op semantics preserved when nothing failed. Idempotent.
+    /// </summary>
+    public string FinalizeApplyReport(ChangeSet cs)
+    {
+        // Only direct/bulk writes carry a by-final-state outcome here; option-2 conversions are reported in their
+        // own section (their value lives in a different param). Frozen changes were never written.
+        var writes = cs.Changes
+            .Where(c => !c.Frozen && c.Resolution is not (GroupResolution.NewTypeParam or GroupResolution.NewInstanceParam)
+                        && c.GroupMode != GroupMode.BuiltinDance)
+            .ToList();
+
+        int applied = writes.Count(c => c.Outcome == ApplyOutcome.Applied);
+
+        // FIX 4: split the failures by precise cause (the OutcomeNote VerifyApplied stamped).
+        bool IsAbsent(ProposedChange c) => c.OutcomeNote.Contains("no such parameter on this element");
+        var failedTookNot = writes.Where(c => c.Outcome == ApplyOutcome.Failed && !IsAbsent(c)).ToList();
+        var skippedAbsent = writes.Where(c => c.Outcome == ApplyOutcome.Failed && IsAbsent(c)).ToList();
+        // Anything left Unverified after VerifyApplied genuinely couldn't be confirmed (e.g. an element/param that
+        // vanished between commit and verify) — keep it as its own honest, small bucket.
+        var stillUnverified = writes.Where(c => c.Outcome == ApplyOutcome.Unverified).ToList();
+
+        // Rebuild the failed/unverified label lists from final state so the log enumerates the right cells.
+        var failedLabels = failedTookNot.Select(LabelWithNote).ToList();
+        var absentLabels = skippedAbsent.Select(LabelWithNote).ToList();
+        var unverLabels = stillUnverified.Select(LabelWithNote).ToList();
+
+        cs.DiagnosticLog = BuildFinalApplyLogText(applied, failedLabels, absentLabels, unverLabels, cs);
+
+        // Corrected status line (FIX 3: honest counts; FIX 4: distinct buckets). Keep any non-count suffixes the
+        // caller appended (prompts auto-dismissed, run-results path, deletions) by leaving those to the handler.
+        // §18: `applied` counts DIRECT/bulk writes only — option-2 (column→type/instance param) conversions land but
+        // were excluded, so a conversion-only apply read "Applied 0". Fold the converted count into the headline total.
+        // BUG 2 FIX (2026-06-18): count ONLY conversions actually APPLIED (Outcome==Applied) — a FAILED/rolled-back
+        // conversion (e.g. option-2b on multi-instance grouped members) must NOT be reported as applied. ApplyNewParam
+        // stamps each option-2 change's Outcome, so this is the honest "by-uid verified" count.
+        int o2Converted = cs.Changes.Count(c => c.Resolution is GroupResolution.NewTypeParam or GroupResolution.NewInstanceParam && !c.Frozen && c.Outcome == ApplyOutcome.Applied);
+        // BUG 3 FIX (2026-06-18): option-2 changes are EXCLUDED from `writes` above, so a FAILED/rolled-back
+        // conversion (e.g. option-2b blocked on multi-instance grouped members) was in NO bucket — the run read
+        // "applied:0, failed:0" while 3 real edits silently dropped. Count option-2 changes NOT applied as failed so
+        // a blocked conversion is honestly surfaced, never omitted. (Apply path unchanged — reporting only.)
+        var o2FailedChanges = cs.Changes.Where(c => c.Resolution is GroupResolution.NewTypeParam or GroupResolution.NewInstanceParam && !c.Frozen && c.Outcome != ApplyOutcome.Applied).ToList();
+        int o2Failed = o2FailedChanges.Count;
+        // Header (caption) renames land in the same apply but aren't in `writes` — fold their applied count into the
+        // headline so a header-only (or header+data) apply isn't reported as "Applied 0".
+        int hdrApplied = cs.HeaderChanges.Count(h => h.Selected && h.Outcome == ApplyOutcome.Applied);
+        int hdrFailed = cs.HeaderChanges.Count(h => h.Selected && h.Outcome == ApplyOutcome.Failed);
+        var msg = $"Applied {applied + o2Converted + hdrApplied} change(s)";
+        if (hdrApplied > 0) msg += $" (incl. {hdrApplied} heading rename(s))";
+        if (failedTookNot.Count > 0) msg += $", {failedTookNot.Count} failed (value didn't take)";
+        if (hdrFailed > 0) msg += $", {hdrFailed} heading rename(s) failed";
+        if (o2Failed > 0)
+        {
+            // Surface the SPECIFIC reason(s) (StampFailed stamped them on OutcomeNote) so a blocked conversion says
+            // WHY, not just a count — the prior log dropped the cause entirely.
+            var reasons = o2FailedChanges.Select(c => c.OutcomeNote).Where(n => !string.IsNullOrEmpty(n)).Distinct().ToList();
+            msg += $", {o2Failed} failed (column→parameter conversion couldn't be applied"
+                 + (reasons.Count > 0 ? ": " + string.Join("; ", reasons) : "") + ")";
+        }
+        if (skippedAbsent.Count > 0) msg += $", {skippedAbsent.Count} skipped (no such parameter on the element)";
+        if (stillUnverified.Count > 0) msg += $", {stillUnverified.Count} unverified";
+        msg += $". {cs.Skipped.Count(s => s.UserRelevant)} skipped.";   // #64: post-apply count = preview UserRelevant count
+        return msg;
+    }
+
+    private static string LabelWithNote(ProposedChange ch) =>
+        Label(ch) + (string.IsNullOrEmpty(ch.OutcomeNote) ? "" : "  [" + ch.OutcomeNote + "]");
+
+    /// <summary>FIX 3/FIX 4 final apply log: counts + enumerated cells from the settled per-change outcomes, with
+    /// the non-applied set split into "write did not take (failed)" vs "no such parameter (skipped)". Mirrors
+    /// <see cref="BuildApplyLog"/>'s sections (option-2, Revit warnings via the cs log) without the mid-loop tally.</summary>
+    private static string BuildFinalApplyLogText(int applied, List<string> failed, List<string> absent,
+        List<string> unverified, ChangeSet cs)
+    {
+        const int cap = 200;
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine("Transom apply (final, by-uid verified) — " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
+        // §18: include option-2 conversions in the headline total (they land but are tallied separately below), so the
+        // "applied:" line matches the FinalizeApplyReport headline + the conversion section.
+        int o2ConvertedLog = cs.Changes.Count(c => c.Resolution is GroupResolution.NewTypeParam or GroupResolution.NewInstanceParam && !c.Frozen && c.Outcome == ApplyOutcome.Applied);   // BUG 2 FIX: only actually-applied conversions
+        int hdrAppliedLog = cs.HeaderChanges.Count(h => h.Selected && h.Outcome == ApplyOutcome.Applied);
+        sb.AppendLine($"applied: {applied + o2ConvertedLog + hdrAppliedLog}");
+        sb.AppendLine($"skipped (from preview): {cs.Skipped.Count(s => s.UserRelevant)}");   // #64: user-relevant only
+
+        if (cs.Option2Result != null)
+        {
+            var o2 = cs.Changes.Where(c => c.Resolution is GroupResolution.NewTypeParam or GroupResolution.NewInstanceParam).ToList();
+            int o2Applied = o2.Count(c => c.Outcome == ApplyOutcome.Applied);
+            int o2Failed = o2.Count(c => c.Outcome == ApplyOutcome.Failed);
+            sb.AppendLine($"option 2 (column→parameter conversion): {o2.Count} change(s) converted "
+                          + $"({o2Applied} applied / {o2Failed} failed / {cs.Option2Warnings.Count} type(s) left blank) — see section below");
+        }
+
+        // Preserve the Revit warnings/errors captured during the commit (carried on the changeset).
+        sb.AppendLine($"\n== Revit warnings / errors during apply: {cs.RevitApplyMessages.Count} ==");
+        foreach (var m in cs.RevitApplyMessages.Take(cap)) sb.AppendLine("  - " + m);
+        if (cs.RevitApplyMessages.Count > cap) sb.AppendLine($"  … +{cs.RevitApplyMessages.Count - cap} more");
+
+        // FIX 4: two distinct, honest buckets for non-applied direct writes.
+        sb.AppendLine($"\n== failed writes — value did not take ({failed.Count}) ==");
+        foreach (var f in failed.Take(cap)) sb.AppendLine("  - " + f);
+        if (failed.Count > cap) sb.AppendLine($"  … +{failed.Count - cap} more");
+
+        sb.AppendLine($"\n== skipped — no such parameter on the element ({absent.Count}) ==");
+        sb.AppendLine("  (the cell's parameter does not exist on that specific element/family — an impossible edit, not a write failure)");
+        foreach (var a in absent.Take(cap)) sb.AppendLine("  - " + a);
+        if (absent.Count > cap) sb.AppendLine($"  … +{absent.Count - cap} more");
+
+        if (unverified.Count > 0)
+        {
+            sb.AppendLine($"\n== unverified (could not confirm after commit) ({unverified.Count}) ==");
+            foreach (var u in unverified.Take(cap)) sb.AppendLine("  - " + u);
+            if (unverified.Count > cap) sb.AppendLine($"  … +{unverified.Count - cap} more");
+        }
+
+        // Preserve the option-2 detail + §10 sections + any Revit-deletion note already appended to the prior log.
+        if (cs.Option2Result is { } o2r)
+        {
+            sb.AppendLine($"\n== option 2 — column(s) converted to a type/instance parameter ==");
+            sb.AppendLine($"  params created: {o2r.ParamsCreated}; values written (edits + carried-forward originals): {o2r.ValuesWritten}; "
+                          + $"source columns replaced: {o2r.ColumnsReplaced}" + (o2r.ColumnsAppended > 0 ? $"; columns appended: {o2r.ColumnsAppended}" : ""));
+        }
+        if (cs.Option2Warnings.Count > 0)
+        {
+            sb.AppendLine($"\n== option 2 — types left blank (varying values under a type parameter): {cs.Option2Warnings.Count} ==");
+            foreach (var w in cs.Option2Warnings.Take(cap)) sb.AppendLine("  - " + w);
+            if (cs.Option2Warnings.Count > cap) sb.AppendLine($"  … +{cs.Option2Warnings.Count - cap} more");
+        }
+
+        AppendHeaderChangeSection(sb, cs, cap);
+        return sb.ToString();
+    }
+
+    /// <summary>Appends the column-caption (header) rename section to an apply log, listing each rename + outcome.
+    /// Shared by both <see cref="BuildApplyLog"/> and <see cref="BuildFinalApplyLogText"/>. No-op when none.</summary>
+    private static void AppendHeaderChangeSection(System.Text.StringBuilder sb, ChangeSet cs, int cap)
+    {
+        var hdrs = cs.HeaderChanges.Where(h => h.Selected).ToList();
+        if (hdrs.Count == 0) return;
+        int hApplied = hdrs.Count(h => h.Outcome == ApplyOutcome.Applied);
+        int hFailed = hdrs.Count(h => h.Outcome == ApplyOutcome.Failed);
+        sb.AppendLine($"\n== column heading renames: {hdrs.Count} ({hApplied} applied / {hFailed} failed) ==");
+        foreach (var h in hdrs.Take(cap))
+        {
+            string where = string.IsNullOrEmpty(h.ScheduleName) ? "" : $"[{h.ScheduleName}] ";
+            string outcome = h.Outcome == ApplyOutcome.Applied ? "applied"
+                : h.Outcome == ApplyOutcome.Failed ? "FAILED" : h.Outcome.ToString().ToLower();
+            string note = string.IsNullOrEmpty(h.OutcomeNote) ? "" : $" — {h.OutcomeNote}";
+            sb.AppendLine($"    - {where}'{h.OldHeading}' → '{h.NewHeading}'  [{outcome}]{note}");
+        }
+        if (hdrs.Count > cap) sb.AppendLine($"    … +{hdrs.Count - cap} more");
     }
 
     private static string Label(ProposedChange ch) =>
@@ -1155,7 +2543,7 @@ public sealed class Importer
     /// <summary>Full plain-text record of an apply for the Copy-log button: counts, each failed/unverified write,
     /// and every Revit warning/error raised during the commit.</summary>
     private static string BuildApplyLog(int applied, List<string> failed, List<string> unverified,
-        List<string> revitMessages, ChangeSet cs, bool rolledBack = false)
+        List<string> revitMessages, ChangeSet cs, bool rolledBack = false, string? retryNote = null)
     {
         const int cap = 200;
         var sb = new System.Text.StringBuilder();
@@ -1163,21 +2551,82 @@ public sealed class Importer
         if (rolledBack)
             sb.AppendLine("*** ROLLED BACK BY REVIT — NOTHING PERSISTED. The 'attempted' count below is what was " +
                           "written in-transaction before Revit discarded the commit (usually unresolved errors). ***");
+        if (retryNote != null) sb.AppendLine(retryNote);
         sb.AppendLine($"{(rolledBack ? "attempted (NOT saved)" : "applied")}: {applied}");
-        sb.AppendLine($"skipped (from preview): {cs.Skipped.Count}");
+        sb.AppendLine($"skipped (from preview): {cs.Skipped.Count(s => s.UserRelevant)}");   // #64: user-relevant only
+
+        // D2: the headline "applied" counts only DIRECT writes (the main loop) — option-2 conversions are stamped
+        // Applied on their changes but never increment that int, which made the log read "applied: 0" while a
+        // conversion wrote real edits. Reconcile with an explicit, self-consistent option-2 tally so the headline
+        // is never read as "nothing happened". (Counts derived from the change outcomes + §10 blanks.)
+        if (cs.Option2Result != null)
+        {
+            var o2 = cs.Changes.Where(c => c.Resolution is GroupResolution.NewTypeParam or GroupResolution.NewInstanceParam).ToList();
+            int o2Applied = o2.Count(c => c.Outcome == ApplyOutcome.Applied);
+            int o2Failed = o2.Count(c => c.Outcome == ApplyOutcome.Failed);
+            sb.AppendLine($"option 2 (column→parameter conversion): {o2.Count} change(s) converted "
+                          + $"({o2Applied} applied / {o2Failed} failed / {cs.Option2Warnings.Count} type(s) left blank) — see section below");
+        }
 
         sb.AppendLine($"\n== Revit warnings / errors during apply: {revitMessages.Count} ==");
         foreach (var m in revitMessages.Take(cap)) sb.AppendLine("  - " + m);
         if (revitMessages.Count > cap) sb.AppendLine($"  … +{revitMessages.Count - cap} more");
 
-        sb.AppendLine($"\n== failed writes: {failed.Count} ==");
-        foreach (var f in failed.Take(cap)) sb.AppendLine("  - " + f);
-        if (failed.Count > cap) sb.AppendLine($"  … +{failed.Count - cap} more");
+        if (rolledBack)
+        {
+            // No zero-tallies under a rollback banner — "failed writes: 0" would read as success.
+            sb.AppendLine($"\nfailed/unverified: n/a — all {applied} in-transaction writes were discarded by the rollback");
+            if (failed.Count > 0)
+            {
+                sb.AppendLine($"\n== per-change retry failures: {failed.Count} ==");
+                foreach (var f in failed.Take(cap)) sb.AppendLine("  - " + f);
+                if (failed.Count > cap) sb.AppendLine($"  … +{failed.Count - cap} more");
+            }
+        }
+        else
+        {
+            sb.AppendLine($"\n== failed writes: {failed.Count} ==");
+            foreach (var f in failed.Take(cap)) sb.AppendLine("  - " + f);
+            if (failed.Count > cap) sb.AppendLine($"  … +{failed.Count - cap} more");
 
-        sb.AppendLine($"\n== unverified (Set returned but value didn't take): {unverified.Count} ==");
-        foreach (var u in unverified.Take(cap)) sb.AppendLine("  - " + u);
-        if (unverified.Count > cap) sb.AppendLine($"  … +{unverified.Count - cap} more");
+            sb.AppendLine($"\n== unverified (Set returned but value didn't take): {unverified.Count} ==");
+            foreach (var u in unverified.Take(cap)) sb.AppendLine("  - " + u);
+            if (unverified.Count > cap) sb.AppendLine($"  … +{unverified.Count - cap} more");
+        }
 
+        // D1/D3: explicit record of what the option-2 conversion created/wrote, with the EDITED cells named
+        // (incl. Hardware Group). Without this the conversion was invisible in the apply log — only the transient
+        // UI status line carried it — so a user reading the pasted log saw "applied: 0" and concluded edits were
+        // lost. The §10 "types left blank" section below is the complementary caveat.
+        if (cs.Option2Result is { } o2r)
+        {
+            sb.AppendLine($"\n== option 2 — column(s) converted to a type/instance parameter ==");
+            sb.AppendLine($"  params created: {o2r.ParamsCreated}; values written (edits + carried-forward originals): {o2r.ValuesWritten}; "
+                          + $"source columns replaced: {o2r.ColumnsReplaced}" + (o2r.ColumnsAppended > 0 ? $"; columns appended: {o2r.ColumnsAppended}" : ""));
+            var o2changes = cs.Changes
+                .Where(c => c.Resolution is GroupResolution.NewTypeParam or GroupResolution.NewInstanceParam)
+                .ToList();
+            sb.AppendLine($"  edited cells in this conversion: {o2changes.Count}");
+            foreach (var c in o2changes.Take(cap))
+            {
+                string where = string.IsNullOrEmpty(c.SourceScheduleName) ? "" : $"[{c.SourceScheduleName}] ";
+                string outcome = c.Outcome == ApplyOutcome.Applied ? "applied"
+                    : c.Outcome == ApplyOutcome.Failed ? "FAILED" : c.Outcome.ToString().ToLower();
+                string note = string.IsNullOrEmpty(c.OutcomeNote) ? "" : $" — {c.OutcomeNote}";
+                sb.AppendLine($"    - {where}{c.ElementName} · {c.Field} → '{c.Field} (Transom)' = '{c.NewValue}'  [{outcome}]{note}");
+            }
+            if (o2changes.Count > cap) sb.AppendLine($"    … +{o2changes.Count - cap} more");
+        }
+
+        // §10: mandatory per-type warnings for divergent types left blank by a TYPE-param conversion.
+        if (cs.Option2Warnings.Count > 0)
+        {
+            sb.AppendLine($"\n== option 2 — types left blank (varying values under a type parameter): {cs.Option2Warnings.Count} ==");
+            foreach (var w in cs.Option2Warnings.Take(cap)) sb.AppendLine("  - " + w);
+            if (cs.Option2Warnings.Count > cap) sb.AppendLine($"  … +{cs.Option2Warnings.Count - cap} more");
+        }
+
+        AppendHeaderChangeSection(sb, cs, cap);
         return sb.ToString();
     }
 
@@ -1202,91 +2651,388 @@ public sealed class Importer
     }
 
     /// <summary>
-    ///     Resolution option 2: move each group-conflicted column's values out of the constrained parameter
-    ///     into a NEW shared TYPE parameter, then add that parameter to the affected schedules. Type params
-    ///     hold one value per type, so this is only offered when the column's values are consistent per type
-    ///     (gated by <see cref="ComputeOption2Eligibility"/>). Runs inside the caller's transaction.
-    ///     Returns (values written, status note).
+    ///     Resolution option 2 (§6): REPLACE each group-conflicted column with ONE new shared parameter holding
+    ///     the ORIGINAL stored values MERGED with the user's edits (edit wins on collision). TYPE binding writes
+    ///     one value per type (a type param shares it across all instances of the type); INSTANCE binding writes
+    ///     every element its own value. After writing, the SOURCE field is removed so the schedule shows a single
+    ///     column at the original index (the built-in param is RETAINED on elements — only the FIELD is removed).
+    ///     Runs inside the caller's transaction. Returns a status note (incl. any mandatory §10 divergent-type
+    ///     warnings appended), or "" when nothing was created.
     /// </summary>
-    private string ApplyNewTypeParam(Document doc, List<ProposedChange> changes,
-        List<string> scheduleNames, List<string> failed)
+    private string ApplyNewParam(Document doc, List<ProposedChange> changes, ChangeSet cs, List<string> failed)
     {
         var app = doc.Application;
-        int created = 0, written = 0, fields = 0;
+        int created = 0, written = 0, replaced = 0, appended = 0;
+        var warnings = cs.Option2Warnings;        // §10 per-(schedule,type) blank-cell warnings (survives log rebuild)
+        var guards = new List<string>();          // key-guard / no-source append notes
 
         // One new param per resolvable column — keyed (ParameterId, Field), matching the picker/eligibility.
         foreach (var pg in changes.GroupBy(c => ChangeSet.ColumnKey(c.ParameterId, c.Field)))
         {
             var list = pg.ToList();
             var sample = list[0];
+            bool instanceBinding = sample.Resolution == GroupResolution.NewInstanceParam;
+            int sourceParamId = sample.ParameterId;
 
-            // Source parameter (for storage/spec), the affected TYPE categories, and one change per type.
+            // Source parameter (for storage/spec) + the affected categories. For INSTANCE binding bind the
+            // INSTANCE category; for TYPE binding bind the TYPE category (usually equal, but resolve properly).
             Parameter? src = null;
             var cats = app.Create.NewCategorySet();
-            var perType = new Dictionary<long, ProposedChange>();
             foreach (var ch in list)
             {
                 var uid = ch.BulkInstanceIds is { Count: > 0 } ? ch.BulkInstanceIds[0] : ch.UniqueId;
                 var el = string.IsNullOrEmpty(uid) ? null : doc.GetElement(uid);
                 if (el == null) continue;
-                src ??= GetParam(el, ch.ParameterId);
-                // A TYPE binding must use the TYPE's category (usually == the instance's, but resolve it properly).
-                var tid0 = el.GetTypeId();
-                var typeEl0 = tid0 != null && tid0 != ElementId.InvalidElementId ? doc.GetElement(tid0) : null;
-                var cat = (typeEl0 ?? el).Category;
+                src ??= GetParam(el, sourceParamId);
+                Category? cat;
+                if (instanceBinding) cat = el.Category;
+                else
+                {
+                    var tid0 = el.GetTypeId();
+                    var typeEl0 = tid0 != null && tid0 != ElementId.InvalidElementId ? doc.GetElement(tid0) : null;
+                    cat = (typeEl0 ?? el).Category;
+                }
                 if (cat is { AllowsBoundParameters: true }) cats.Insert(cat);
-                if (tid0 != null && tid0 != ElementId.InvalidElementId) perType[tid0.Value] = ch;
             }
-            if (src == null || cats.IsEmpty || perType.Count == 0)
-            { failed.Add($"{sample.Field} (new type param) — no writable source/category"); StampFailed(list); continue; }
+            string kind = instanceBinding ? "instance" : "type";
+            if (src == null || cats.IsEmpty)
+            {
+                var why = $"new {kind} param not created — " + (src == null ? "source parameter not readable on any element" : "no category allows bound parameters");
+                failed.Add($"{sample.Field} — {why}"); StampFailed(list, why); continue;
+            }
 
             // Derive the new param's spec from the SOURCE storage type — don't blindly trust GetDataType().
             var spec = DeriveSpec(src);
 
+            // §10b: TYPE binding on an ITEMIZED schedule whose instances disagree per type is a likely mistake
+            // (the user entered differing values for one type but forced a single type param). PRE-SCAN every
+            // schedule in this column for viability BEFORE any model mutation. If any itemized schedule has a
+            // non-uniform type → REJECT THE WHOLE COLUMN: create no param, change no field (the original column
+            // stays byte-identical), stamp every change Failed + a rejection note, and let the run-results report
+            // surface the attempted values. The GROUPED divergent path (blank + warn, §10a) is unaffected:
+            // grouped schedules never pass the `itemized` gate, so they fall through to the normal write below.
+            if (!instanceBinding && ColumnRejectedItemized(doc, list))
+            {
+                const string reject = "rejected: differing values for one or more types — choose an instance " +
+                    "parameter or fix the data, then re-import this column";
+                foreach (var ch in list) { ch.Outcome = ApplyOutcome.Failed; ch.OutcomeNote = reject; }
+                failed.Add($"{sample.Field} (new type param) — {reject}");
+                continue;
+            }
+
+            // §8: the param NAME encodes the binding kind ("_instance" suffix for instance) so type/instance
+            // params can never collide on a name — EnsureSharedParam applies the suffix. ColumnHeading stays clean.
             var name = $"{sample.Field} (Transom)";
             ElementId paramId; Guid guid;
-            try { (paramId, guid) = EnsureSharedTypeParam(doc, app, name, spec, cats); }
-            catch (Exception ex) { failed.Add($"{sample.Field} (new type param) — {ex.Message}"); StampFailed(list); continue; }
+            try { (paramId, guid) = EnsureSharedParam(doc, app, name, spec, cats, instanceBinding); }
+            catch (Exception ex) { var why = $"new {kind} param threw on create/bind: {ex.Message}"; failed.Add($"{sample.Field} — {why}"); StampFailed(list, why); continue; }
             if (paramId == ElementId.InvalidElementId || guid == Guid.Empty)
-            { failed.Add($"{sample.Field} (new type param) — couldn't create/bind '{name}'"); StampFailed(list); continue; }
+            { var why = $"new {kind} param couldn't be created/bound ('{name}')"; failed.Add($"{sample.Field} — {why}"); StampFailed(list, why); continue; }
             created++;
+            string newParamName = ResolveParamName(doc, paramId, name); // actual name (suffix/disambiguation applied)
 
-            // Write one value per affected type and VERIFY it (option 2 was previously unverified).
-            // Track each type's success so every change in this column can be stamped by the type it targets.
-            int wroteHere = 0;
-            var typeOk = new Dictionary<long, bool>();
-            foreach (var kv in perType)
+            // BUG 1 FIX (option-2b, research1 2026-06-18): a freshly-created INSTANCE shared param defaults to
+            // "values aligned per group type" (vary OFF). Writing DIVERGENT per-instance values to multi-instance
+            // GROUPED members with vary OFF raises Revit's unsuppressable "group changed outside edit mode" → the
+            // whole transaction rolls back (no param, no write, originals intact — exactly the live-confirmed symptom).
+            // So flip the new param to "vary by group instance" + Regenerate BEFORE the per-instance write loop, the
+            // same staging the option-1/ProjectVary path does via EnsureVary. Type binding writes once per type and
+            // never varies, so it's instance-only. Vary is a DEFINITION-level setting — flipping it on any one bound
+            // instance's Parameter flips it for the whole param. Best-effort: if the param/category can't vary (UI
+            // would grey the checkbox), the write loop's own failure handling still reports it honestly.
+            if (instanceBinding)
             {
-                var typeEl = doc.GetElement(new ElementId(kv.Key));
-                var np = typeEl?.get_Parameter(guid);
-                bool ok = np != null && !np.IsReadOnly && SetValue(np, kv.Value) && VerifyWrite(np, kv.Value);
-                typeOk[kv.Key] = ok;
-                if (ok) { written++; wroteHere++; }
-                else failed.Add($"{name} on type {kv.Key}");
+                // ORDER MATTERS (research1 retest, 2026-06-18): the binding must be COMMITTED before its
+                // InternalDefinition is reachable, and vary must be set on the INTERNAL definition (a freshly-created
+                // SHARED param exposes only ExternalDefinition via get_Parameter — SetAllowVaryBetweenGroups doesn't
+                // exist there). So: (1) Regenerate to commit the binding; (2) find the bound InternalDefinition by GUID
+                // from the doc's ParameterBindings; (3) SetAllowVaryBetweenGroups(true); (4) Regenerate; (5) RE-READ
+                // VariesAcrossGroups to confirm it STUCK. If it didn't stick (category/spec can't vary), record a
+                // diagnostic — the per-instance write loop will then fail honestly rather than silently rolling back.
+                doc.Regenerate();   // commit the binding so the param resolves to its bound InternalDefinition below
+                // Get the InternalDefinition off a bound instance's parameter — AFTER the Regenerate the committed
+                // binding exposes the InternalDefinition (a pre-commit fresh shared param would expose only the
+                // ExternalDefinition, which has no SetAllowVaryBetweenGroups — that ordering was the prior fix's gap).
+                InternalDefinition? varyDef = null;
+                foreach (var ch in list)
+                {
+                    var uid = ch.BulkInstanceIds is { Count: > 0 } ? ch.BulkInstanceIds[0] : ch.UniqueId;
+                    var rep = string.IsNullOrEmpty(uid) ? null : doc.GetElement(uid);
+                    if (rep?.get_Parameter(guid)?.Definition is InternalDefinition d) { varyDef = d; break; }
+                }
+                bool varied = false;
+                if (varyDef != null)
+                {
+                    try { if (!varyDef.VariesAcrossGroups) varyDef.SetAllowVaryBetweenGroups(doc, true); } catch { /* report below */ }
+                    doc.Regenerate();
+                    try { varied = varyDef.VariesAcrossGroups; } catch { varied = false; }
+                }
+                if (!varied)
+                    cs.Option2Warnings.Add($"'{sample.Field}': couldn't enable 'vary by group instance' on the new " +
+                        "instance parameter — per-instance values in multi-instance groups may be rejected by Revit.");
             }
 
-            // Stamp every change in this column from the outcome of the type it writes to (a type whose write
-            // never ran — element/type unresolved — counts as Failed, mirroring the failed-list semantics).
+            // MERGE + WRITE per distinct source schedule in this column. Track per-change outcome so each change
+            // is stamped Applied/Failed by the element/type it targets. A change is Applied only when it was
+            // actually written (touched) AND none of its writes failed — one failed instance fails the whole cell
+            // (mirrors the bulk-write semantics on the direct path).
+            var touched = new HashSet<ProposedChange>();
+            var changeFailed = new HashSet<ProposedChange>();
+
+            foreach (var schedUid in list.Select(c => c.SourceScheduleUid).Distinct())
+            {
+                var vs = ResolveSchedule(doc, schedUid, list.First(c => c.SourceScheduleUid == schedUid).SourceScheduleName);
+                if (vs == null)
+                {
+                    // Can't resolve the schedule → can't merge originals; fall back to writing edits only +
+                    // append-only (never throw, never replace a field we can't read). Edits still land.
+                    foreach (var ch in list.Where(c => c.SourceScheduleUid == schedUid))
+                    {
+                        touched.Add(ch);
+                        bool ok = instanceBinding
+                            ? WriteEditInstances(doc, ch, guid, sourceParamId, failed)
+                            : WriteEditType(doc, ch, guid, failed);
+                        if (ok) written++; else changeFailed.Add(ch);
+                    }
+                    continue;
+                }
+
+                var elements = new FilteredElementCollector(doc, vs.Id).WhereElementIsNotElementType().ToList();
+                int wroteThisSched = 0;
+
+                if (instanceBinding)
+                {
+                    // Edit lookup: instance UniqueId → the change carrying its edit (over bulk ids + single uid).
+                    var editByUid = new Dictionary<string, ProposedChange>();
+                    foreach (var ch in list.Where(c => c.SourceScheduleUid == schedUid))
+                        foreach (var uid in (ch.BulkInstanceIds ?? new List<string> { ch.UniqueId }))
+                            if (!string.IsNullOrEmpty(uid)) editByUid[uid] = ch;
+
+                    foreach (var el in elements)
+                    {
+                        bool isEdit = editByUid.TryGetValue(el.UniqueId, out var ech);
+                        if (isEdit) touched.Add(ech!);
+                        var np = el.get_Parameter(guid);
+                        if (np == null || np.IsReadOnly)
+                        {
+                            // The new param should be bound here; a null/readonly slot is a real failure, not a
+                            // silent skip (the source value would otherwise be lost when the field is removed).
+                            failed.Add($"{newParamName} on {SafeName(el)}");
+                            if (isEdit) changeFailed.Add(ech!);
+                            continue;
+                        }
+                        // finalVal = edit ?? live source value. EDIT WINS. Never null (ReadLive → empty-string =
+                        // exactly what the old column showed = not data loss).
+                        var finalVal = isEdit ? EditVal(ech!) : ReadLive(el, sourceParamId);
+                        bool ok = SetParsed(np, finalVal) && VerifyParsed(np, finalVal);
+                        if (ok) { written++; wroteThisSched++; }
+                        else { failed.Add($"{newParamName} on {SafeName(el)}"); if (isEdit) changeFailed.Add(ech!); }
+                    }
+                }
+                else // TYPE binding
+                {
+                    // Edit lookup: type id → the change carrying that type's edit.
+                    var editByType = new Dictionary<long, ProposedChange>();
+                    foreach (var ch in list.Where(c => c.SourceScheduleUid == schedUid))
+                    {
+                        long t = ElementTypeIdOf(doc, ch);
+                        if (t >= 0) editByType[t] = ch;
+                    }
+
+                    // Group the schedule's elements by type; each type writes ONE value to its type param.
+                    foreach (var typeGrp in elements.Where(e => e.GetTypeId() != ElementId.InvalidElementId)
+                                 .GroupBy(e => e.GetTypeId().Value))
+                    {
+                        long typeId = typeGrp.Key;
+                        var typeEl = doc.GetElement(new ElementId(typeId));
+                        var np = typeEl?.get_Parameter(guid);
+                        bool edited = editByType.TryGetValue(typeId, out var tch);
+
+                        if (edited)
+                        {
+                            // Edited type → write the edit once to the type (shared by all its instances).
+                            touched.Add(tch!);
+                            var v = EditVal(tch!);
+                            bool ok = np != null && !np.IsReadOnly && SetParsed(np, v) && VerifyParsed(np, v);
+                            if (ok) { written++; wroteThisSched++; }
+                            else { failed.Add($"{newParamName} on type {SafeName(typeEl ?? (Element)typeGrp.First())}"); changeFailed.Add(tch!); }
+                            continue;
+                        }
+
+                        // Unedited type: carry forward the ORIGINAL value if uniform across its instances.
+                        var originals = typeGrp.Select(e => ReadLive(e, sourceParamId)).ToList();
+                        bool uniform = originals.Select(CanonicalParsed).Distinct().Count() <= 1;
+                        if (uniform)
+                        {
+                            // Uniform (or single instance) → carry forward the one original value.
+                            var v = originals[0];
+                            bool ok = np != null && !np.IsReadOnly && SetParsed(np, v) && VerifyParsed(np, v);
+                            if (ok) { written++; wroteThisSched++; }
+                            else failed.Add($"{newParamName} on type {SafeName(typeEl ?? (Element)typeGrp.First())}");
+                        }
+                        else
+                        {
+                            // §10: DIVERGENT + UNEDITED under a TYPE param → SKIP (write nothing). The built-in
+                            // source param is RETAINED on every instance (only the FIELD is removed), so no data
+                            // is deleted; the new cell shows blank for this type. Record the MANDATORY warning.
+                            string typeName = SafeName(typeEl ?? (Element)typeGrp.First());
+                            warnings.Add(DivergentTypeWarning(newParamName, typeName, sample.Field));
+                        }
+                    }
+                }
+
+                // §6/§7: REPLACE the source field with the new column on THIS schedule once anything was written.
+                if (wroteThisSched > 0)
+                {
+                    var res = AddOrReplaceField(doc, vs, paramId, sourceParamId, CleanHeading(sample));
+                    switch (res)
+                    {
+                        case AddFieldResult.Replaced: replaced++; break;
+                        case AddFieldResult.AppendedKeyGuard:
+                            appended++;
+                            guards.Add($"'{sample.Field}' on '{vs.Name}' kept its original column — it drives the " +
+                                       "schedule's sort/group/filter, so the new column was ADDED alongside (removing it would orphan the key).");
+                            break;
+                        case AddFieldResult.AppendedNoSource:
+                            appended++;
+                            guards.Add($"'{sample.Field}' was ADDED to '{vs.Name}' — the original column wasn't present there to replace.");
+                            break;
+                        // AlreadyPresent (idempotent re-run) / NotSchedulable / Failed → no field-count change to report.
+                    }
+                }
+            }
+
+            // Stamp every change: Applied only when it was actually written AND none of its writes failed.
+            // A change never touched (its instances/type absent from the schedule) is Failed (nothing landed).
             foreach (var ch in list)
-            {
-                long tid = ElementTypeIdOf(doc, ch);
-                ch.Outcome = tid >= 0 && typeOk.TryGetValue(tid, out var ok) && ok
+                ch.Outcome = touched.Contains(ch) && !changeFailed.Contains(ch)
                     ? ApplyOutcome.Applied : ApplyOutcome.Failed;
-            }
-
-            // Only surface the new column on schedules if at least one value actually landed — never leave a
-            // junk field on a column that wrote nothing.
-            if (wroteHere > 0) fields += AddFieldToSchedules(doc, paramId, scheduleNames, CleanHeading(sample));
         }
 
-        return created == 0 ? "" :
-            $"option 2: {created} new type param(s), {written} value(s) written, {fields} schedule field(s) added";
+        // §10 divergent-type warnings live in cs.Option2Warnings — BuildApplyLog emits them into the copyable
+        // apply log (which is rebuilt AFTER this method, so appending to cs.DiagnosticLog here would be lost).
+
+        if (created == 0) return "";
+        // D1/D2: record the conversion counts on the ChangeSet so BuildApplyLog can emit an explicit option-2
+        // section (the status-note `note` returned below only reaches the transient UI line, not the apply log).
+        cs.Option2Result = new Option2Summary
+        {
+            ParamsCreated = created, ValuesWritten = written, ColumnsReplaced = replaced, ColumnsAppended = appended,
+        };
+        var note = $"option 2: {created} new param(s), {written} value(s) written, " +
+                   $"{replaced} column(s) replaced" + (appended > 0 ? $", {appended} appended" : "");
+        if (guards.Count > 0) note += "  —  " + string.Join("  ", guards);
+        if (warnings.Count > 0)
+            note += $"  —  {warnings.Count} type(s) left blank (instances had varying values under the type param; " +
+                    "their original values are retained on each instance — see log).";
+        return note;
     }
 
-    /// <summary>Stamps every change in a failed option-2 column as <see cref="ApplyOutcome.Failed"/>.</summary>
-    private static void StampFailed(List<ProposedChange> changes)
+    /// <summary>Fallback write for INSTANCE binding when the source schedule can't be resolved (no merge of
+    /// originals possible): writes only the change's edited value to each of its instances via the new GUID.</summary>
+    private static bool WriteEditInstances(Document doc, ProposedChange ch, Guid guid, int sourceParamId, List<string> failed)
     {
-        foreach (var ch in changes) ch.Outcome = ApplyOutcome.Failed;
+        bool any = false;
+        foreach (var uid in (ch.BulkInstanceIds ?? new List<string> { ch.UniqueId }))
+        {
+            var el = string.IsNullOrEmpty(uid) ? null : doc.GetElement(uid);
+            var np = el?.get_Parameter(guid);
+            if (np == null || np.IsReadOnly) { failed.Add($"{ch.Field} (Transom) on {Label(ch)}"); continue; }
+            var v = EditVal(ch);
+            if (SetParsed(np, v) && VerifyParsed(np, v)) any = true;
+            else failed.Add($"{ch.Field} (Transom) on {Label(ch)}");
+        }
+        return any;
+    }
+
+    /// <summary>Fallback write for TYPE binding when the source schedule can't be resolved: writes the change's
+    /// edited value once to its type via the new GUID.</summary>
+    private static bool WriteEditType(Document doc, ProposedChange ch, Guid guid, List<string> failed)
+    {
+        long tid = ElementTypeIdOf(doc, ch);
+        var typeEl = tid >= 0 ? doc.GetElement(new ElementId(tid)) : null;
+        var np = typeEl?.get_Parameter(guid);
+        if (np == null || np.IsReadOnly) { failed.Add($"{ch.Field} (Transom) on type {Label(ch)}"); return false; }
+        var v = EditVal(ch);
+        if (SetParsed(np, v) && VerifyParsed(np, v)) return true;
+        failed.Add($"{ch.Field} (Transom) on type {Label(ch)}");
+        return false;
+    }
+
+    /// <summary>
+    ///     §10b viability pre-scan for a TYPE-param column: returns true when ANY source schedule in the column
+    ///     is ITEMIZED ("Itemize every instance" checked) AND has a type whose instances would need MORE THAN ONE
+    ///     value under the chosen type param. The per-instance final value is the instance's own edit (edit wins)
+    ///     else its live source value; grouped by type, a type is non-uniform when its instances carry >1 distinct
+    ///     canonical value — exactly the differing per-instance input the user can only enter on an itemized
+    ///     schedule. A true result means REJECT THE WHOLE COLUMN (§10b): the caller makes no model change at all.
+    ///     Runs READ-ONLY, BEFORE any mutation, so a rejected column leaves its source field byte-identical.
+    ///     GROUPED schedules are never itemized → they return false here and fall through to the §10a blank+warn
+    ///     write path. Best-effort: a schedule that can't be read is treated as not-rejecting (false).
+    /// </summary>
+    private static bool ColumnRejectedItemized(Document doc, List<ProposedChange> list)
+    {
+        foreach (var schedUid in list.Select(c => c.SourceScheduleUid).Distinct())
+        {
+            var vs = ResolveSchedule(doc, schedUid, list.First(c => c.SourceScheduleUid == schedUid).SourceScheduleName);
+            if (vs == null) continue;
+            bool itemized;
+            try { itemized = vs.Definition.IsItemized; }
+            catch { itemized = false; }
+            if (!itemized) continue; // grouped → §10a (blank + warn), never a wholesale reject
+
+            // Per-instance edit lookup for THIS schedule (over bulk ids + single uid), mirroring the write path.
+            var editByUid = new Dictionary<string, ProposedChange>();
+            foreach (var ch in list.Where(c => c.SourceScheduleUid == schedUid))
+                foreach (var uid in (ch.BulkInstanceIds ?? new List<string> { ch.UniqueId }))
+                    if (!string.IsNullOrEmpty(uid)) editByUid[uid] = ch;
+
+            // Group the schedule's elements by type; a type whose merged per-instance values disagree → reject.
+            var byType = new Dictionary<long, HashSet<string>>();
+            try
+            {
+                foreach (var el in new FilteredElementCollector(doc, vs.Id).WhereElementIsNotElementType())
+                {
+                    var tid = el.GetTypeId();
+                    if (tid == null || tid == ElementId.InvalidElementId) continue;
+                    var finalVal = editByUid.TryGetValue(el.UniqueId, out var ech)
+                        ? EditVal(ech) : ReadLive(el, list[0].ParameterId);
+                    if (!byType.TryGetValue(tid.Value, out var set)) byType[tid.Value] = set = new HashSet<string>();
+                    set.Add(CanonicalParsed(finalVal));
+                    if (set.Count > 1) return true; // differing values for one type on an itemized schedule → reject
+                }
+            }
+            catch { /* unreadable schedule → don't reject on its account */ }
+        }
+        return false;
+    }
+
+    /// <summary>The §10 mandatory per-type warning shown when a divergent, unedited type is left blank by a
+    /// TYPE-param conversion. Bracketed fields filled per the spec template.</summary>
+    private static string DivergentTypeWarning(string newParamName, string typeName, string oldParamName) =>
+        $"'{newParamName}' is blank for type '{typeName}' because the column was converted to a type parameter " +
+        $"and that type's instances had varying values. The original per-instance values remain in the '{oldParamName}' " +
+        "parameter on each instance — type a single value into this cell to set one unified value for all of them.";
+
+    /// <summary>The actual stored name of a just-ensured shared parameter (the requested name plus any binding
+    /// suffix / disambiguation EnsureSharedParam applied), for user-facing messages. Falls back to the request.</summary>
+    private static string ResolveParamName(Document doc, ElementId paramId, string requested)
+    {
+        try { return doc.GetElement(paramId)?.Name ?? requested; }
+        catch { return requested; }
+    }
+
+    /// <summary>Stamps every change in a failed option-2 column as <see cref="ApplyOutcome.Failed"/> and records the
+    /// SPECIFIC reason on each change's OutcomeNote — so the per-change failure cause is durable (run-results + the
+    /// status/log surface it). Without the reason, an option-2 early-bail showed only a generic "N failed" with no
+    /// cause (the local `failed` list isn't enumerated for option-2 in the final log).</summary>
+    private static void StampFailed(List<ProposedChange> changes, string reason = "")
+    {
+        foreach (var ch in changes)
+        {
+            ch.Outcome = ApplyOutcome.Failed;
+            if (!string.IsNullOrEmpty(reason)) ch.OutcomeNote = reason;
+        }
     }
 
     /// <summary>The spec (ForgeTypeId) to create a shared param matching a source parameter's storage type.</summary>
@@ -1311,15 +3057,22 @@ public sealed class Importer
     }
 
     /// <summary>
-    ///     Ensures a shared TYPE parameter named <paramref name="name"/> with the given spec exists and is
-    ///     bound (type binding) to <paramref name="cats"/>; regenerates, then returns its element id + GUID.
-    ///     Reuses an existing definition only when its spec matches (else disambiguates the name); extends the
-    ///     binding to new categories. Saves/restores the app shared-parameter file so an import doesn't change
-    ///     session state, and writes a valid header if it has to create one.
+    ///     Ensures a shared parameter exists and is bound (TYPE or INSTANCE per <paramref name="instanceBinding"/>)
+    ///     to <paramref name="cats"/>; regenerates, then returns its element id + GUID. §8 NAMING: the param NAME
+    ///     encodes the binding kind — INSTANCE ⇒ "<paramref name="name"/>_instance", TYPE ⇒ "<paramref name="name"/>"
+    ///     unchanged — so a type param and an instance param can NEVER collide on a name (the binding-flip hazard
+    ///     is structurally eliminated: the instance path can't reuse/re-bind the type-named param). Reuses an
+    ///     existing definition only when name+spec match (else disambiguates the name); extends the binding to new
+    ///     categories WITHOUT changing its kind. Saves/restores the app shared-parameter file so an import doesn't
+    ///     change session state, and writes a valid header if it has to create one.
     /// </summary>
-    private static (ElementId id, Guid guid) EnsureSharedTypeParam(Document doc,
-        Autodesk.Revit.ApplicationServices.Application app, string name, ForgeTypeId spec, CategorySet cats)
+    private static (ElementId id, Guid guid) EnsureSharedParam(Document doc,
+        Autodesk.Revit.ApplicationServices.Application app, string name, ForgeTypeId spec, CategorySet cats,
+        bool instanceBinding)
     {
+        // §8: distinct backing-param name per binding kind (the visible ColumnHeading stays the clean source name).
+        string paramName = instanceBinding ? name + "_instance" : name;
+
         var savedFile = app.SharedParametersFilename;
         try
         {
@@ -1342,7 +3095,7 @@ public sealed class Importer
 
             // Reuse a same-named definition only if its spec matches; otherwise pick a fresh, disambiguated name.
             ExternalDefinition? ext = null;
-            var useName = name;
+            var useName = paramName;
             for (int i = 1; ext == null && i <= 50; i++)
             {
                 var existing = group.Definitions.Cast<Definition>().FirstOrDefault(d => d.Name == useName) as ExternalDefinition;
@@ -1352,23 +3105,29 @@ public sealed class Importer
                     break;
                 }
                 if (SameSpec(existing, spec)) { ext = existing; break; }
-                useName = $"{name} ({i + 1})";
+                useName = $"{paramName} ({i + 1})";
             }
             if (ext == null) return (ElementId.InvalidElementId, Guid.Empty);
 
             var bindings = doc.ParameterBindings;
+            ElementBinding bind = instanceBinding ? app.Create.NewInstanceBinding(cats) : app.Create.NewTypeBinding(cats);
             if (bindings.Contains(ext))
             {
-                // Extend the existing binding to cover any new categories (don't leave new categories unbound).
-                if (bindings.get_Item(ext) is TypeBinding existingTb)
-                {
-                    var union = app.Create.NewCategorySet();
-                    foreach (Category c in existingTb.Categories) union.Insert(c);
-                    foreach (Category c in cats) union.Insert(c);
-                    bindings.ReInsert(ext, app.Create.NewTypeBinding(union), GroupTypeId.Data);
-                }
+                // Extend the existing binding to cover any new categories (don't leave new categories unbound),
+                // preserving its kind. Read existing categories via the matching binding cast — InstanceBinding
+                // for the "_instance" param, TypeBinding otherwise (both expose .Categories). The "_instance"
+                // suffix means the kinds always match here; the defensive branch never disambiguates in normal flow.
+                var union = app.Create.NewCategorySet();
+                var existingDef = bindings.get_Item(ext);
+                CategorySet? existingCats = instanceBinding
+                    ? (existingDef as InstanceBinding)?.Categories
+                    : (existingDef as TypeBinding)?.Categories;
+                if (existingCats != null) foreach (Category c in existingCats) union.Insert(c);
+                foreach (Category c in cats) union.Insert(c);
+                ElementBinding rebind = instanceBinding ? app.Create.NewInstanceBinding(union) : app.Create.NewTypeBinding(union);
+                bindings.ReInsert(ext, rebind, GroupTypeId.Data);
             }
-            else if (!bindings.Insert(ext, app.Create.NewTypeBinding(cats), GroupTypeId.Data))
+            else if (!bindings.Insert(ext, bind, GroupTypeId.Data))
             {
                 return (ElementId.InvalidElementId, Guid.Empty);
             }
@@ -1396,32 +3155,77 @@ public sealed class Importer
     private static string CleanHeading(ProposedChange sample) =>
         !string.IsNullOrWhiteSpace(sample.SourceHeading) ? sample.SourceHeading : sample.Field;
 
-    /// <summary>Adds the new parameter as a field to each named schedule that can show it (matching category).</summary>
-    private static int AddFieldToSchedules(Document doc, ElementId paramId, List<string> scheduleNames, string heading)
+    /// <summary>Outcome of placing the new option-2 field on one schedule (§7).</summary>
+    private enum AddFieldResult { Replaced, AppendedKeyGuard, AppendedNoSource, AlreadyPresent, NotSchedulable, Failed }
+
+    /// <summary>
+    ///     §7: places the new parameter <paramref name="newParamId"/> on ONE schedule, REPLACING the source
+    ///     column (<paramref name="sourceParamId"/>) so there's a single column at the source's original index.
+    ///     The REPLACE sequence (design2 §0) inserts the new field AT the source's index, sets its heading, then
+    ///     removes the ORIGINAL by its STABLE <see cref="ScheduleFieldId"/> (NEVER by integer index — that would
+    ///     delete the field just inserted) — rolling back the insert if the remove throws. Removes the FIELD only,
+    ///     NEVER the built-in PARAM. Guards: a source that drives the schedule's sort/group/filter is kept (append
+    ///     alongside, never orphan a key); a source not present in this schedule is appended.
+    /// </summary>
+    private static AddFieldResult AddOrReplaceField(Document doc, ViewSchedule sched, ElementId newParamId,
+        int sourceParamId, string heading)
     {
-        int added = 0;
-        var schedules = new FilteredElementCollector(doc).OfClass(typeof(ViewSchedule)).Cast<ViewSchedule>()
-            .Where(v => !v.IsTemplate && scheduleNames.Contains(v.Name)).ToList();
-        foreach (var sched in schedules)
+        try
         {
+            var def = sched.Definition;
+
+            var sf = def.GetSchedulableFields().FirstOrDefault(f => f.ParameterId == newParamId);
+            if (sf == null) return AddFieldResult.NotSchedulable; // category mismatch — can't show it here
+
+            // Idempotent re-run: the new param is already a field on this schedule.
+            if (def.GetFieldOrder().Any(fid => def.GetField(fid).ParameterId == newParamId))
+                return AddFieldResult.AlreadyPresent;
+
+            // Locate the SOURCE field by its parameter id → its STABLE id + current index.
+            ScheduleFieldId? srcFid = null;
+            int srcIdx = -1;
+            foreach (var fid in def.GetFieldOrder())
+            {
+                if (def.GetField(fid).ParameterId.Value == sourceParamId) { srcFid = fid; srcIdx = def.GetFieldIndex(fid); break; }
+            }
+
+            void SetHeading(ScheduleField f)
+            {
+                if (string.IsNullOrWhiteSpace(heading)) return;
+                try { f.ColumnHeading = heading; } catch { /* heading is cosmetic; never fail over it */ }
+            }
+
+            // Source column not present here → just append the new column (nothing to replace).
+            if (srcFid == null)
+            {
+                SetHeading(def.AddField(sf));
+                return AddFieldResult.AppendedNoSource;
+            }
+
+            // Never orphan a sort/group/filter key: keep the source field, append the new one alongside.
+            bool keyGuarded = SensitiveFieldParamIds(doc, sched.UniqueId).Contains((long)sourceParamId);
+            if (keyGuarded)
+            {
+                SetHeading(def.AddField(sf));
+                return AddFieldResult.AppendedKeyGuard;
+            }
+
+            // REPLACE: insert AT the source index, set the new heading, then remove the ORIGINAL by stable id.
+            var newField = def.InsertField(sf, srcIdx);
+            SetHeading(newField);
             try
             {
-                var def = sched.Definition;
-                bool present = def.GetFieldOrder().Select(fid => def.GetField(fid).ParameterId).Any(pid => pid == paramId);
-                if (present) continue;
-                var sf = def.GetSchedulableFields().FirstOrDefault(f => f.ParameterId == paramId);
-                if (sf == null) continue; // not schedulable here (category mismatch)
-                var newField = def.AddField(sf);               // AddField returns the added ScheduleField
-                if (!string.IsNullOrWhiteSpace(heading))
-                {
-                    try { newField.ColumnHeading = heading; }  // new field only — pre-existing untouched
-                    catch { /* heading is cosmetic; never fail the add over it */ }
-                }
-                added++;
+                def.RemoveField(srcFid!); // by STABLE ScheduleFieldId — new field settles at srcIdx, count unchanged
             }
-            catch { /* a schedule that won't take the field — skip it */ }
+            catch
+            {
+                // Partial failure → revert the insert so we don't leave a duplicate column.
+                try { def.RemoveField(newField.FieldId); } catch { /* best effort */ }
+                return AddFieldResult.Failed;
+            }
+            return AddFieldResult.Replaced;
         }
-        return added;
+        catch { return AddFieldResult.Failed; }
     }
 
     /// <summary>Re-reads a just-written parameter to confirm the new value persisted (within unit tolerance).</summary>
@@ -1456,6 +3260,80 @@ public sealed class Importer
             if (p.StorageType == StorageType.Double && !isString && !isInt)
                 return Math.Abs(p.AsDouble() - dbl) <= 1e-9;
             return false;
+        }
+        catch { return false; }
+    }
+
+    // --- option-2 merge value helpers (§6) ---
+
+    /// <summary>One INTERNAL parameter value carried through an option-2 merge — the stored value (As* getter),
+    /// NOT display text. Mirrors the (IsString/IsInt/double) shape <see cref="SetValue"/>/<see cref="VerifyWrite"/>
+    /// already use, so the same canonicalization governs the uniformity test and the write.</summary>
+    private readonly struct ParsedVal
+    {
+        public readonly bool IsString;
+        public readonly bool IsInt;
+        public readonly string Str;
+        public readonly int Int;
+        public readonly double Dbl;
+        private ParsedVal(bool isString, bool isInt, string str, int i, double d)
+        { IsString = isString; IsInt = isInt; Str = str; Int = i; Dbl = d; }
+        public static ParsedVal OfString(string s) => new(true, false, s ?? "", 0, 0);
+        public static ParsedVal OfInt(int i) => new(false, true, "", i, 0);
+        public static ParsedVal OfDouble(double d) => new(false, false, "", 0, d);
+    }
+
+    /// <summary>Reads an element's parameter as its INTERNAL stored value (never display text); negative ids are
+    /// built-ins (via <see cref="GetParam"/>). A missing/odd parameter yields an empty-string value — the same
+    /// "nothing there" the old column rendered, so carrying it forward is not data loss.</summary>
+    private static ParsedVal ReadLive(Element el, int paramId)
+    {
+        try
+        {
+            var p = GetParam(el, paramId);
+            if (p == null) return ParsedVal.OfString("");
+            return p.StorageType switch
+            {
+                StorageType.String => ParsedVal.OfString(p.AsString() ?? ""),
+                StorageType.Integer => ParsedVal.OfInt(p.AsInteger()),
+                StorageType.Double => ParsedVal.OfDouble(p.AsDouble()),
+                _ => ParsedVal.OfString(""),
+            };
+        }
+        catch { return ParsedVal.OfString(""); }
+    }
+
+    /// <summary>A <see cref="ParsedVal"/> built from a change's already-parsed edit (string/int/double).</summary>
+    private static ParsedVal EditVal(ProposedChange ch) =>
+        ch.IsString ? ParsedVal.OfString(ch.NewString)
+        : ch.IsInt ? ParsedVal.OfInt(ch.NewInt)
+        : ParsedVal.OfDouble(ch.NewDouble);
+
+    /// <summary>Canonical string of a <see cref="ParsedVal"/> — mirrors <see cref="CanonicalValue"/> (trimmed
+    /// string / invariant int / double rounded to 1e-9) so the per-type uniformity test and the merge write
+    /// agree on what "the same value" means.</summary>
+    private static string CanonicalParsed(ParsedVal v) =>
+        v.IsString ? (v.Str ?? "").Trim()
+        : v.IsInt ? v.Int.ToString(System.Globalization.CultureInfo.InvariantCulture)
+        : Math.Round(v.Dbl, 9).ToString(System.Globalization.CultureInfo.InvariantCulture);
+
+    /// <summary>Writes a <see cref="ParsedVal"/> to a parameter (ParsedVal variant of <see cref="SetValue"/>).</summary>
+    private static bool SetParsed(Parameter param, ParsedVal v) =>
+        v.IsString ? param.Set(v.Str) : v.IsInt ? param.Set(v.Int) : param.Set(v.Dbl);
+
+    /// <summary>Re-reads a parameter and confirms a <see cref="ParsedVal"/> persisted (ParsedVal variant of
+    /// <see cref="VerifyWrite"/> — string trimmed to match Revit's storage trim, doubles to 1e-6).</summary>
+    private static bool VerifyParsed(Parameter param, ParsedVal v)
+    {
+        try
+        {
+            if (param.StorageType == StorageType.String)
+                return (param.AsString() ?? "").Trim() == (v.Str ?? "").Trim();
+            if (param.StorageType == StorageType.Integer)
+                return param.AsInteger() == v.Int;
+            if (param.StorageType == StorageType.Double)
+                return Math.Abs(param.AsDouble() - v.Dbl) <= 1e-6;
+            return true;
         }
         catch { return false; }
     }
@@ -1516,10 +3394,10 @@ public sealed class Importer
     };
 
     private static CellDiagnostic Diag(ImportSheet sheet, ImportRow row, ImportColumn col, string label,
-        string severity, string reason, string value) => new()
+        string severity, string reason, string value, string category = "advisory") => new()
     {
         SheetTabName = sheet.SheetTabName, ExcelRow = row.ExcelRow, Col = col.ExcelCol, FieldName = col.FieldName,
-        ElementLabel = label, Severity = severity, Reason = reason, Value = value,
+        ElementLabel = label, Severity = severity, Category = category, Reason = reason, Value = value,
     };
 
     /// <summary>

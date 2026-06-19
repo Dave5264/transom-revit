@@ -109,7 +109,7 @@ public sealed partial class TransomView
         var names = ItemFor(mi) switch
         {
             ScheduleEntry => vm.FilteredSchedules.Select(s => s.Name),
-            Core.SheetSummary => vm.AffectedSchedules.Select(s => s.ScheduleName),
+            AffectedScheduleRow => vm.AffectedSchedules.Select(s => s.ScheduleName),
             _ => Enumerable.Empty<string>(),
         };
         CopyToClipboard(string.Join(System.Environment.NewLine, names.Where(n => !string.IsNullOrWhiteSpace(n))));
@@ -122,7 +122,7 @@ public sealed partial class TransomView
     /// </summary>
     private static object? ItemFor(MenuItem mi)
     {
-        if (mi.DataContext is ScheduleEntry or Core.SheetSummary) return mi.DataContext;
+        if (mi.DataContext is ScheduleEntry or AffectedScheduleRow) return mi.DataContext;
         if (mi.Parent is ContextMenu { PlacementTarget: System.Windows.FrameworkElement t }) return t.DataContext;
         return mi.DataContext;
     }
@@ -130,7 +130,7 @@ public sealed partial class TransomView
     private static string NameOf(object? item) => item switch
     {
         ScheduleEntry se => se.Name,
-        Core.SheetSummary ss => ss.ScheduleName,
+        AffectedScheduleRow row => row.ScheduleName,
         _ => "",
     };
 

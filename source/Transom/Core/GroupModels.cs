@@ -17,11 +17,24 @@ public enum GroupMode
 /// </summary>
 public enum GroupResolution
 {
-    Vary,         // (BLUE only) flip the project param to "can vary by group instance" and write per-instance
-    NewTypeParam, // put the values into a new TYPE parameter and add it to the affected schedules
-    GroupDance,   // ungroup/edit/regroup/purge (staged for review; hands to Claude-assist meanwhile)
-    ClaudeAssist, // launch ClickHelper and let Claude open each group + edit via API/UI
-    Skip,         // leave this column unchanged
+    Vary,             // (BLUE only) flip the project param to "can vary by group instance" and write per-instance
+    NewTypeParam,     // REPLACE the column with a new TYPE parameter (original values merged with edits)
+    NewInstanceParam, // REPLACE the column with a new INSTANCE parameter (each element keeps its own value)
+    ClaudeAssist,     // launch ClickHelper and let Claude open each group + edit via API/UI
+    Skip,             // leave this column unchanged
+}
+
+/// <summary>
+///     For an Option-2 (replace-the-column) column, how its TYPE-vs-INSTANCE binding was inferred from the
+///     source schedule's organization (see <c>Importer.ComputeOption2Mode</c>). Drives which radio(s) the
+///     <c>GroupResolutionDialog</c> offers and which one it recommends.
+/// </summary>
+public enum Option2Mode
+{
+    None,                   // option 2 not available for this column
+    AutoType,               // schedule is grouped-by-type AND values align per type → a single type-param option
+    AmbiguousPreferType,    // grouped by type but not cleanly auto → offer both, recommend TYPE
+    AmbiguousPreferInstance,// itemized / not grouped by type → offer both, recommend INSTANCE
 }
 
 /// <summary>
@@ -35,10 +48,15 @@ public sealed class GroupResolutionPrompt
     public string Field = "";              // schedule column header / parameter name (for the heading)
     public int ParameterId;
     public bool IsBuiltin;                 // true = built-in (no vary, option 1); false = project (blue)
-    public bool IsBroken;                  // true = "broken" group (member anchored outside the group, a nested
-                                           // group, or mixed instance orientation) → dance can't run; RED, opts 2/4/5
-    public string BrokenReason = "";       // what makes the group broken (offending elements), for the dialog note
-    public bool Option2Available;          // values align per type across this whole column
+    public bool IsBroken;                  // true = the HARD dance gate tripped (level-anchored families, true
+                                           // rotation, or multi-level) → option 3 unavailable. Mirror & bystander
+                                           // nested do NOT set this (mapped from GroupSafetyResult.IsDanceGateBroken).
+    public string BrokenReason = "";       // what makes the group broken (offending conditions), for the dialog note
+    public List<string> BrokenFamilies = new(); // named level-anchored families to re-host to unlock the dance
+                                           // ("CW_Closet Shelf and Pole (Casework) ×2"); drives the actionable block
+    public bool Option2Available;          // option 2 (replace the column) is available for this column
+    public Option2Mode Option2Mode = Option2Mode.None; // how type-vs-instance was inferred (drives the radios offered)
+    public string BindingNote = "";        // muted explanation of the recommended binding, shown under the option-2 radios
     public bool AssistEnabled;             // Claude-assist on (gates the Claude-Assist option)
     public List<ProposedChange> Changes = new();
 

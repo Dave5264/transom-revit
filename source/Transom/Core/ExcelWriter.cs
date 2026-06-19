@@ -24,8 +24,13 @@ public sealed class ExcelWriter
 
     /// <param name="outcomes">Optional run-results overlay keyed by (row UniqueId, column ParameterId): Applied
     /// cells render BOLD (keep their fill), Failed/Unverified cells render ITALIC on a red fill. Null = no overlay.</param>
+    /// <param name="attempted">Optional attempted-value overlay keyed the same way. For a Failed/Unverified cell
+    /// (rejected Option-2 column per §10c, or any failed/unverified write), the cell TEXT is replaced with this
+    /// attempted value (what the user typed) rendered italic, instead of the re-read original — so the run-results
+    /// report shows exactly what could not be applied. Null/absent = re-read text is kept.</param>
     public void WriteMany(List<ScheduleTable> tables, string path,
-        Dictionary<(string uid, int paramId), ApplyOutcome>? outcomes = null)
+        Dictionary<(string uid, int paramId), ApplyOutcome>? outcomes = null,
+        Dictionary<(string uid, int paramId), string>? attempted = null)
     {
         var ext = Path.GetExtension(path).ToLowerInvariant();
         if (ext == ".csv") { WriteCsvMany(tables, path); return; }
@@ -38,7 +43,7 @@ public sealed class ExcelWriter
         foreach (var table in tables)
         {
             var name = UniqueName(SafeSheetName(table.ScheduleName), used);
-            WriteSheet(wb, wb.CreateSheet(name), table, xls, outcomes);
+            WriteSheet(wb, wb.CreateSheet(name), table, xls, outcomes, attempted);
             pairs.Add((table, name));
         }
 
@@ -59,7 +64,8 @@ public sealed class ExcelWriter
     }
 
     private static void WriteSheet(IWorkbook wb, ISheet sheet, ScheduleTable table, bool xls,
-        Dictionary<(string uid, int paramId), ApplyOutcome>? outcomes = null)
+        Dictionary<(string uid, int paramId), ApplyOutcome>? outcomes = null,
+        Dictionary<(string uid, int paramId), string>? attempted = null)
     {
         var cache = new Dictionary<string, ICellStyle>();
         int anchorCol = table.ColCount;
@@ -87,39 +93,90 @@ public sealed class ExcelWriter
             hr.CreateCell(anchorCol).SetCellValue(ScheduleReader.AnchorSentinel);
         }
 
+        // Colour change (2026-06-14, ux1): a DISPLAY-ONLY schedule — non-round-trippable AND no row anchors to an
+        // element/type (the importer's wholesale-skip case, e.g. AREA SCHEDULE - FUNCTION OF SPACE) — has NO import
+        // path for ANY cell, so ALL its data cells export GREY (so the user won't try to edit what can't come back).
+        // Mirrors the importer's gate exactly (Importer.cs ~:369 `!sheet.RoundTrippable && !anyAnchored`). This is the
+        // ONLY new grey: importable cells (yellow grouped-built-in via option 2/Assist, blue grouped-project via vary,
+        // green type/bulk) are by definition absent here (they all require round-trippability or an anchor), so nothing
+        // importable is mis-greyed.
+        bool anyAnchored = table.Rows.Any(rm => !string.IsNullOrEmpty(rm.UniqueId));
+        bool displayOnly = !table.RoundTrippable && !anyAnchored;
+
+        // Top-left cells of grouped super-header merges that sit ENTIRELY in the header band (every spanned row is a
+        // columnHeader row). These round-trip via ViewSchedule.GroupHeaders, so they color editable (no fill) — like
+        // per-column captions — not grey. (Matches ExcelWriter's HeaderGroupsOf / the importer's GroupHeader path.)
+        bool RowIsHeader(int rr) => rr >= 0 && rr < table.Rows.Count && table.Rows[rr].Kind == "columnHeader";
+        var superHeaderTopLeft = new HashSet<(int, int)>();
+        if (table.RoundTrippable)
+            foreach (var m in table.Merges)
+            {
+                bool allHeader = true;
+                for (int rr = m.Top; rr <= m.Bottom; rr++) if (!RowIsHeader(rr)) { allHeader = false; break; }
+                if (allHeader && m.Top < table.RowCount && m.Left < table.ColCount
+                    && !string.IsNullOrEmpty(table.Cells[m.Top][m.Left].Text))
+                    superHeaderTopLeft.Add((m.Top, m.Left));
+            }
+
         for (int r = 0; r < table.RowCount; r++)
         {
             var row = sheet.CreateRow(r + rowOffset);
-            // Export hint colours (round-trippable schedules only): grey = never importable,
-            // blue = group-member instance param (importable via Claude-assist only).
-            var frozen = table.RoundTrippable && r < table.Rows.Count ? table.Rows[r].FrozenCols : null;
+            var rowKind = r < table.Rows.Count ? table.Rows[r].Kind : null;
+            // GREY (read-only / non-importable) and GREEN (type/bulk) hints reflect the PARAMETER's nature, which is
+            // true regardless of round-trippability — so they apply even on a non-round-trippable TYPE schedule
+            // (e.g. PARTITION TYPE R, whose 2 wall types collapse to one row → can't anchor → RoundTrippable=false,
+            // yet its type cells are real type-bulk writes = green, and its read-only Width = grey). Scope the
+            // un-gating to type/group rows so an itemized-but-non-round-trippable edge can't get recolored: when
+            // RoundTrippable, behaviour is UNCHANGED; when not, only "type"/"group" rows read frozen/bulk.
+            // The grouped-INSTANCE colours (blue/yellow/red) need the instance-anchor path, so they stay gated.
+            bool colorByParamNature = table.RoundTrippable || rowKind is "type" or "group";
+            // Export hint colours: grey = never importable, blue = group-member instance param (Claude-assist only).
+            var frozen = colorByParamNature && r < table.Rows.Count ? table.Rows[r].FrozenCols : null;
             var groupProjectCols = table.RoundTrippable && r < table.Rows.Count ? table.Rows[r].GroupProjectCols : null;
             var groupBuiltinCols = table.RoundTrippable && r < table.Rows.Count ? table.Rows[r].GroupBuiltinCols : null;
             var groupBrokenCols = table.RoundTrippable && r < table.Rows.Count ? table.Rows[r].GroupBrokenCols : null;
             // Group-header / blank separator rows carry no element anchor, so editing them does nothing on
             // import. Grey the whole row so it reads as non-editable (matches the per-cell grey hint).
-            var rowKind = r < table.Rows.Count ? table.Rows[r].Kind : null;
             var ghe = r < table.Rows.Count ? table.Rows[r].GroupHeaderEdit : null;
-            var bulk = table.RoundTrippable && r < table.Rows.Count ? table.Rows[r].BulkCols : null;
+            var bulk = colorByParamNature && r < table.Rows.Count ? table.Rows[r].BulkCols : null;
             bool nonImportableRow = table.RoundTrippable && rowKind is "groupHeader" or "blank";
+            // A real (ShowHeaders) header band: per-column captions round-trip via ScheduleField.ColumnHeading
+            // (editable → no fill); the grouped super-header cells + blanks-under-merges don't (grey). Decided
+            // per-cell below by matching the cell text to the column's exported heading.
+            bool isHeaderRow = table.RoundTrippable && rowKind == "columnHeader";
             for (int c = 0; c < table.ColCount; c++)
             {
                 var tc = table.Cells[r][c];
                 var cell = row.CreateCell(c);
                 cell.SetCellValue(tc.Text);
                 // Colour precedence: grey (can't import) > blue (grouped project param, Transom applies via vary)
-                // > red (grouped built-in in a BROKEN group: dance can't run -> option 2 / Claude-Assist;
-                //        text greys when Assist is OFF — usually non-editable then)
-                // > yellow (grouped built-in in a SIMPLE group: the group dance can apply it, no Assist required)
+                // > yellow (grouped built-in param — can't be written in place; resolve via option 2 (new type
+                //          parameter) or Claude-Assist). Change 3 (2026-06-14): the former BROKEN-group RED is GONE —
+                //          a broken-group built-in now colours YELLOW, exactly like the simple-grouped-built-in case,
+                //          so the exported workbook has NO red cells (matches the legend's removal of the red swatch and
+                //          the clean removal of the model dance on the colour side). groupBrokenCols folds into yellow.
                 // > green (bulk: edits many elements) > normal. An editable group-header cell is a bulk write -> green.
                 bool isGroupEditCell = ghe != null && c == ghe.Col;
-                var style = isGroupEditCell ? GreenOf(tc.Style)
+                bool groupBuiltin = (groupBrokenCols != null && groupBrokenCols.Contains(c))
+                                    || (groupBuiltinCols != null && groupBuiltinCols.Contains(c));
+                // A header-band cell is a round-trippable CAPTION when EITHER its text matches the column's exported
+                // heading (per-column caption → ScheduleField.ColumnHeading) OR it's the top-left of a grouped
+                // super-header merge (→ ViewSchedule.GroupHeaders). Both are editable on import → no fill. Remaining
+                // header cells (merge blanks / non-caption) can't round-trip → grey.
+                bool isEditableCaption = isHeaderRow
+                    && ((c < table.Columns.Count && !string.IsNullOrEmpty(table.Columns[c].Header) && tc.Text == table.Columns[c].Header)
+                        || superHeaderTopLeft.Contains((r, c)));
+                // displayOnly (whole schedule can't import) → GREY every data cell, ahead of all other hints. In a
+                // display-only table there are no importable (yellow/blue/green) cells to protect, so this can't
+                // mis-grey something writable.
+                var style = displayOnly ? GreyOf(tc.Style)
+                    : isEditableCaption ? tc.Style                 // round-trippable column caption → editable (no fill)
+                    : isHeaderRow ? GreyOf(tc.Style)               // non-caption header cell (super-header/merge blank) → grey
+                    : isGroupEditCell ? GreenOf(tc.Style)
                     : nonImportableRow ? GreyOf(tc.Style)
                     : frozen != null && frozen.Contains(c) ? GreyOf(tc.Style)
                     : groupProjectCols != null && groupProjectCols.Contains(c) ? BlueOf(tc.Style)
-                    : groupBrokenCols != null && groupBrokenCols.Contains(c)
-                        ? (table.ClaudeAssistEnabled ? RedOf(tc.Style) : RedGreyOf(tc.Style))
-                    : groupBuiltinCols != null && groupBuiltinCols.Contains(c) ? YellowOf(tc.Style)
+                    : groupBuiltin ? YellowOf(tc.Style)
                     : bulk != null && bulk.Contains(c) ? GreenOf(tc.Style)
                     : tc.Style;
 
@@ -130,7 +187,15 @@ public sealed class ExcelWriter
                     && outcomes.TryGetValue((table.Rows[r].UniqueId!, table.Columns[c].ParameterId), out var oc))
                 {
                     if (oc == ApplyOutcome.Applied) style = BoldOf(style);
-                    else if (oc is ApplyOutcome.Failed or ApplyOutcome.Unverified) style = FailedOf(style);
+                    else if (oc is ApplyOutcome.Failed or ApplyOutcome.Unverified)
+                    {
+                        style = FailedOf(style);
+                        // §10c: for a rejected Option-2 column (source field still present), show the ATTEMPTED
+                        // value the user typed — italic, via FailedOf above — instead of the re-read original.
+                        if (attempted != null
+                            && attempted.TryGetValue((table.Rows[r].UniqueId!, table.Columns[c].ParameterId), out var av))
+                            cell.SetCellValue(av);
+                    }
                 }
 
                 cell.CellStyle = GetStyle(wb, cache, style, xls);
@@ -167,6 +232,11 @@ public sealed class ExcelWriter
         }
 
         sheet.SetColumnHidden(anchorCol, true);
+        // §17: hide the appended combined-field COMPONENT columns (they exist for the import fallback; the user edits
+        // the visible combined column). A user can unhide + edit a component column directly — it still imports.
+        foreach (var col in table.Columns)
+            if (col.Hidden && col.Col >= 0 && col.Col < anchorCol)
+                sheet.SetColumnHidden(col.Col, true);
     }
 
     /// <summary>A greyed copy of a cell style (grey text on light-grey fill) for cells that can't be imported.</summary>
@@ -186,8 +256,10 @@ public sealed class ExcelWriter
         BorderTop = s.BorderTop, BorderBottom = s.BorderBottom, BorderLeft = s.BorderLeft, BorderRight = s.BorderRight,
     };
 
-    /// <summary>An amber/yellow-tinted-FILL copy for grouped BUILT-IN-parameter cells when Claude-assist is enabled —
-    /// these need the Claude definition-swap to apply. Keeps the original (black) text colour.</summary>
+    /// <summary>An amber/yellow-tinted-FILL copy for grouped BUILT-IN-parameter cells in a SIMPLE group — they can't
+    /// be written in place; resolve via option 2 (a new type parameter, if values are uniform per type) or
+    /// Claude-Assist. Keeps the original (black) text colour. (PLACEHOLDER meaning — ux1 owns the final color
+    /// contract + wording, Task #41: keep yellow distinct vs fold into red/red-grey.)</summary>
     private static CellStyleInfo YellowOf(CellStyleInfo s) => new()
     {
         FontName = s.FontName, TextSize = s.TextSize, Bold = s.Bold, Italic = s.Italic, Underline = s.Underline,
@@ -195,10 +267,9 @@ public sealed class ExcelWriter
         BorderTop = s.BorderTop, BorderBottom = s.BorderBottom, BorderLeft = s.BorderLeft, BorderRight = s.BorderRight,
     };
 
-    /// <summary>A red-tinted-FILL copy for grouped BUILT-IN-parameter cells whose model group is BROKEN — the
-    /// definition-swap dance can't reproduce it (a member anchored outside the group, a nested group, or mixed
-    /// instance orientation), so the edit must use option 2 (a new type parameter) or Claude-Assist. Keeps the
-    /// original (black) text colour.</summary>
+    /// <summary>A red-tinted-FILL copy for grouped BUILT-IN-parameter cells whose model group is BROKEN (a member
+    /// anchored outside the group, a nested group, or mixed instance orientation), so the edit must use option 2
+    /// (a new type parameter) or Claude-Assist. Keeps the original (black) text colour.</summary>
     private static CellStyleInfo RedOf(CellStyleInfo s) => new()
     {
         FontName = s.FontName, TextSize = s.TextSize, Bold = s.Bold, Italic = s.Italic, Underline = s.Underline,
@@ -207,9 +278,8 @@ public sealed class ExcelWriter
     };
 
     /// <summary>Red fill but GREY text — a BROKEN-group built-in cell when Claude-Assist is OFF. Without Assist the
-    /// definition-swap dance can't run, so the cell usually can't be edited (option 2 aside, which depends on
-    /// import-time value alignment not known at export); the greyed text reads as effectively non-editable until
-    /// Assist is enabled.</summary>
+    /// cell usually can't be edited (option 2 aside, which depends on import-time value alignment not known at
+    /// export); the greyed text reads as effectively non-editable until Assist is enabled.</summary>
     private static CellStyleInfo RedGreyOf(CellStyleInfo s) => new()
     {
         FontName = s.FontName, TextSize = s.TextSize, Bold = s.Bold, Italic = s.Italic, Underline = s.Underline,
@@ -423,6 +493,13 @@ public sealed class ExcelWriter
                 {
                     col = c.Col, fieldName = c.FieldName, header = c.Header, parameterId = c.ParameterId,
                     binding = c.Binding, writable = c.Writable, hidden = c.Hidden, specTypeId = c.SpecTypeId,
+                    // §17: combined-parameter template (null for normal columns) — the ordered component parts the
+                    // importer needs to parse an edited combined cell back into its component params.
+                    combinedParts = c.CombinedParts?.Select(cp => new
+                    {
+                        paramId = cp.ParamId, prefix = cp.Prefix, suffix = cp.Suffix,
+                        separator = cp.Separator, binding = cp.Binding, specTypeId = cp.SpecTypeId,
+                    }).ToArray(),
                 }).ToArray(),
                 rows = p.t.Rows.Select(r => new
                 {
@@ -435,10 +512,35 @@ public sealed class ExcelWriter
                         specTypeId = r.GroupHeaderEdit.SpecTypeId, instanceIds = r.GroupHeaderEdit.InstanceIds,
                     },
                 }).ToArray(),
+                // Grouped super-headers (merged header-band cells, e.g. "DOOR"/"FRAME" spanning columns). Each is
+                // round-trippable via ViewSchedule.GroupHeaders(top,left,bottom,right,caption). Captured by Body-section
+                // rectangle + caption so the importer can detect a renamed super-header and re-apply it. Only merges
+                // fully inside the header band (every spanned row is a columnHeader row) qualify.
+                headerGroups = HeaderGroupsOf(p.t),
                 baseline = BuildBaseline(p.t),
             }).ToArray(),
         };
         return System.Text.Json.JsonSerializer.Serialize(meta);
+    }
+
+    /// <summary>The grouped super-headers (merged header-band cells) of a table, as rectangles + caption text, for
+    /// the header round-trip. A merge qualifies when EVERY row it spans is a 'columnHeader' row (i.e. it's in the
+    /// leading header band, not a merged data/group cell). Caption is read from the merge's top-left cell.</summary>
+    private static object[] HeaderGroupsOf(ScheduleTable t)
+    {
+        bool IsHeaderRow(int r) => r >= 0 && r < t.Rows.Count && t.Rows[r].Kind == "columnHeader";
+        var groups = new List<object>();
+        foreach (var m in t.Merges)
+        {
+            bool allHeader = true;
+            for (int r = m.Top; r <= m.Bottom; r++)
+                if (!IsHeaderRow(r)) { allHeader = false; break; }
+            if (!allHeader) continue;
+            string caption = m.Top < t.RowCount && m.Left < t.ColCount ? t.Cells[m.Top][m.Left].Text : "";
+            if (string.IsNullOrEmpty(caption)) continue;   // empty merge = nothing to round-trip
+            groups.Add(new { top = m.Top, left = m.Left, bottom = m.Bottom, right = m.Right, caption });
+        }
+        return groups.ToArray();
     }
 
     /// <summary>Exported value per element for writable columns: uniqueId -> (col -> value), for three-way import diff.</summary>

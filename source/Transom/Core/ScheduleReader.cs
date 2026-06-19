@@ -84,7 +84,9 @@ public sealed class ScheduleReader
 
         ReadAnchorsAndClassify(vs, table);
         if (table.RoundTrippable) DetectGroupHeaderEdits(vs, table);
-        if (table.RoundTrippable) table.Companion = BuildCombinedCompanion(vs, table);
+        // §17: combined-parameter fields — make the combined column editable + append the component params as HIDDEN
+        // columns ON THIS sheet (replaces the old "— parts" companion table). Mutates `table` in place.
+        if (table.RoundTrippable) AppendCombinedComponents(vs, table);
         return table;
     }
 
@@ -339,6 +341,16 @@ public sealed class ScheduleReader
 
         var writable = table.Columns.Where(c => c.Writable).ToList();
 
+        // First rendered DATA row (first row carrying an element/type anchor). The LEADING block of anchorless,
+        // non-blank rows above it is the schedule's HEADER BAND — Revit puts column captions in the Body section,
+        // and a schedule with grouped headers (e.g. a "DOOR"/"FRAME" super-header over per-column captions) renders
+        // as MULTIPLE leading header rows. Every such row is a header, not a 'groupHeader' data separator (which only
+        // appears BETWEEN data rows). Classifying the whole leading band as 'columnHeader' lets the writer color the
+        // round-trippable per-column captions correctly (and stops the 2nd+ header rows being mis-greyed as groupHeader).
+        int firstDataRow = -1;
+        for (int rr = 0; rr < table.RowCount; rr++)
+            if (anchors[rr] != null) { firstDataRow = rr; break; }
+
         // Cache GroupSafety verdicts per group-TYPE for this pass: built-in group-member cells in a BROKEN group
         // (anchored/sketch members, nested, or mixed orientation) color RED (option 2 / Claude-Assist) instead
         // of yellow (dance available). See GroupSafety.
@@ -363,6 +375,10 @@ public sealed class ScheduleReader
                 // Itemized rows map to one element: a group member can't have its instance params written
                 // in a normal import, so those cells are greyed on export (per-element, not per-column).
                 bool inGroup = !grouped && host.GroupId != null && host.GroupId != ElementId.InvalidElementId;
+
+                // The anchor element BEFORE the representative-instance reassignment below: for grouped (type)
+                // rows this is the row's actual TYPE element — needed for the per-cell type read-only check.
+                var anchorEl = host;
 
                 if (grouped)
                 {
@@ -416,13 +432,26 @@ public sealed class ScheduleReader
                         if (!col.ImportEditable) { frozen.Add(col.Col); continue; }      // read-only / family-type
                         if ((inGroup || anyMemberGrouped) && bind == "instance")
                         {
-                            // project/shared params (positive id) can vary per instance -> blue. Built-ins can't:
-                            // a SIMPLE group can dance -> yellow; a BROKEN group can't -> red (option 2/4/5).
-                            if (col.ParameterId >= 0) groupProjectCols.Add(col.Col);
-                            else if (rowGroupBroken) groupBrokenCols.Add(col.Col);
-                            else groupBuiltinCols.Add(col.Col);
+                            // BLUE = a grouped instance param Transom can resolve WITHOUT AI (user contract 2026-06-18).
+                            // project/shared params (positive id) resolve via "vary by group instance"; grouped BUILT-IN
+                            // instance params can't vary but ARE replaceable via option 2b (new instance param) —
+                            // live-proven (Comments, 1594 values). Both are Transom-resolvable → BLUE. (YELLOW dropped:
+                            // there's no grouped built-in that needs AI; Claude-Assist stays a resolution OPTION, not a
+                            // color. Grouped built-in TYPE cols are handled in the `type` branch below → GREEN.)
+                            groupProjectCols.Add(col.Col);
                         }
-                        else if (bind == "type") bulkCols.Add(col.Col);                  // bulk: writes to the type
+                        else if (bind == "type")
+                        {
+                            // Per-cell overlay: DetermineEditability samples ONE element per column, so a column
+                            // can stay green while THIS row's type drives the parameter read-only (e.g. a family
+                            // formula). Check the row's actual type; grey the cell instead of green when unwritable.
+                            var typeEl = fieldGrouped ? null
+                                : grouped ? anchorEl
+                                : host.GetTypeId() != ElementId.InvalidElementId ? _doc.GetElement(host.GetTypeId()) : null;
+                            var tp = typeEl == null ? null : GetParamOn(typeEl, col.ParameterId);
+                            if (typeEl != null && (tp == null || tp.IsReadOnly)) frozen.Add(col.Col);
+                            else bulkCols.Add(col.Col);                                  // bulk: writes to the type
+                        }
                     }
                     meta.Bindings = b;
                     if (frozen.Count > 0) meta.FrozenCols = frozen;
@@ -440,7 +469,11 @@ public sealed class ScheduleReader
                      && RowKeyPresent(r) && HasDataBeyondKey(r)
                      && typesByGroupKey.TryGetValue(RowKey(r), out var aggTypes) && aggTypes.Count >= 2)
                 BuildMultiTypeRow(table, meta, aggTypes, typeToInstances);
-            else if (r == 0 && table.HasHeaderRow) meta.Kind = "columnHeader";
+            // Leading header band: row 0 with headers on, PLUS any anchorless non-blank row above the first data row
+            // (the grouped-header super-rows + per-column caption row of a multi-line header). All are 'columnHeader'.
+            else if (table.HasHeaderRow
+                     && ((r == 0) || (firstDataRow >= 0 && r < firstDataRow && !RowAllEmpty(table, r))))
+                meta.Kind = "columnHeader";
             else meta.Kind = RowAllEmpty(table, r) ? "blank" : "groupHeader";
             table.Rows.Add(meta);
         }
@@ -476,6 +509,9 @@ public sealed class ScheduleReader
         var groupBuiltin = new HashSet<int>();
         var bulk = new HashSet<int>();
 
+        // Per-cell type read-only check uses the row's ANCHOR type (same element the import write anchors on).
+        var anchorType = _doc.GetElement(typeUids[0]);
+
         foreach (var tuid in typeUids)
         {
             if (!typeToInstances.TryGetValue(tuid, out var members) || members.Count == 0) continue;
@@ -492,10 +528,18 @@ public sealed class ScheduleReader
                 if (!col.ImportEditable) { frozen.Add(col.Col); continue; }
                 if (anyMemberGrouped && bind == "instance")
                 {
-                    if (col.ParameterId >= 0) groupProject.Add(col.Col);
-                    else groupBuiltin.Add(col.Col);
+                    // BLUE = grouped instance param Transom resolves without AI (user contract 2026-06-18): project/
+                    // shared via vary, built-in via option 2b (new instance param). Both → blue; yellow dropped.
+                    groupProject.Add(col.Col);
                 }
-                else if (bind == "type") bulk.Add(col.Col);
+                else if (bind == "type")
+                {
+                    // Same per-cell overlay as the single-type row path: grey when the anchor type's
+                    // parameter is missing or read-only (column-level meta stays untouched).
+                    var tp = anchorType == null ? null : GetParamOn(anchorType, col.ParameterId);
+                    if (anchorType != null && (tp == null || tp.IsReadOnly)) frozen.Add(col.Col);
+                    else bulk.Add(col.Col);
+                }
             }
         }
 
@@ -508,36 +552,21 @@ public sealed class ScheduleReader
     }
 
     /// <summary>
-    ///     If the schedule has any combined-parameter fields (e.g. "Width x Height"), builds a companion table
-    ///     exposing each underlying component parameter as its own editable column, anchored to the same rows.
-    ///     The combined column itself stays display-only on the main sheet; the components round-trip here.
+    ///     §17: COMBINED-parameter fields. For each visible combined field (one column built from N component
+    ///     params, e.g. door WIDTH = Width_Active / Width_Inactive): (1) stamp the ordered component template
+    ///     (ParamId + Prefix/Suffix/Separator) onto the combined column's ColumnMeta and make that column EDITABLE
+    ///     (it was display-only); (2) append each distinct settable component param as a HIDDEN column ON THIS
+    ///     sheet (sharing the same rows/anchor), so the component imports directly as the fallback. Mutates
+    ///     <paramref name="main"/> in place (replaces the old separate "— parts" companion sheet). The import side
+    ///     parses an edited combined cell back into its components (fail-closed); a hidden component column edited
+    ///     directly imports like any normal column.
     /// </summary>
-    private ScheduleTable? BuildCombinedCompanion(ViewSchedule vs, ScheduleTable main)
+    private void AppendCombinedComponents(ViewSchedule vs, ScheduleTable main)
     {
         var def = vs.Definition;
+        var visible = VisibleFields(def);
 
-        // Collect the component parameter ids of every visible combined field (deduped, in order).
-        var compIds = new List<int>();
-        var seen = new HashSet<int>();
-        foreach (var fid in def.GetFieldOrder())
-        {
-            var f = def.GetField(fid);
-            if (f == null || f.IsHidden) continue;
-            bool combined = false;
-            try { combined = f.IsCombinedParameterField; } catch { /* not supported */ }
-            if (!combined) continue;
-            IList<TableCellCombinedParameterData> parts;
-            try { parts = f.GetCombinedParameters(); } catch { continue; }
-            foreach (var p in parts)
-            {
-                if (p.ParamId == null || p.ParamId == ElementId.InvalidElementId) continue; // literal/separator
-                int pid = (int)p.ParamId.Value;
-                if (seen.Add(pid)) compIds.Add(pid);
-            }
-        }
-        if (compIds.Count == 0) return null;
-
-        // Representative element (+ its type) for component metadata.
+        // A representative element (+ its type) to resolve component params/bindings/values.
         Element? sample = null;
         foreach (var rm in main.Rows)
         {
@@ -545,122 +574,146 @@ public sealed class ScheduleReader
             else if (rm.InstanceIds is { Count: > 0 }) sample = _doc.GetElement(rm.InstanceIds[0]);
             if (sample != null) break;
         }
-        if (sample == null) return null;
+        if (sample == null) return;
         var sampleType = sample.GetTypeId() != ElementId.InvalidElementId ? _doc.GetElement(sample.GetTypeId()) : null;
 
-        // Keep only components that actually resolve to an instance/type param on the element (or its type).
-        // Otherwise we'd emit dead "param <id>" columns (a combined field can reference params that don't live
-        // directly on the scheduled element). If none resolve, there's no useful companion at all.
-        compIds = compIds.Where(pid =>
+        bool ResolvesSettable(int pid) =>
             (GetParamOn(sample, pid) != null || (sampleType != null && GetParamOn(sampleType, pid) != null))
-            && ResolveBinding(sample, pid, "") is "instance" or "type").ToList();
-        if (compIds.Count == 0) return null;
+            && ResolveBinding(sample, pid, "") is "instance" or "type";
 
-        var comp = new ScheduleTable
+        string? SpecOf(int pid)
         {
-            ScheduleName = Truncate(main.ScheduleName, 22) + " — parts",
-            ScheduleUniqueId = main.ScheduleUniqueId,
-            Category = main.Category,
-            SourceModelGuid = main.SourceModelGuid,
-            SourceModelTitle = main.SourceModelTitle,
-            RoundTrippable = main.RoundTrippable,
-            HasHeaderRow = main.HasHeaderRow,
-            RowCount = main.RowCount,
-            ColCount = compIds.Count,
-        };
+            var p = GetParamOn(sample, pid) ?? (sampleType != null ? GetParamOn(sampleType, pid) : null);
+            if (p == null) return null;
+            try { var s = p.Definition.GetDataType(); if (s != null && !s.Empty() && UnitUtils.IsMeasurableSpec(s)) return s.TypeId; }
+            catch { /* string/int */ }
+            return null;
+        }
 
-        foreach (var pid in compIds)
+        // Stamp the template onto each combined column + collect the distinct component params to append.
+        var compIds = new List<int>();
+        var seen = new HashSet<int>();
+        bool anyCombined = false;
+        for (int c = 0; c < main.Columns.Count && c < visible.Count; c++)
+        {
+            var f = visible[c];
+            bool combined = false;
+            try { combined = f.IsCombinedParameterField; } catch { /* not supported */ }
+            if (!combined) continue;
+            IList<TableCellCombinedParameterData> parts;
+            try { parts = f.GetCombinedParameters(); } catch { continue; }
+
+            var template = new List<CombinedPart>();
+            bool allPartsSettable = true;
+            foreach (var p in parts)
+            {
+                if (p.ParamId == null || p.ParamId == ElementId.InvalidElementId) continue;   // literal/separator-only — not data
+                int pid = (int)p.ParamId.Value;
+                if (!ResolvesSettable(pid)) { allPartsSettable = false; break; }               // §17.4: a part we can't honor
+                template.Add(new CombinedPart
+                {
+                    ParamId = pid,
+                    Prefix = p.Prefix ?? "",
+                    Suffix = p.Suffix ?? "",
+                    Separator = p.Separator ?? "",
+                    Binding = ResolveBinding(sample, pid, ""),
+                    SpecTypeId = SpecOf(pid),
+                });
+                if (seen.Add(pid)) compIds.Add(pid);
+            }
+            // §17.4: only promise editability when every data part resolves to a settable param; else leave the
+            // combined column display-only (no editable promise we can't keep).
+            if (!allPartsSettable || template.Count == 0) continue;
+
+            main.Columns[c].CombinedParts = template;
+            main.Columns[c].Writable = true;          // the combined cell is now editable (parse→distribute on import)
+            main.Columns[c].ImportEditable = true;
+            anyCombined = true;
+        }
+        if (!anyCombined || compIds.Count == 0) return;
+
+        // Don't re-add a component that's ALREADY a visible column (it round-trips on its own already).
+        var existing = new HashSet<int>(main.Columns.Select(c => c.ParameterId));
+        var toAppend = compIds.Where(pid => !existing.Contains(pid)).ToList();
+        if (toAppend.Count == 0) return;
+
+        int oldNc = main.ColCount;
+        int addN = toAppend.Count;
+        int newNc = oldNc + addN;
+
+        // Build the hidden component ColumnMeta + per-row values, then widen the parent's cell/width arrays.
+        var newCols = new List<ColumnMeta>();
+        foreach (var pid in toAppend)
         {
             var p = GetParamOn(sample, pid) ?? (sampleType != null ? GetParamOn(sampleType, pid) : null);
             var col = new ColumnMeta
             {
-                Col = comp.Columns.Count,
+                Col = main.Columns.Count + newCols.Count,
                 ParameterId = pid,
                 FieldName = p?.Definition?.Name ?? ("param " + pid),
                 Header = p?.Definition?.Name ?? ("param " + pid),
                 Binding = ResolveBinding(sample, pid, ""),
+                Hidden = true,                        // §17: components are HIDDEN columns on the parent sheet
+                SpecTypeId = SpecOf(pid),
             };
             col.Writable = p != null && col.Binding is "instance" or "type";
-            if (p != null)
-            {
-                try
-                {
-                    var spec = p.Definition.GetDataType();
-                    if (spec != null && !spec.Empty() && UnitUtils.IsMeasurableSpec(spec)) col.SpecTypeId = spec.TypeId;
-                }
-                catch { /* string/int */ }
-                col.ImportEditable = col.Writable && !p.IsReadOnly && SupportedStorage(p, col.SpecTypeId);
-            }
-            else col.ImportEditable = false;
-            comp.Columns.Add(col);
+            col.ImportEditable = col.Writable && p != null && !p.IsReadOnly && SupportedStorage(p, col.SpecTypeId);
+            newCols.Add(col);
         }
 
-        comp.Cells = new TableCell[main.RowCount][];
+        // Widen every row's cell array + the width array; fill the appended cells with the component values.
+        var widened = new TableCell[main.RowCount][];
         for (int r = 0; r < main.RowCount; r++)
         {
-            comp.Cells[r] = new TableCell[compIds.Count];
-            for (int c = 0; c < compIds.Count; c++) comp.Cells[r][c] = new TableCell();
+            widened[r] = new TableCell[newNc];
+            for (int c = 0; c < oldNc; c++)
+                widened[r][c] = (r < main.Cells.Length && c < main.Cells[r].Length) ? main.Cells[r][c] : new TableCell();
 
-            var rm = main.Rows[r];
-            var crm = new RowMeta { ExcelRow = r, UniqueId = rm.UniqueId, Kind = rm.Kind, InstanceIds = rm.InstanceIds };
-
-            if (rm.Kind == "columnHeader")
+            var rm = r < main.Rows.Count ? main.Rows[r] : null;
+            for (int j = 0; j < addN; j++)
             {
-                for (int c = 0; c < comp.Columns.Count; c++) comp.Cells[r][c] = new TableCell { Text = comp.Columns[c].Header };
-            }
-            else if (rm.UniqueId != null && rm.Kind is "element" or "type" or "group")
-            {
-                Element? el = rm.Kind == "element" ? _doc.GetElement(rm.UniqueId) : null;
-                Element? typeEl = rm.Kind == "type" ? _doc.GetElement(rm.UniqueId) : null;
-                Element? repr = rm.InstanceIds is { Count: > 0 } ? _doc.GetElement(rm.InstanceIds[0]) : el;
-                Element? bindHost = el ?? repr;
-                bool inGroup = rm.Kind == "element" && el != null && el.GroupId != null && el.GroupId != ElementId.InvalidElementId;
-
-                if (bindHost != null)
+                int destCol = oldNc + j;
+                var col = newCols[j];
+                var cell = new TableCell();
+                if (rm != null && rm.Kind == "columnHeader") cell.Text = col.Header;
+                else if (rm != null && rm.UniqueId != null && rm.Kind is "element" or "type" or "group")
                 {
-                    var b = new Dictionary<int, string>();
-                    var frozen = new HashSet<int>();
-                    var groupProjectCols = new HashSet<int>();
-                    var groupBuiltinCols = new HashSet<int>();
-                    var bulkCols = new HashSet<int>();
-                    foreach (var col in comp.Columns)
+                    Element? el = rm.Kind == "element" ? _doc.GetElement(rm.UniqueId) : null;
+                    Element? typeEl = rm.Kind == "type" ? _doc.GetElement(rm.UniqueId) : null;
+                    Element? repr = rm.InstanceIds is { Count: > 0 } ? _doc.GetElement(rm.InstanceIds[0]) : el;
+                    Element? bindHost = el ?? repr;
+                    if (bindHost != null)
                     {
                         var bind = ResolveBinding(bindHost, col.ParameterId, col.Binding);
-                        b[col.Col] = bind;
-                        if (!col.Writable) frozen.Add(col.Col);
-                        else if (!col.ImportEditable) frozen.Add(col.Col);
-                        else if (inGroup && bind == "instance")
-                        {
-                            if (col.ParameterId >= 0) groupProjectCols.Add(col.Col);
-                            else groupBuiltinCols.Add(col.Col);
-                        }
-                        else if (bind == "type") bulkCols.Add(col.Col);
-
                         var valueHost = bind == "type"
                             ? (typeEl ?? (bindHost.GetTypeId() != ElementId.InvalidElementId ? _doc.GetElement(bindHost.GetTypeId()) : null))
                             : el ?? repr;
                         var vp = valueHost == null ? null : GetParamOn(valueHost, col.ParameterId);
-                        comp.Cells[r][col.Col] = new TableCell
+                        cell.Text = vp == null ? "" : vp.StorageType == StorageType.String ? vp.AsString() ?? "" : vp.AsValueString() ?? "";
+                        // Per-row binding + frozen/bulk classification for the appended column (mirrors the main pass).
+                        (rm.Bindings ??= new Dictionary<int, string>())[destCol] = bind;
+                        bool inGroup = rm.Kind == "element" && el != null && el.GroupId != null && el.GroupId != ElementId.InvalidElementId;
+                        if (!col.Writable || !col.ImportEditable) (rm.FrozenCols ??= new HashSet<int>()).Add(destCol);
+                        else if (inGroup && bind == "instance")
                         {
-                            Text = vp == null ? "" : vp.StorageType == StorageType.String ? vp.AsString() ?? "" : vp.AsValueString() ?? "",
-                        };
+                            if (col.ParameterId >= 0) (rm.GroupProjectCols ??= new HashSet<int>()).Add(destCol);
+                            else (rm.GroupBuiltinCols ??= new HashSet<int>()).Add(destCol);
+                        }
+                        else if (bind == "type") (rm.BulkCols ??= new HashSet<int>()).Add(destCol);
                     }
-                    crm.Bindings = b;
-                    if (frozen.Count > 0) crm.FrozenCols = frozen;
-                    if (groupProjectCols.Count > 0) crm.GroupProjectCols = groupProjectCols;
-                    if (groupBuiltinCols.Count > 0) crm.GroupBuiltinCols = groupBuiltinCols;
-                    if (bulkCols.Count > 0) crm.BulkCols = bulkCols;
                 }
+                widened[r][destCol] = cell;
             }
-            comp.Rows.Add(crm);
         }
 
-        comp.ColWidthsPx = new int[compIds.Count];
-        for (int c = 0; c < compIds.Count; c++) comp.ColWidthsPx[c] = 96;
-        return comp;
+        foreach (var col in newCols) main.Columns.Add(col);
+        main.Cells = widened;
+        main.ColCount = newNc;
+        var widths = new int[newNc];
+        for (int c = 0; c < oldNc; c++) widths[c] = c < main.ColWidthsPx.Length ? main.ColWidthsPx[c] : 96;
+        for (int c = oldNc; c < newNc; c++) widths[c] = 96;
+        main.ColWidthsPx = widths;
     }
-
-    private static string Truncate(string s, int n) => s.Length <= n ? s : s.Substring(0, n);
 
     /// <summary>
     ///     Marks each writable column import-editable or not, by checking a representative element's parameter:

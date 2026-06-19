@@ -19,6 +19,10 @@ public sealed class ImportEventHandler : IExternalEventHandler
     public string DocTitle = "";
     public bool ProduceReport;
     public System.Collections.Generic.List<CellCorrection>? Corrections;
+    /// <summary>§16 pre-analysis tab picker: when non-null, Preview analyzes ONLY these sheet tabs (the scoped
+    /// ExcelReader.Read skips the rest's ReadRows + diff). Null = analyze every tab (today's behaviour). The VM sets
+    /// it from the picker before raising Preview, and carries it across a corrections re-preview (§16.3).</summary>
+    public System.Collections.Generic.ISet<string>? SelectedSheetTabs;
 
     public Action<ChangeSet> OnPreview = _ => { };
     public Action<string> OnApplied = _ => { };
@@ -33,7 +37,7 @@ public sealed class ImportEventHandler : IExternalEventHandler
             if (doc == null) { OnError("project not found"); return; }
             if (RequestedMode == Mode.Preview)
             {
-                var wb = new ExcelReader().Read(WorkbookPath);
+                var wb = new ExcelReader().Read(WorkbookPath, SelectedSheetTabs);   // §16: scoped to picked tabs when set
 
                 // Apply any user-supplied fixes for previously-unparseable cells. Values already in the
                 // schedule's unit format are written back into the workbook; values that parse but differ
@@ -43,7 +47,9 @@ public sealed class ImportEventHandler : IExternalEventHandler
                     reformats = ExcelCorrector.Apply(WorkbookPath, wb, Corrections, doc.GetUnits()).Reformats;
 
                 var cs = new Importer().BuildChangeSet(doc, wb);
-                cs.Reformats = reformats;
+                // Merge — BuildChangeSet itself parks parse-OK-but-wrong-format cells in cs.Reformats;
+                // corrector suggestions go first so ShowPreview's per-cell dedupe keeps the user-typed value.
+                cs.Reformats.InsertRange(0, reformats);
                 if (ProduceReport && cs.Diagnostics.Count > 0)
                 {
                     var dir = System.IO.Path.GetDirectoryName(WorkbookPath) ?? ".";
@@ -73,35 +79,38 @@ public sealed class ImportEventHandler : IExternalEventHandler
                 try { status = new Importer().Apply(doc, PendingChangeSet); }
                 finally { app.DialogBoxShowing -= dh; }
 
-                if (dialogs.Count > 0) status += $"  ·  {dialogs.Count} Revit prompt(s) auto-dismissed (see log)";
-
-                // Resolution option 3 (automated group dance) runs AFTER the import transaction has committed,
-                // because the dance opens its OWN per-group-type transactions (ungroup/regroup must not be nested
-                // in the import write). GroupDanceApplier manages its own dialog suppression + rollback.
-                var danceChanges = PendingChangeSet.Changes
-                    .Where(c => c.Resolution == GroupResolution.GroupDance && !c.Frozen).ToList();
-                string danceLog = "";
-                if (danceChanges.Count > 0)
-                {
-                    var dr = new GroupDanceApplier().Apply(doc, danceChanges, app);
-                    status += $"  ·  group dance: {dr.Danced} danced, {dr.Skipped} skipped, {dr.Failed} failed";
-                    danceLog = "\n\n" + dr.Log;
-                }
-
-                // Post-commit verification (catches silent post-apply failures, incl. the just-run dance), then a
-                // run-results workbook if anything Failed/Unverified — written next to the source import file.
+                // Post-commit verification (catches silent post-apply failures), then a run-results workbook if
+                // anything Failed/Unverified — written next to the source import file.
                 try
                 {
                     new Importer().VerifyApplied(doc, PendingChangeSet);
+                    // FIX 3 + FIX 4: rebuild the apply log + status from the FINAL by-uid verified outcomes, so the
+                    // counts don't carry the mid-loop type-bound over-count and the non-applied set is split into
+                    // honest buckets (write-didn't-take vs no-such-parameter). Only for the clean single-commit path:
+                    // a rollback ("ROLLED BACK") or per-change recovery ("recovered after rollback") keeps its own
+                    // authoritative log (those carry essential rollback/retry context the finalizer would drop, and
+                    // their per-change transactions don't have the mid-loop type-bound over-count).
+                    if (!status.Contains("ROLLED BACK") && !status.Contains("recovered after rollback"))
+                        status = new Importer().FinalizeApplyReport(PendingChangeSet);
+
                     var runResultsPath = RunResultsWriter.Write(doc, PendingChangeSet, app, WorkbookPath);
                     if (!string.IsNullOrEmpty(runResultsPath)) status += $"  ·  run-results: {runResultsPath}";
                 }
                 catch { /* verification / report is best-effort — never block the apply */ }
 
+                if (dialogs.Count > 0) status += $"  ·  {dialogs.Count} Revit prompt(s) auto-dismissed (see log)";
+
+                // W1 (Task #17): if Revit's regen auto-fix deleted geometry during apply, surface it on the status
+                // line too (the detail/ids are in the apply log) — a "successful" apply that removed geometry must
+                // never look clean.
+                if (PendingChangeSet.RevitDeletions.Count > 0)
+                    status += $"  ·  ⚠ {PendingChangeSet.RevitDeletions.Count} element(s) auto-deleted by Revit during apply (see log)";
+
                 OnApplied(status);
-                OnAppliedLog(PendingChangeSet.DiagnosticLog + danceLog + (dialogs.Count > 0
-                    ? "\n\n== Revit prompts auto-dismissed during apply ==\n  - " + string.Join("\n  - ", dialogs)
-                    : ""));
+                OnAppliedLog(PendingChangeSet.DiagnosticLog
+                    + (dialogs.Count > 0
+                        ? "\n\n== Revit prompts auto-dismissed during apply ==\n  - " + string.Join("\n  - ", dialogs)
+                        : ""));
             }
         }
         catch (Exception ex)

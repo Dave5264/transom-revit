@@ -71,15 +71,15 @@ public class Application : ExternalApplication
         uiAssistBtn.AvailabilityClassName = claudeAvail;
 
         claudePanel.AddPushButton<SettingsCommand>("Settings")
-            .SetImage("/Transom;component/Resources/Icons/RibbonIcon16.png")
-            .SetLargeImage("/Transom;component/Resources/Icons/RibbonIcon32.png")
+            .SetImage("/Transom;component/Resources/Icons/Settings16.png")
+            .SetLargeImage("/Transom;component/Resources/Icons/Settings32.png")
             .SetToolTip("Open Transom Settings — the Settings tab of Schedule Hub (Claude mode, bridge port, exchange folder, and more). Always available.");
 
         // Revision Tools — its own ribbon group.
         var revisionPanel = Application.CreatePanel("Revision Tools", "Transom");
         revisionPanel.AddPushButton<RevisionNarrativeCommand>("Revision\nNarrative")
-            .SetImage("/Transom;component/Resources/Icons/RibbonIcon16.png")
-            .SetLargeImage("/Transom;component/Resources/Icons/RibbonIcon32.png")
+            .SetImage("/Transom;component/Resources/Icons/RevisionNarrative16.png")
+            .SetLargeImage("/Transom;component/Resources/Icons/RevisionNarrative32.png")
             .SetToolTip("Generate a Revision Narrative (.docx) from a selected revision's clouds — reads each cloud's Comments, groups by discipline and sheet, numbers the items per sheet, and writes the firm letterhead narrative (start from a previous narrative to keep header/footer/fonts). Stand-alone; no Claude required.");
     }
 }

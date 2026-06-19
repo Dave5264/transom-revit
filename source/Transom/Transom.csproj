@@ -53,6 +53,10 @@
         <Resource Include="Resources\Icons\Register32.png"/>
         <Resource Include="Resources\Icons\UiAssist16.png"/>
         <Resource Include="Resources\Icons\UiAssist32.png"/>
+        <Resource Include="Resources\Icons\Settings16.png"/>
+        <Resource Include="Resources\Icons\Settings32.png"/>
+        <Resource Include="Resources\Icons\RevisionNarrative16.png"/>
+        <Resource Include="Resources\Icons\RevisionNarrative32.png"/>
     </ItemGroup>
 
     <ItemGroup>

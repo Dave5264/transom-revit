@@ -44,6 +44,26 @@ public sealed class ColumnMeta
     public bool Hidden;
     public string? SpecTypeId;          // null when not measurable
     public bool ImportEditable = true;  // false = can't be written back on import (read-only / family-type / unsupported) -> greyed on export
+
+    /// <summary>§17: for a COMBINED-parameter column (one displayed column built from N component params, e.g. door
+    /// WIDTH = Width_Active / Width_Inactive), the ordered component parts. Null/empty = a normal single-parameter
+    /// column. On import a column WITH CombinedParts routes to the fail-closed parse→distribute path (NEVER GetParam on
+    /// the combined column itself — it has no single parameter); the component params are ALSO emitted as ordinary
+    /// hidden columns (FORK 2) so they import directly as the fallback.</summary>
+    public List<CombinedPart>? CombinedParts;
+}
+
+/// <summary>§17: one component part of a combined-parameter field. ParamId &lt; 0 = BuiltInParameter; a literal/
+/// separator-only part (Revit's Invalid ParamId) is NOT settable data and is excluded at export (only real settable
+/// parts are carried). Prefix/Suffix wrap this part's value; Separator is placed BETWEEN this part and the next.</summary>
+public sealed class CombinedPart
+{
+    public int ParamId;
+    public string Prefix = "";
+    public string Suffix = "";
+    public string Separator = "";
+    public string Binding = "instance";   // instance | type — which host the component write targets
+    public string? SpecTypeId;            // for unit re-parse of this part's token (null = string/int)
 }
 
 public sealed class RowMeta
@@ -132,9 +152,6 @@ public sealed class ScheduleTable
 
     public List<ColumnMeta> Columns = new();
     public List<RowMeta> Rows = new();
-
-    /// <summary>Optional companion table exposing the editable component parameters of any combined fields, anchored to the same rows.</summary>
-    public ScheduleTable? Companion;
 
     public int ElementRowCount => Rows.Count(r => r.Kind == "element");
 }

@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
@@ -38,40 +39,72 @@ public partial class GroupResolutionDialog : Window
                 "Fast and reduces data duplication.",
                 "Schedule will display <varies> if even one instance is off.");
 
-        // Option 2 — only when the column's values are consistent per type (a type param holds one value per type).
-        if (p.Option2Available)
-            AddOption(GroupResolution.NewTypeParam,
-                "2.  Put the values into a new type parameter and update all affected schedules to display it",
-                "Best flexibility moving forward — no more group conflicts.",
-                "Duplicate parameter data may cause confusion.  (Only schedules being imported are changed.)");
-        else
-            unavailable.Add("• Option 2 (new type parameter) is unavailable here: values differ between instances " +
-                            "of the same type, so they can’t live in a single type parameter.");
+        // Option 2 — REPLACE the source column with one new parameter (the original values merged with the
+        // user's edits). The binding (type vs instance) is inferred at build time and carried in Option2Mode;
+        // when ambiguous we offer BOTH, recommended-first, with an explanatory note.
+        switch (p.Option2Mode)
+        {
+            case Option2Mode.AutoType:
+                // Label "2a" (not a bare "2") so the suffix convention is consistent everywhere a choice is shown:
+                // every type-parameter choice is "2a", every instance-parameter choice is "2b" — no unsuffixed "2".
+                // (Here only the type option is offered, since the binding is unambiguously type.)
+                AddOption(GroupResolution.NewTypeParam,
+                    "2a.  Replace the column with a new type parameter",
+                    "Moves the existing values AND your edits into one type parameter — one column, original data preserved, no more group conflicts.",
+                    "Stored as a new shared parameter (the column keeps its heading).");
+                break;
 
-        // Option 3 (automatic dance) — only for a SIMPLE group. A "broken" group (a member anchored outside the
-        // group such as a level-hosted shelf or sketch-based ceiling, a nested model group, or instances placed
-        // at mixed orientations) cannot be reproduced by the definition swap, so it is refused and routed to
-        // option 2 / Claude-Assist. This applies to project AND built-in params — the dance regroups regardless.
-        if (!p.IsBroken)
-            AddOption(GroupResolution.GroupDance,
-                "3.  The group dance (automatic): Transom ungroups one instance, edits, regroups, repoints the siblings, renames, and purges the old type",
-                "Keeps parameters intact; each group is verified, with full rollback if anything goes wrong.",
-                "Batch group actions are inherently risky — Transom refuses unsafe groups (attached detail, excluded/varying members, single-instance, read-only).");
-        else
-            unavailable.Add("• Option 3 (group dance) is unavailable: this group can't be reproduced by the swap — "
-                            + (string.IsNullOrEmpty(p.BrokenReason) ? "broken group." : p.BrokenReason)
-                            + "  Fix the flagged elements in the model, or use option 2 / Claude-Assist.");
+            case Option2Mode.AmbiguousPreferType:
+                // Both offered → label them per the user convention: "2a" = type, "2b" = instance (recommended one
+                // still listed first + marked Recommended).
+                AddOption(GroupResolution.NewTypeParam,
+                    "2a.  Replace the column with a new type parameter  (Recommended)",
+                    "Moves the existing values AND your edits into one type parameter — one column, original data preserved, no more group conflicts.",
+                    "Stored as a new shared parameter (the column keeps its heading).");
+                AddOption(GroupResolution.NewInstanceParam,
+                    "2b.  Replace the column with a new instance parameter",
+                    "Moves the existing values AND your edits into one instance parameter — preserves each element's own value.",
+                    "Stored as a new shared parameter (the column keeps its heading).");
+                AddNote(p.BindingNote);
+                break;
 
-        // Option 4 — only when Claude-assist is on.
+            case Option2Mode.AmbiguousPreferInstance:
+                // This mode means the schedule is ITEMIZED BY INSTANCE (Importer.ComputeOption2Mode sets it when
+                // !organizedByType). Per-instance values can differ, so a single TYPE parameter can't preserve them —
+                // the apply path's ColumnRejectedItemized would reject a type conversion outright. So DON'T offer the
+                // type option here at all (it was a guaranteed-to-fail choice, and — before this — it was even
+                // mislabeled "2b", so picking "2b" ran the doomed type path → 0 applied/no write). Offer ONLY the
+                // new-INSTANCE-parameter path ("2b", per the user convention 2/2a=type, 2b=instance). User-confirmed
+                // 2026-06-18: an itemized-by-instance schedule must not present the type-parameter conversion.
+                AddOption(GroupResolution.NewInstanceParam,
+                    "2b.  Replace the column with a new instance parameter",
+                    "Moves the existing values AND your edits into one instance parameter — preserves each element's own value.",
+                    "Stored as a new shared parameter (the column keeps its heading).");
+                break;
+
+            default: // None — option 2 doesn't apply to this column
+                unavailable.Add("• Option 2 (new parameter) is unavailable here: values differ between instances " +
+                                "of the same type, so they can’t live in a single type parameter.");
+                break;
+        }
+
+        // A grouped built-in that can't be written in place: when option 2 isn't available and Claude-Assist is off,
+        // the only resolution left is Skip — say so honestly (no in-place write path exists for it here). Wording
+        // owned by ux1; keep it free of any removed-feature reference.
+        if (p.IsBroken && p.Option2Mode == Option2Mode.None && !p.AssistEnabled)
+            unavailable.Add("• This grouped built-in can't be written directly here. Convert via option 2 if its "
+                            + "values are uniform per type, enable Claude-Assist, or edit it in Revit's Edit Group mode.");
+
+        // Option 3 — only when Claude-assist is on.
         if (p.AssistEnabled)
             AddOption(GroupResolution.ClaudeAssist,
-                "4.  Claude-Assist: update manually the old-fashioned way",
+                "3.  Claude-Assist: update manually the old-fashioned way",
                 "No BIM configuration or strategy changes.",
                 "Slow.  Transom launches ClickHelper; Claude opens each group, edits, verifies, finishes, and hands back a report.");
         else
-            unavailable.Add("• Option 4 (Claude-Assist) is unavailable: set Claude mode to “Assist (write)” to enable it.");
+            unavailable.Add("• Option 3 (Claude-Assist) is unavailable: set Claude mode to “Assist (write)” to enable it.");
 
-        AddOption(GroupResolution.Skip, "5.  Skip — leave this column unchanged", "", "");
+        AddOption(GroupResolution.Skip, "4.  Skip — leave this column unchanged", "", "");
 
         // Default to the SAFE option (Skip) so a fast "Apply choice" click never silently mutates the model;
         // the user must deliberately pick a resolution path.
@@ -119,6 +152,21 @@ public partial class GroupResolutionDialog : Window
             });
 
         OptionsPanel.Children.Add(panel);
+    }
+
+    /// <summary>Appends a muted, italic, wrapped note under the options (e.g. the type-vs-instance recommendation rationale).</summary>
+    private void AddNote(string text)
+    {
+        if (string.IsNullOrEmpty(text)) return;
+        OptionsPanel.Children.Add(new TextBlock
+        {
+            Text = text,
+            FontSize = 11,
+            FontStyle = FontStyles.Italic,
+            TextWrapping = TextWrapping.Wrap,
+            Foreground = (Brush)Resources["Muted"],
+            Margin = new Thickness(22, 2, 0, 6),
+        });
     }
 
     private void Apply_Click(object sender, RoutedEventArgs e)

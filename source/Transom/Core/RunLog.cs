@@ -50,7 +50,10 @@ public static class RunLog
                 binding = c.Binding,
                 instancesAffected = c.InstancesAffected,
             }).ToArray(),
-            skipped = cs.Skipped.Select(s => new { reason = s.Reason, detail = s.Detail }).ToArray(),
+            // #64: the run-log's skipped array shows ONLY user-relevant skips (the user's data edits that didn't
+            // land), matching the preview + post-apply count — structural/back-end skips (UserRelevant==false) are
+            // omitted here too, so the JSON log agrees with everything the user sees.
+            skipped = cs.Skipped.Where(s => s.UserRelevant).Select(s => new { reason = s.Reason, detail = s.Detail }).ToArray(),
         };
         Write(folder, log);
     }

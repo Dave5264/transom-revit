@@ -43,17 +43,56 @@ public static class RunResultsWriter
             }
             if (tables.Count == 0) return null;
 
-            // Overlay key: (row UniqueId, column ParameterId) -> outcome.
+            // Overlay key: (row UniqueId, column ParameterId) -> outcome. A parallel `attempted` map carries the
+            // value the user TYPED for cells whose source column is still present (rejected Option 2, §10c) so the
+            // report shows the attempted text, not the re-read original.
             var outcomes = new Dictionary<(string uid, int paramId), ApplyOutcome>();
+            var attempted = new Dictionary<(string uid, int paramId), string>();
             foreach (var ch in cs.Changes)
             {
-                if (string.IsNullOrEmpty(ch.UniqueId)) continue;
-                outcomes[(ch.UniqueId, ch.ParameterId)] = ch.Outcome;
+                // W2 (H3 report-overlay): a bulk-instance cell leaves ch.UniqueId empty (its targets live in
+                // BulkInstanceIds, which are instance uids — NOT rows in a grouped schedule), so it was skipped here
+                // and a partially-failed bulk cell rendered as if nothing landed. Fall back to ReportRowUid (the
+                // visible type/group row the cell renders on) so its true Outcome lands on the correct cell.
+                string uid = !string.IsNullOrEmpty(ch.UniqueId) ? ch.UniqueId : ch.ReportRowUid;
+                // #28: a TYPE-bound change carries only TypeId (UniqueId/ReportRowUid empty), so its Failed/Unverified
+                // outcome never reached the overlay and type-bound failures rendered nowhere on the run-results sheet.
+                // Resolve the type's UniqueId from TypeId — that's exactly the anchor a grouped/type schedule's row
+                // carries (ReadTypeAnchors stamps the type UniqueId), so the marker lands on the correct type row.
+                if (string.IsNullOrEmpty(uid) && ch.Binding == "type" && ch.TypeId != 0)
+                {
+                    try { uid = doc.GetElement(new ElementId(ch.TypeId))?.UniqueId ?? ""; }
+                    catch { /* type vanished between apply and report — nothing to overlay */ }
+                }
+                if (string.IsNullOrEmpty(uid)) continue;
+                if (ch.Resolution is GroupResolution.NewTypeParam or GroupResolution.NewInstanceParam)
+                {
+                    // §10c: an APPLIED (replaced) Option 2 moved the value into a DIFFERENT parameter and REMOVED
+                    // the source field — keying by the OLD ParameterId would mis-place the marker on a column that
+                    // no longer exists, so skip it (its stamp is reported in the apply note). A REJECTED (Failed)
+                    // Option 2 made NO change: the source field is STILL PRESENT, so overlay it on the source
+                    // ParameterId and render the ATTEMPTED value (ch.NewValue) italic so the user can see what
+                    // they typed and re-import just that column.
+                    if (ch.Outcome == ApplyOutcome.Applied) continue;
+                    outcomes[(uid, ch.ParameterId)] = ch.Outcome;
+                    attempted[(uid, ch.ParameterId)] = ch.NewValue;
+                    continue;
+                }
+                outcomes[(uid, ch.ParameterId)] = ch.Outcome;
+                // Any Failed/Unverified cell shows the ATTEMPTED value (what the user typed), italic on red:
+                // the model still holds the old value, so the re-read text would hide what needs fixing. The
+                // user can correct just those cells (or re-import as-is — the three-way compare re-offers
+                // exactly the cells whose workbook value still differs from the model). For a partially-persisted
+                // bulk cell, append the C4 "N of M instances persisted" note so the report shows the partial truth
+                // (W2) instead of a flat failure.
+                if (ch.Outcome is ApplyOutcome.Failed or ApplyOutcome.Unverified)
+                    attempted[(uid, ch.ParameterId)] =
+                        string.IsNullOrEmpty(ch.OutcomeNote) ? ch.NewValue : $"{ch.NewValue} ({ch.OutcomeNote})";
             }
 
             var outPath = OutputPath(sourceImportPath);
             Directory.CreateDirectory(Path.GetDirectoryName(outPath)!);
-            new ExcelWriter().WriteMany(tables, outPath, outcomes);
+            new ExcelWriter().WriteMany(tables, outPath, outcomes, attempted);
             return outPath;
         }
         catch

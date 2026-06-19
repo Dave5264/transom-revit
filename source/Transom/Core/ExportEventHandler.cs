@@ -43,11 +43,8 @@ public sealed class ExportEventHandler : IExternalEventHandler
                     var t = reader.Read(vs);
                     t.ClaudeAssistEnabled = ClaudeAssistEnabled;
                     tables.Add(t);
-                    if (t.Companion != null)
-                    {
-                        t.Companion.ClaudeAssistEnabled = ClaudeAssistEnabled;
-                        tables.Add(t.Companion); // editable component params of combined fields
-                    }
+                    // §17: combined-field components are now HIDDEN columns on the parent sheet (AppendCombinedComponents),
+                    // not a separate "— parts" companion sheet — so there's no companion table to add here anymore.
                     okCount++;
                 }
                 catch (Exception ex)

@@ -17,7 +17,15 @@ public sealed class ImportColumn
     public bool Hidden;
     public string? SpecTypeId;
 
-    // Resolved against the current sheet (matched by header so reorder is safe):
+    /// <summary>§17: for a COMBINED column, the ordered component parts (from cowork_meta combinedParts). Non-null =
+    /// route this column through the fail-closed parse→distribute path on import, NOT GetParam (it has no single
+    /// parameter). The component params also appear as their own (hidden) ImportColumns → import directly as fallback.</summary>
+    public List<CombinedPart>? CombinedParts;
+
+    // Resolved against the current sheet. ID-PRIMARY matching (2026-06-14): paramId is the column's identity; the
+    // physical column is located by header text (reorder-safe), with same-header groups placed by exported position
+    // so distinct-paramId duplicates each land on their own column. The WRITE keys on ParameterId. A COMBINED column
+    // (no single paramId) is matched by header/position and is exempt from id-primary.
     public int ExcelCol = -1;
     public bool Matched;
     public bool MatchedByPosition;   // true = header text didn't match; placed by exported position (banded/renamed/headers-off)
@@ -74,6 +82,20 @@ public sealed class ImportSheet
     /// <summary>Anchor UniqueIds that appear on more than one row (e.g. a row was copied in Excel); all their
     /// copies are dropped so one element is never written twice. Reported by the importer.</summary>
     public List<string> DuplicateUids = new();
+
+    /// <summary>Grouped super-headers (merged header-band cells) from cowork_meta: each carries its Body-section
+    /// rectangle + the exported caption. The importer compares the workbook's current text at the rectangle's
+    /// top-left to detect a renamed super-header and re-apply it via ViewSchedule.GroupHeaders.</summary>
+    public List<ImportHeaderGroup> HeaderGroups = new();
+}
+
+/// <summary>An exported grouped super-header: its Body-section rectangle + the caption at export time, plus the
+/// caption currently in the workbook (read on import) so the diff can detect a rename.</summary>
+public sealed class ImportHeaderGroup
+{
+    public int Top, Left, Bottom, Right;
+    public string Caption = "";        // at export time (from cowork_meta)
+    public string CurrentCaption = ""; // in the workbook now (read in ReadRows)
 }
 
 public sealed class ImportWorkbook
@@ -90,7 +112,14 @@ public sealed class ImportWorkbook
 /// </summary>
 public sealed class ExcelReader
 {
-    public ImportWorkbook Read(string path)
+    /// <summary>Full read of a Transom workbook (every sheet) — back-compat entry point.</summary>
+    public ImportWorkbook Read(string path) => Read(path, null);
+
+    /// <summary>§16 pre-analysis tab picker: when <paramref name="selectedSheetTabs"/> is non-null, only sheets whose
+    /// tab name is in the set are parsed + ReadRows'd (the rest are skipped entirely, not added to result.Sheets), so
+    /// the downstream model diff (BuildChangeSet) only ever sees the selected tabs. Null = full read (every sheet).
+    /// The cowork_meta parse is the same; only the expensive per-sheet row-metadata + ReadRows is gated.</summary>
+    public ImportWorkbook Read(string path, ISet<string>? selectedSheetTabs)
     {
         using var fs = File.OpenRead(path);
         IWorkbook wb = WorkbookFactory.Create(fs);
@@ -120,18 +149,22 @@ public sealed class ExcelReader
 
         foreach (var sheetMeta in root.GetProperty("sheets").EnumerateArray())
         {
+            // §16: in scoped mode skip an unselected tab BEFORE parsing its row metadata / ReadRows (the expensive part).
+            var tabName = sheetMeta.GetProperty("sheetName").GetString() ?? "";
+            if (selectedSheetTabs != null && !selectedSheetTabs.Contains(tabName)) continue;
+
             var imp = new ImportSheet
             {
                 ScheduleUniqueId = sheetMeta.GetProperty("scheduleUniqueId").GetString() ?? "",
                 ScheduleName = sheetMeta.GetProperty("scheduleName").GetString() ?? "",
-                SheetTabName = sheetMeta.GetProperty("sheetName").GetString() ?? "",
+                SheetTabName = tabName,
                 Category = sheetMeta.TryGetProperty("category", out var cat) ? cat.GetInt32() : -1,
                 RoundTrippable = sheetMeta.TryGetProperty("roundTrippable", out var rt) && rt.GetBoolean(),
             };
 
             foreach (var col in sheetMeta.GetProperty("columns").EnumerateArray())
             {
-                imp.Columns.Add(new ImportColumn
+                var ic = new ImportColumn
                 {
                     Col = col.GetProperty("col").GetInt32(),
                     FieldName = col.GetProperty("fieldName").GetString() ?? "",
@@ -143,7 +176,25 @@ public sealed class ExcelReader
                     SpecTypeId = col.TryGetProperty("specTypeId", out var s) && s.ValueKind == JsonValueKind.String
                         ? s.GetString()
                         : null,
-                });
+                };
+                // §17: combined-parameter template (absent/null for normal columns).
+                if (col.TryGetProperty("combinedParts", out var cps) && cps.ValueKind == JsonValueKind.Array)
+                {
+                    var parts = new List<CombinedPart>();
+                    foreach (var cp in cps.EnumerateArray())
+                        parts.Add(new CombinedPart
+                        {
+                            ParamId = cp.GetProperty("paramId").GetInt32(),
+                            Prefix = cp.TryGetProperty("prefix", out var pf) ? pf.GetString() ?? "" : "",
+                            Suffix = cp.TryGetProperty("suffix", out var sf) ? sf.GetString() ?? "" : "",
+                            Separator = cp.TryGetProperty("separator", out var sp) ? sp.GetString() ?? "" : "",
+                            Binding = cp.TryGetProperty("binding", out var bd) ? bd.GetString() ?? "instance" : "instance",
+                            SpecTypeId = cp.TryGetProperty("specTypeId", out var st) && st.ValueKind == JsonValueKind.String
+                                ? st.GetString() : null,
+                        });
+                    if (parts.Count > 0) ic.CombinedParts = parts;
+                }
+                imp.Columns.Add(ic);
             }
 
             if (sheetMeta.TryGetProperty("baseline", out var baseEl) && baseEl.ValueKind == JsonValueKind.Object)
@@ -210,6 +261,18 @@ public sealed class ExcelReader
                     }
                 }
 
+            // Grouped super-headers (merged header-band cells) — rectangle + exported caption, for header round-trip.
+            if (sheetMeta.TryGetProperty("headerGroups", out var hgEl) && hgEl.ValueKind == JsonValueKind.Array)
+                foreach (var hg in hgEl.EnumerateArray())
+                    imp.HeaderGroups.Add(new ImportHeaderGroup
+                    {
+                        Top = hg.GetProperty("top").GetInt32(),
+                        Left = hg.GetProperty("left").GetInt32(),
+                        Bottom = hg.GetProperty("bottom").GetInt32(),
+                        Right = hg.GetProperty("right").GetInt32(),
+                        Caption = hg.TryGetProperty("caption", out var cap) ? cap.GetString() ?? "" : "",
+                    });
+
             var ws = wb.GetSheet(imp.SheetTabName);
             if (ws != null)
                 ReadRows(ws, imp);
@@ -218,6 +281,33 @@ public sealed class ExcelReader
         }
 
         return result;
+    }
+
+    /// <summary>§16 pre-analysis tab picker, PHASE 1 (cheap): read ONLY the schedule/tab names from cowork_meta — no
+    /// per-sheet ReadRows, no model diff — so the picker can list the workbook's tabs instantly (vs the ~2-min full
+    /// analysis). Same cowork_meta-absent error path as Read. File IO only; no Revit API needed (safe off the API thread).</summary>
+    public IReadOnlyList<(string scheduleName, string sheetTab, string uid)> ReadSheetNames(string path)
+    {
+        using var fs = File.OpenRead(path);
+        IWorkbook wb = WorkbookFactory.Create(fs);
+
+        var metaSheet = wb.GetSheet("cowork_meta")
+                        ?? throw new System.InvalidOperationException("Not a Transom workbook (no cowork_meta sheet).");
+        var metaSb = new System.Text.StringBuilder();
+        for (int r = 0; ; r++)
+        {
+            var s = metaSheet.GetRow(r)?.GetCell(0)?.ToString();
+            if (string.IsNullOrEmpty(s)) break;
+            metaSb.Append(s);
+        }
+        using var doc = JsonDocument.Parse(metaSb.ToString());
+        var list = new List<(string, string, string)>();
+        foreach (var sheetMeta in doc.RootElement.GetProperty("sheets").EnumerateArray())
+            list.Add((
+                sheetMeta.GetProperty("scheduleName").GetString() ?? "",
+                sheetMeta.GetProperty("sheetName").GetString() ?? "",
+                sheetMeta.GetProperty("scheduleUniqueId").GetString() ?? ""));
+        return list;
     }
 
     private static void ReadRows(ISheet ws, ImportSheet imp)
@@ -243,16 +333,47 @@ public sealed class ExcelReader
             headers[c] = header?.GetCell(c)?.ToString() ?? "";
         imp.CurrentHeaders = headers;
 
-        // Match each metadata column to its current position by header text (so reorder is safe).
+        // ID-PRIMARY column matching (user directive 2026-06-14, supersedes the FIX-1 dup-header Pass-0):
+        // a column's IDENTITY is its parameterId — it travels with the column regardless of header text or position,
+        // so the WRITE keys on it (GetParam(host, col.ParameterId)) and a correctly LOCATED column always writes the
+        // right parameter even if its header was renamed. The physical Excel sheet carries only header TEXT (no
+        // embedded paramId), so paramId can't be read off a cell; we use it as the identity that decides WHICH meta
+        // column owns a physical column, and locate the physical column by header (reorder-safe) with a deterministic
+        // position rule inside same-header groups. Two distinct-paramId columns sharing a heading — Panel "TYPE"
+        // 67062 + Frame "TYPE" 67025, "REMARKS" Comments -1010106 + Comments(Transom) 7728552, PARTITION "THICKNESS"
+        // Width -1001000 + Framing 229593 — therefore BOTH land on their own column (the old ambiguous-duplicate skip
+        // is gone). Non-writable computed columns (paramId -1) carry no real parameter; they still locate by header
+        // for completeness but are never write targets (the import write/skip loops gate on Writable).
         var used = new bool[anchorCol];
+
+        // Group meta columns by header text; within a shared header, order by EXPORTED position (stable identity).
+        // A unique header → one meta column → its single physical column (plain reorder-safe header match). A shared
+        // header → the i-th exported column maps to the i-th physical column still carrying that text: deterministic,
+        // and since each meta column has its own distinct paramId, BOTH land on the correct parameter. (Empty headers
+        // fall through to the legacy/positional paths below.)
+        foreach (var grp in imp.Columns.Where(c => !string.IsNullOrEmpty(c.Header)).GroupBy(c => c.Header))
+        {
+            var physical = new List<int>();
+            for (int c = 0; c < anchorCol; c++)
+                if (!used[c] && headers[c] == grp.Key) physical.Add(c);
+
+            var metaCols = grp.OrderBy(c => c.Col).ToList();
+            int n = System.Math.Min(metaCols.Count, physical.Count);
+            for (int i = 0; i < n; i++)
+            {
+                metaCols[i].ExcelCol = physical[i];
+                metaCols[i].Matched = true;   // located by header text (reorder-safe); MatchedByPosition stays false
+                used[physical[i]] = true;
+            }
+            // Surplus on either side (count mismatch under this header) stays unmatched → positional fallback or an
+            // honest "renamed/removed" skip below; never a cross-count guess.
+        }
+
+        // Legacy workbooks (no stored header) → exported position, when that cell is free.
         foreach (var col in imp.Columns)
         {
-            if (!string.IsNullOrEmpty(col.Header))
-            {
-                for (int c = 0; c < anchorCol; c++)
-                    if (!used[c] && headers[c] == col.Header) { col.ExcelCol = c; col.Matched = true; used[c] = true; break; }
-            }
-            else if (col.Col < anchorCol && !used[col.Col]) // legacy workbook (no stored header) -> position
+            if (col.Matched || !string.IsNullOrEmpty(col.Header)) continue;
+            if (col.Col >= 0 && col.Col < anchorCol && !used[col.Col])
             {
                 col.ExcelCol = col.Col;
                 col.Matched = true;
@@ -282,6 +403,12 @@ public sealed class ExcelReader
                     used[col.Col] = true;
                 }
 
+        // HONESTY FLOOR (FIX-1 carries): a column id-primary couldn't place (genuinely renamed/removed in the sheet,
+        // or a count mismatch left it over) stays UNMATCHED → reported by the Importer as a real "column not in
+        // spreadsheet" skip — never silently mis-written. The former AmbiguousDuplicate special-case is RETIRED: a
+        // dup-NAME column now resolves to its distinct paramId via the same-header group above, so it never becomes an
+        // ambiguous skip. (col.AmbiguousDuplicate is no longer set anywhere; the field + its stopgap skip site in
+        // Importer are removed in this same change.)
         imp.FormattingChanged = imp.Columns.Any(c => !c.Matched || c.ExcelCol != c.Col);
 
         // Merged-cell map: a user merging cells in Excel leaves every non-top-left member blank, which would
@@ -295,6 +422,11 @@ public sealed class ExcelReader
                     if (rr != m.FirstRow || cc != m.FirstColumn)
                         imp.MergedCells.Add((rr, cc));
         }
+
+        // Current super-header captions: read the workbook cell at each exported header-group's top-left. Super-
+        // headers exist only with real headers (no synth row-shift), so the meta rectangle row maps 1:1 to the sheet.
+        foreach (var hg in imp.HeaderGroups)
+            hg.CurrentCaption = ws.GetRow(hg.Top)?.GetCell(hg.Left)?.ToString() ?? "";
 
         // First pass: gather anchored rows. A UniqueId on more than one row is only unsafe for ITEMIZED
         // (element) rows — that means a row was copied in Excel, so writing the element twice would double-apply,
