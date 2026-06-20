@@ -10,8 +10,11 @@ namespace Transom.Core;
 /// run-results report: bold = Applied, italic + red = Failed/Unverified.</summary>
 public enum ApplyOutcome { Pending, Applied, Failed, Unverified, Skipped }
 
-public sealed class ProposedChange
+public sealed class ProposedChange : System.ComponentModel.INotifyPropertyChanged
 {
+    public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
+    private void Notify(string name) => PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(name));
+
     public string UniqueId = "";
     public long TypeId;
     public int ParameterId;
@@ -64,7 +67,67 @@ public sealed class ProposedChange
     /// <summary>True when the field can't be changed by import (read-only / driven by the family or type selection). Shown greyed, not applied.</summary>
     public bool Frozen;
     public string FrozenReason = "";
-    public bool Selectable => !Frozen;
+
+    /// <summary>True when the user's entry parsed but wasn't in the schedule's unit format (e.g. typed "2.5", the
+    /// schedule shows "2'-6""). The change is built with the CANONICAL value in <see cref="NewValue"/> /
+    /// <see cref="NewDouble"/>, but it's shown in the preview as PENDING — the user confirms the interpretation
+    /// inline (the row-details strip under the row) before it can be applied. <see cref="EnteredValue"/> holds the
+    /// raw text they typed so the strip can show "you typed 2.5 → interpreted as 2'-6"". Confirming flips this false
+    /// and selects the row (TransomViewModel.ConfirmRow). Until then it is not selectable (can't be applied
+    /// half-interpreted). Replaces the old separate "reformat suggestion" fix-pane for parse-OK-wrong-format cells.</summary>
+    private bool _needsConfirm;
+    public bool NeedsConfirm
+    {
+        get => _needsConfirm;
+        set { if (_needsConfirm == value) return; _needsConfirm = value; Notify(nameof(NeedsConfirm)); Notify(nameof(Selectable)); }
+    }
+    /// <summary>The raw text the user typed for a <see cref="NeedsConfirm"/> change (e.g. "2.5"), shown in the
+    /// inline confirm strip next to the interpreted value. Empty for normal changes. MUST be a property (not a field)
+    /// — WPF data binding ignores public fields, so as a field the strip rendered "you typed """ (empty).</summary>
+    public string EnteredValue { get; set; } = "";
+
+    /// <summary>The column's unit spec id (ForgeTypeId string) for a numeric/length <see cref="NeedsConfirm"/>
+    /// change — lets <c>ConfirmRow</c> parse the value the user types in the inline box (e.g. "7"" instead of "7'-0"")
+    /// against the schedule's units ON CONFIRM. Empty for non-spec changes.</summary>
+    public string SpecTypeId = "";
+
+    /// <summary>The value shown in the inline confirm strip's EDITABLE box (bound TwoWay). Defaults to the user's
+    /// raw entry so they see exactly what they typed and can CORRECT it (e.g. change "7" to "7"") before confirming.
+    /// It is NOT interpreted as you type (that would interrupt typing) — only <c>ConfirmRow</c> parses it, on confirm.
+    /// Editing it clears any prior <see cref="ConfirmError"/> so a stale "try again" note doesn't linger.</summary>
+    private string _editValue = "";
+    public string EditValue
+    {
+        get => _editValue;
+        set { if (_editValue == value) return; _editValue = value; Notify(nameof(EditValue)); ConfirmError = ""; }
+    }
+
+    /// <summary>Set by <c>ConfirmRow</c> when the box value can't be parsed on confirm (e.g. junk) — shown IN the
+    /// confirm row so it asks again, and the row stays pending. Cleared when the user edits the box or confirms a
+    /// valid value. Empty = no error.</summary>
+    private string _confirmError = "";
+    public string ConfirmError
+    {
+        get => _confirmError;
+        set { if (_confirmError == value) return; _confirmError = value; Notify(nameof(ConfirmError)); Notify(nameof(HasConfirmError)); }
+    }
+    public bool HasConfirmError => !string.IsNullOrEmpty(_confirmError);
+
+    /// <summary>The interpretation CURRENTLY shown in the confirm row's "interpreted as …" line (e.g. "7'-0""). Set
+    /// at build to the entry's canonical form, and updated by <c>ConfirmRow</c> — but ONLY on confirm, never as you
+    /// type. The commit rule: confirming when the box re-parses to a value DIFFERENT from this re-prompts (updates
+    /// this to the new interpretation, stays pending); confirming when the box already matches this commits it to
+    /// <see cref="NewValue"/>. So a parsable value is always SHOWN and CONFIRMED before it changes the New cell.</summary>
+    private string _suggestion = "";
+    public string Suggestion
+    {
+        get => _suggestion;
+        set { if (_suggestion == value) return; _suggestion = value; Notify(nameof(Suggestion)); }
+    }
+
+    // An unconfirmed format-mismatched change can't be applied until the user confirms the interpretation, so it
+    // isn't selectable yet (the checkbox is disabled). Confirming clears NeedsConfirm → it becomes selectable.
+    public bool Selectable => !Frozen && !NeedsConfirm;
 
     /// <summary>True = a GEOMETRY-driving built-in instance param (Sill/Head Height, offsets) inside a group. Option 2
     /// is suppressed (replacing it would desync the schedule from the 3D model); the only in-group edit is Claude-
@@ -80,7 +143,7 @@ public sealed class ProposedChange
     public bool Selected
     {
         get => _selected;
-        set { if (_selected == value) return; _selected = value; SelectionChanged?.Invoke(); }
+        set { if (_selected == value) return; _selected = value; Notify(nameof(Selected)); SelectionChanged?.Invoke(); }
     }
     public string ElementName { get; set; } = "";
     public string Field { get; set; } = "";
@@ -89,7 +152,17 @@ public sealed class ProposedChange
     /// Empty falls back to Field.</summary>
     public string SourceHeading { get; set; } = "";
     public string OldValue { get; set; } = "";
-    public string NewValue { get; set; } = "";
+
+    /// <summary>The value shown in the preview's New cell. MUST notify — <c>ConfirmRow</c> updates it IN PLACE when
+    /// the user confirms/corrects an inline pending row (e.g. "2'-6"" → "4'-0""), and the grid's New cell binds to it;
+    /// without notification the cell kept showing the original suggestion (looked like "it just applies the suggested
+    /// value"). The old fix-pane flow rebuilt the whole grid via re-analysis, so it never needed this.</summary>
+    private string _newValue = "";
+    public string NewValue
+    {
+        get => _newValue;
+        set { if (_newValue == value) return; _newValue = value; Notify(nameof(NewValue)); }
+    }
     public int InstancesAffected { get; set; } = 1;
 
     /// <summary>The source schedule this change came from — its display name. Set once in <c>Summarize()</c>
@@ -153,6 +226,12 @@ public sealed class ConflictOption
     /// value, which is offered as "keep current"). The picker labels these "(entered value)" so the user can tell
     /// their own input apart from the current value.</summary>
     public bool IsEntered;
+
+    /// <summary>The option's value in the schedule's unit format (e.g. "2'-6"" for an entered "2.5"). The picker
+    /// shows <see cref="Display"/> (the raw entered text, so the user recognizes their input), but the RESOLVED
+    /// change shows this canonical form in its New cell — so a picked entry reads the same as the interpreted
+    /// value it will write. Equals Display for string options or when the entry was already canonical.</summary>
+    public string CanonicalDisplay = "";
 }
 
 public sealed class TypeConflict
@@ -162,6 +241,13 @@ public sealed class TypeConflict
     public string Field = "";
     public string TypeName = "";
     public string CurrentDisplay = "";
+    /// <summary>The type's CURRENT value as a double (length etc.) — lets the resolver drop a picked option whose
+    /// parsed value already equals the model (a no-op), even when the user picked an entered value like "7" that the
+    /// "keep current" string check (Display vs CurrentDisplay) wouldn't catch. NaN for string-valued conflicts.</summary>
+    public double CurrentDouble = double.NaN;
+    /// <summary>The column's unit spec id (ForgeTypeId string), carried so a resolved PENDING change can re-parse a
+    /// corrected value the user types in the inline confirm strip (ConfirmRow). Empty for string conflicts.</summary>
+    public string SpecTypeId = "";
     public int InstancesAffected;
     public List<ConflictOption> Options = new();
     /// <summary>C-7: the source schedule this conflict came from, carried through so the resolved change
@@ -262,6 +348,12 @@ public sealed class ChangeSet
     public ImportWorkbook? SourceWorkbook;
     public string DocCreationGuid = "";
 
+    /// <summary>The document's unit settings, captured at build time (API thread) so the inline confirm strip can
+    /// RE-PARSE a user-corrected value (e.g. "7"" instead of "7'-0"") on the UI thread without a re-Preview — drives
+    /// <c>TransomViewModel.ConfirmRow</c>. UnitFormatUtils.Parse/Format operate on this snapshot and need no
+    /// transaction. Null only for a degenerate change-set built without a doc.</summary>
+    public Units? Units;
+
     /// <summary>CHANGE 2 (§9): dependent ("inherited-change") schedules per driving (edited) schedule — the OTHER
     /// project schedules that display elements a driving schedule's TYPE/instance edits change. Keyed by the
     /// driving schedule's UniqueId → its dependents. Computed once in <c>BuildChangeSet</c> (API thread, one
@@ -272,6 +364,11 @@ public sealed class ChangeSet
     /// <summary>Revit warnings/errors raised during the apply commit (the ApplyFailureCollector's messages), kept so
     /// the FINAL by-uid log (rebuilt post-VerifyApplied) can still include them — see <c>FinalizeApplyReport</c>.</summary>
     public List<string> RevitApplyMessages = new();
+
+    /// <summary>Benign geometry-fixups Transom auto-applied during the commit so an edit could land (e.g. unjoined
+    /// elements, removed dimension references). Surfaced in the apply headline + a dedicated report section so the
+    /// user is WARNED the model geometry was adjusted — never silent.</summary>
+    public List<string> AutoFixWarnings = new();
 
     /// <summary>W1 (Task #17): elements Revit DELETED during apply that we did NOT ask to delete — captured from the
     /// <c>DocumentChanged</c> committed delta and scope-filtered to Transom's apply transactions. These are Revit's
@@ -375,6 +472,7 @@ public sealed class Importer
     {
         var cs = new ChangeSet { CrossModel = wb.SourceModelGuid != doc.CreationGUID.ToString() };
         var units = doc.GetUnits();
+        cs.Units = units;   // captured for the inline confirm strip's UI-thread re-parse (ConfirmRow)
 
         foreach (var sheet in wb.Sheets)
         {
@@ -653,22 +751,55 @@ public sealed class Importer
                     }
                     else if (param.StorageType == StorageType.Double && col.SpecTypeId != null)
                     {
-                        if (!UnitFormatUtils.TryParse(units, new ForgeTypeId(col.SpecTypeId), cellText, out double parsed))
-                        {
-                            cs.Skipped.Add(new SkippedItem { Reason = "unparseable", Detail = $"{col.FieldName} = '{cellText}'" });
-                            cs.Diagnostics.Add(Diag(sheet, row, col, label, "red", "value can't be parsed", cellText));
-                            continue;
-                        }
+                        bool parsedOk = UnitFormatUtils.TryParse(units, new ForgeTypeId(col.SpecTypeId), cellText, out double parsed);
                         if (binding == "type")
+                            // Record the cell EVEN IF it doesn't parse — an unreadable value ("ABC") must still reach the
+                            // type-conflict machinery so it shows up as a pickable option and then an inline confirm row,
+                            // NOT get silently dropped. Parsing is resolved later on the confirm line, never here.
                             RecordType(typeGroups, sheet, col, host!, param, label, row.ExcelRow, cellText);
-                        else if (Math.Abs(param.AsDouble() - parsed) >= 1e-9)
+                        else if (!parsedOk)
                         {
-                            // Always check the entered value is in the schedule's unit format; if not, ask to confirm.
-                            var canonical = ExcelCorrector.Canonical(units, new ForgeTypeId(col.SpecTypeId), parsed, cellText);
-                            if (!ExcelCorrector.SameFormat(cellText, canonical))
-                                cs.Reformats.Add(Reformat(sheet, row, col, label, cellText, canonical));
+                            // INSTANCE cell that can't be read → an inline PENDING row (box + Confirm), same as the
+                            // format-mismatch case, just with no interpretation yet — the confirm line asks for a usable
+                            // value. Never a silent drop. (Read-only/merged cells are filtered earlier, so this is an
+                            // editable cell the user typed junk into.)
+                            var modelDisp = param.AsValueString() ?? "";
+                            var ch = InstanceChange(el, col, modelDisp, "", false, "", 0);
+                            ch.NeedsConfirm = true;
+                            ch.EnteredValue = cellText;
+                            ch.SpecTypeId = col.SpecTypeId;
+                            ch.EditValue = cellText;
+                            ch.ConfirmError = $"enter a usable value for {col.FieldName} (e.g. 7' or 7\")";   // shown in the row immediately
+                            ch.Selected = false;
+                            cs.Changes.Add(Mark(doc, ch, elInGroup, elGroupName));
+                        }
+                        else
+                        {
+                            // Drop a TRUE no-op only: the workbook cell, AS WRITTEN, already equals the model's display
+                            // (e.g. cell "6'-8"" and the model shows "6'-8""). ANY other difference is shown — including
+                            // a trivial format-only one (cell "7" vs model "7'-0"", same length, different text): the user
+                            // must CONFIRM Transom's interpretation every time, never have it silently canonicalized.
+                            var modelDisp = param.AsValueString() ?? "";
+                            if (ExcelCorrector.SameFormat(cellText, modelDisp)) { /* no-op directly from the workbook */ }
                             else
-                                cs.Changes.Add(Mark(doc, InstanceChange(el, col, param.AsValueString() ?? "", cellText, false, "", parsed), elInGroup, elGroupName));
+                            {
+                                // The change carries the canonical New + the parsed double actually written. A cell not
+                                // already in the schedule's format becomes a PENDING row the user confirms inline
+                                // (NeedsConfirm) — incl. the trivial "7"→"7'-0"" case, which confirms then drops (its
+                                // confirmed value equals the model, removed by ConfirmRow).
+                                var canonical = ExcelCorrector.Canonical(units, new ForgeTypeId(col.SpecTypeId), parsed, cellText);
+                                var ch = InstanceChange(el, col, modelDisp, canonical, false, "", parsed);
+                                if (!ExcelCorrector.SameFormat(cellText, canonical))
+                                {
+                                    ch.NeedsConfirm = true;
+                                    ch.EnteredValue = cellText;
+                                    ch.SpecTypeId = col.SpecTypeId;
+                                    ch.EditValue = cellText;     // the box starts at what the user typed; interpreted only on Confirm
+                                    ch.Suggestion = canonical;   // the "interpreted as …" line shown until they confirm/re-prompt
+                                    ch.Selected = false;
+                                }
+                                cs.Changes.Add(Mark(doc, ch, elInGroup, elGroupName));
+                            }
                         }
                     }
                     // else: non-text/non-numeric (an ElementId / family-or-type selection) can't be set from a cell.
@@ -1478,15 +1609,10 @@ public sealed class Importer
                 if (param.StorageType == StorageType.String)
                     RecordTypeAll(col, cellText);
                 else if (param.StorageType == StorageType.Double && col.SpecTypeId != null)
-                {
-                    if (!UnitFormatUtils.TryParse(units, new ForgeTypeId(col.SpecTypeId), cellText, out _))
-                    {
-                        cs.Skipped.Add(new SkippedItem { Reason = "unparseable", Detail = $"{col.FieldName} = '{cellText}'" });
-                        cs.Diagnostics.Add(Diag(sheet, row, col, label, "red", "value can't be parsed", cellText));
-                        continue;
-                    }
+                    // Record the cell EVEN IF it doesn't parse — an unreadable value ("ABC") must still reach the
+                    // type-conflict machinery so it shows up as a pickable option and then an inline confirm row, not
+                    // get dropped to the bottom fix-pane. Parsing is resolved on the confirm line, never here.
                     RecordTypeAll(col, cellText);
-                }
                 // else: non-text/non-numeric type cell — §15-E drops the edit silently (no frozen change/diagnostic).
             }
             else if (binding == "instance")
@@ -1531,6 +1657,10 @@ public sealed class Importer
                 string str = "";
                 double dbl = 0;
                 int iv = 0;
+                // Pending-confirm state for a non-canonical numeric entry on this bulk cell (set in the Double branch).
+                bool bulkNeedsConfirm = false;
+                string bulkEntered = "";
+                string cellDisp = cellText;   // what the change shows as New (canonical when the entry was reformatted)
                 if (rparam.StorageType == StorageType.String) { isString = true; str = cellText; }
                 else if (rparam.StorageType == StorageType.Integer)
                 {
@@ -1551,10 +1681,14 @@ public sealed class Importer
                         continue;
                     }
                     var canonical = ExcelCorrector.Canonical(units, new ForgeTypeId(col.SpecTypeId), parsed, cellText);
+                    // Non-canonical entry → the resulting bulk change is shown PENDING (confirm inline), not parked in
+                    // a separate fix pane. The written value is the canonical 'parsed' double either way; display the
+                    // canonical form and remember the raw entry for the confirm strip.
                     if (!ExcelCorrector.SameFormat(cellText, canonical))
                     {
-                        cs.Reformats.Add(Reformat(sheet, row, col, label, cellText, canonical));
-                        continue;
+                        bulkNeedsConfirm = true;
+                        bulkEntered = cellText;
+                        cellDisp = canonical;
                     }
                     dbl = parsed;
                 }
@@ -1594,9 +1728,17 @@ public sealed class Importer
                     else ungrouped.Add(uid);
                 }
                 if (ungrouped.Count > 0)
-                    cs.Changes.Add(BulkChange(nameEl, col, ungrouped, oldDisp, cellText, isString, str, dbl, isInt, iv, row.UniqueId));
+                {
+                    var bc = BulkChange(nameEl, col, ungrouped, oldDisp, cellDisp, isString, str, dbl, isInt, iv, row.UniqueId);
+                    if (bulkNeedsConfirm) { bc.NeedsConfirm = true; bc.EnteredValue = bulkEntered; bc.SpecTypeId = col.SpecTypeId ?? ""; bc.EditValue = bulkEntered; bc.Suggestion = cellDisp; bc.Selected = false; }
+                    cs.Changes.Add(bc);
+                }
                 if (grouped.Count > 0)
-                    cs.Changes.Add(Mark(doc, BulkChange(nameEl, col, grouped, oldDisp, cellText, isString, str, dbl, isInt, iv, row.UniqueId), true, gName));
+                {
+                    var bc = BulkChange(nameEl, col, grouped, oldDisp, cellDisp, isString, str, dbl, isInt, iv, row.UniqueId);
+                    if (bulkNeedsConfirm) { bc.NeedsConfirm = true; bc.EnteredValue = bulkEntered; bc.SpecTypeId = col.SpecTypeId ?? ""; bc.EditValue = bulkEntered; bc.Suggestion = cellDisp; bc.Selected = false; }
+                    cs.Changes.Add(Mark(doc, bc, true, gName));
+                }
             }
             // binding == "none" -> parameter lives on neither host for this type; nothing to write.
         }
@@ -1643,24 +1785,36 @@ public sealed class Importer
 
         var oldDisp = string.IsNullOrEmpty(baseline) ? CurrentDisplay(rparam) : baseline;
         bool isString = false, isInt = false; string str = ""; double dbl = 0; int iv = 0;
+        // Pending-confirm state — an unreadable or non-canonical group-header value becomes an inline PENDING row
+        // (box + Confirm) like every other path, instead of dropping to a skip. Parsing is resolved on the confirm
+        // line, never here. (Only matters for field-grouped schedules — the door schedule has no group-header rows.)
+        bool ghNeedsConfirm = false; string ghEntered = ""; string ghSuggestion = ""; string ghError = ""; string ghDisp = cellText;
         if (rparam.StorageType == StorageType.String) { isString = true; str = cellText; }
         else if (rparam.StorageType == StorageType.Integer)
         {
             isInt = true;
             if (!TryParseInteger(IsYesNo(rparam), cellText, out iv))
             {
-                cs.Skipped.Add(new SkippedItem { Reason = "unparseable", Detail = $"{ghe.FieldName} = '{cellText}'" });
-                return;
+                ghNeedsConfirm = true; ghEntered = cellText; ghDisp = "";
+                ghError = $"enter a usable value for {ghe.FieldName}";
             }
         }
         else if (rparam.StorageType == StorageType.Double && ghe.SpecTypeId != null)
         {
             if (!UnitFormatUtils.TryParse(units, new ForgeTypeId(ghe.SpecTypeId), cellText, out double parsed))
             {
-                cs.Skipped.Add(new SkippedItem { Reason = "unparseable", Detail = $"{ghe.FieldName} = '{cellText}'" });
-                return;
+                ghNeedsConfirm = true; ghEntered = cellText; ghDisp = "";
+                ghError = $"enter a usable value for {ghe.FieldName} (e.g. 7' or 7\")";
             }
-            dbl = parsed;
+            else
+            {
+                dbl = parsed;
+                var canonical = ExcelCorrector.Canonical(units, new ForgeTypeId(ghe.SpecTypeId), parsed, cellText);
+                if (!ExcelCorrector.SameFormat(cellText, canonical))   // readable but not in schedule's format → confirm inline
+                {
+                    ghNeedsConfirm = true; ghEntered = cellText; ghSuggestion = canonical; ghDisp = canonical;
+                }
+            }
         }
         else
         {
@@ -1688,13 +1842,23 @@ public sealed class Importer
             if (gi) { ghGrouped.Add(uid); if (ghGroupName == "") ghGroupName = gn; }
             else ghUngrouped.Add(uid);
         }
-        ProposedChange MakeGh(List<string> bulk) => new()
+        ProposedChange MakeGh(List<string> bulk)
         {
-            ParameterId = ghe.ParameterId, Binding = "instance", BulkInstanceIds = bulk,
-            ElementName = label, Field = ghe.FieldName, OldValue = oldDisp, NewValue = cellText,
-            InstancesAffected = bulk.Count, IsString = isString, NewString = str, NewDouble = dbl, IsInt = isInt, NewInt = iv,
-            ReportRowUid = row.UniqueId,   // W2: overlay the partial-bulk outcome on this visible (type/group) row
-        };
+            var ch = new ProposedChange
+            {
+                ParameterId = ghe.ParameterId, Binding = "instance", BulkInstanceIds = bulk,
+                ElementName = label, Field = ghe.FieldName, OldValue = oldDisp, NewValue = ghDisp,
+                InstancesAffected = bulk.Count, IsString = isString, NewString = str, NewDouble = dbl, IsInt = isInt, NewInt = iv,
+                ReportRowUid = row.UniqueId,   // W2: overlay the partial-bulk outcome on this visible (type/group) row
+            };
+            if (ghNeedsConfirm)
+            {
+                ch.NeedsConfirm = true; ch.EnteredValue = ghEntered; ch.EditValue = ghEntered;
+                ch.SpecTypeId = ghe.SpecTypeId ?? ""; ch.Suggestion = ghSuggestion; ch.ConfirmError = ghError;
+                ch.Selected = false;
+            }
+            return ch;
+        }
         if (ghUngrouped.Count > 0) cs.Changes.Add(MakeGh(ghUngrouped));
         if (ghGrouped.Count > 0) cs.Changes.Add(Mark(doc, MakeGh(ghGrouped), true, ghGroupName));
     }
@@ -1796,23 +1960,10 @@ public sealed class Importer
             // instance count, not the number of schedule rows touched (~1). Falls back to cell count if unknown.
             int affects = typeCounts.TryGetValue(kv.Key.Item1, out var instCount) ? instCount : tc.Cells.Count;
 
-            // PER-ROW FORMAT RESOLUTION: a numeric/length value typed in a non-canonical-but-parseable format ("3",
-            // "1'4"") gets a per-row reformat-confirm in the preview ("interpreted as '3'-0"' — confirm"), exactly
-            // like an instance edit. This is independent of whether the row becomes a clean write or a conflict — the
-            // value still has to be interpreted. (A value already in the schedule's format adds nothing.) The user
-            // confirms in the Fix pane → re-Preview with the canonical text. Type/spec columns only (SpecTypeId set).
-            if (!tc.IsString && tc.SpecTypeId != null)
-                foreach (var cell in tc.Cells)
-                    if (UnitFormatUtils.TryParse(units, new ForgeTypeId(tc.SpecTypeId), cell.value, out double pd))
-                    {
-                        var canon = ExcelCorrector.Canonical(units, new ForgeTypeId(tc.SpecTypeId), pd, cell.value);
-                        if (!ExcelCorrector.SameFormat(cell.value, canon))
-                            cs.Reformats.Add(new ReformatSuggestion
-                            {
-                                SheetTabName = tc.SheetTab, ExcelRow = cell.excelRow, ExcelCol = tc.Col.ExcelCol,
-                                FieldName = tc.Col.FieldName, ElementLabel = cell.label, Entered = cell.value, Canonical = canon,
-                            });
-                    }
+            // PER-ROW FORMAT RESOLUTION is now carried on the resulting type CHANGE itself (NeedsConfirm, set at the
+            // clean-write site below) so a non-canonical entry ("3", "1'4"") shows as a PENDING preview row the user
+            // confirms inline — not as a separate fix-pane entry. A value that becomes a type CONFLICT is interpreted
+            // through the conflict picker instead (which already shows the entered value), so it needs no inline strip.
 
             // Distinct EDITED values. For a DOUBLE column dedup by PARSED value (1e-9), not raw text — so two rows
             // edited to the same width in different formats ("3" and "3'-0"") are ONE value, not a false conflict;
@@ -1839,6 +1990,8 @@ public sealed class Importer
                     Field = tc.Col.FieldName,
                     TypeName = tc.TypeName,
                     CurrentDisplay = tc.CurDisplay,
+                    CurrentDouble = tc.IsString ? double.NaN : tc.CurDouble,   // for the resolver's no-op drop
+                    SpecTypeId = tc.SpecTypeId ?? "",   // for the inline confirm strip's re-parse
                     InstancesAffected = affects,
                     ScheduleName = tc.ScheduleName, ScheduleUid = tc.ScheduleUid,   // C-7
                 };
@@ -1847,11 +2000,14 @@ public sealed class Importer
                     // Every value EXCEPT the type's current value is something the user TYPED — flag it so the picker
                     // labels it "(entered value)". (CurDisplay, folded in when unedited siblings exist, is the
                     // keep-current option, not a user entry.)
-                    var opt = new ConflictOption { Display = v, IsString = tc.IsString, NewString = v, IsEntered = editedDistinct.Contains(v) };
+                    var opt = new ConflictOption { Display = v, CanonicalDisplay = v, IsString = tc.IsString, NewString = v, IsEntered = editedDistinct.Contains(v) };
                     if (!tc.IsString)
                     {
                         opt.Parseable = UnitFormatUtils.TryParse(units, new ForgeTypeId(tc.SpecTypeId!), v, out double d);
                         opt.NewDouble = opt.Parseable ? d : 0;
+                        // The resolved change shows the value in the schedule's format, even though the picker shows
+                        // the raw entry "v" (so the user recognizes their input). Equals v when already canonical.
+                        if (opt.Parseable) opt.CanonicalDisplay = ExcelCorrector.Canonical(units, new ForgeTypeId(tc.SpecTypeId!), d, v);
                     }
                     conflict.Options.Add(opt);
                 }
@@ -1878,15 +2034,41 @@ public sealed class Importer
             {
                 if (!UnitFormatUtils.TryParse(units, new ForgeTypeId(tc.SpecTypeId!), value, out double parsed))
                 {
-                    cs.Skipped.Add(new SkippedItem { Reason = "unparseable", Detail = $"{tc.Col.FieldName} = '{value}'" });
+                    // Unreadable single type value ("ABC") → an inline PENDING row (box + Confirm), not a silent drop;
+                    // the confirm line asks for a usable value. Same treatment the conflict-picker path gives an
+                    // unreadable pick — kept consistent here for a type with no sibling disagreement.
+                    var chBad = TypeChange(kv.Key, tc, "", false, "", 0);
+                    chBad.InstancesAffected = affects;
+                    chBad.NeedsConfirm = true;
+                    chBad.EnteredValue = value;
+                    chBad.SpecTypeId = tc.SpecTypeId ?? "";
+                    chBad.EditValue = value;
+                    chBad.ConfirmError = $"enter a usable value for {tc.Col.FieldName} (e.g. 7' or 7\")";
+                    chBad.Selected = false;
+                    cs.Changes.Add(chBad);
                     continue;
                 }
-                if (Math.Abs(parsed - tc.CurDouble) < 1e-9) continue;
+                // Drop a TRUE no-op only: the entry AS WRITTEN already equals the type's current display. A trivial
+                // format-only difference ("7" vs current "7'-0"") is NOT dropped — it's shown PENDING so the user
+                // confirms the interpretation (and then ConfirmRow removes it because the confirmed value == model).
+                if (ExcelCorrector.SameFormat(value, tc.CurDisplay)) continue;
                 // #2: show the canonical formatted value (e.g. 1'-0") as New, not the raw cell text ("1"), so the
                 // preview reveals how a unit-less entry was interpreted instead of silently writing it.
                 var canonical = ExcelCorrector.Canonical(units, new ForgeTypeId(tc.SpecTypeId!), parsed, value);
                 var chD = TypeChange(kv.Key, tc, canonical, false, "", parsed);
                 chD.InstancesAffected = affects;
+                // A non-canonical entry ("3") becomes a PENDING change the user confirms inline (the value written
+                // is the canonical 'parsed' double either way; this only gates it behind a confirm + shows what
+                // they typed). A value already in the schedule's format applies as a normal change.
+                if (!ExcelCorrector.SameFormat(value, canonical))
+                {
+                    chD.NeedsConfirm = true;
+                    chD.EnteredValue = value;
+                    chD.SpecTypeId = tc.SpecTypeId ?? "";
+                    chD.EditValue = value;       // the box starts at what the user typed; interpreted only on Confirm
+                    chD.Suggestion = canonical;  // the "interpreted as …" line shown until they confirm/re-prompt
+                    chD.Selected = false;
+                }
                 cs.Changes.Add(chD);
             }
         }
@@ -1930,15 +2112,39 @@ public sealed class Importer
         return ids;
     }
 
-    public static ProposedChange ResolveToChange(TypeConflict c, ConflictOption opt) => new()
+    public static ProposedChange ResolveToChange(TypeConflict c, ConflictOption opt)
     {
-        TypeId = c.TypeId, ParameterId = c.ParameterId, Binding = "type", ElementName = c.TypeName,
-        Field = c.Field, OldValue = c.CurrentDisplay, NewValue = opt.Display, InstancesAffected = c.InstancesAffected,
-        IsString = opt.IsString, NewString = opt.NewString, NewDouble = opt.NewDouble,
-        // C-7: stamp the source schedule so this resolved conflict rolls up under its schedule's tri-state and a
-        // per-schedule deselect skips it (ChangesForSchedule matches on these — uid-first, name fallback).
-        SourceScheduleName = c.ScheduleName, SourceScheduleUid = c.ScheduleUid,
-    };
+        // The picker only chose WHICH value wins the conflict — it does NOT get to silently decide the FORMAT, and it
+        // accepts UNREADABLE picks too (e.g. "ABC"). Any non-string pick that isn't already in the schedule's format
+        // comes back PENDING (NeedsConfirm) so it's confirmed inline, every time:
+        //   • readable but non-canonical ("7" → "7'-0"") → shows the interpretation to confirm;
+        //   • unreadable ("ABC") → shows "enter a usable value" and waits for a fix.
+        // Already-canonical picks (and string options) apply directly.
+        string canonical = string.IsNullOrEmpty(opt.CanonicalDisplay) ? opt.Display : opt.CanonicalDisplay;
+        bool unreadable = !opt.IsString && !opt.Parseable;
+        bool reformat = !opt.IsString && opt.Parseable && opt.Display != canonical;
+        bool needsConfirm = unreadable || reformat;
+        return new()
+        {
+            TypeId = c.TypeId, ParameterId = c.ParameterId, Binding = "type", ElementName = c.TypeName,
+            // New shows the value in the schedule's format (the canonical/interpreted value) — but blank for an
+            // unreadable pick (nothing valid yet) and PENDING until confirmed.
+            Field = c.Field, OldValue = c.CurrentDisplay,
+            NewValue = unreadable ? "" : canonical,
+            InstancesAffected = c.InstancesAffected,
+            IsString = opt.IsString, NewString = opt.NewString, NewDouble = opt.NewDouble,
+            NeedsConfirm = needsConfirm,
+            EnteredValue = needsConfirm ? opt.Display : "",
+            EditValue = needsConfirm ? opt.Display : "",
+            Suggestion = reformat ? canonical : "",   // an unreadable pick has no interpretation to show
+            ConfirmError = unreadable ? $"enter a usable value for {c.Field} (e.g. 7' or 7\")" : "",
+            SpecTypeId = needsConfirm ? c.SpecTypeId : "",
+            Selected = !needsConfirm,
+            // C-7: stamp the source schedule so this resolved conflict rolls up under its schedule's tri-state and a
+            // per-schedule deselect skips it (ChangesForSchedule matches on these — uid-first, name fallback).
+            SourceScheduleName = c.ScheduleName, SourceScheduleUid = c.ScheduleUid,
+        };
+    }
 
     /// <summary>Collects (and quiets) Revit's own failures during the apply commit, so they land in the log
     /// instead of blocking on a dialog. Warnings are deleted (commit proceeds, unchanged behavior). ERRORS that
@@ -1951,6 +2157,9 @@ public sealed class Importer
     private sealed class ApplyFailureCollector : IFailuresPreprocessor
     {
         public readonly List<string> Messages = new();
+        /// <summary>Plain-language warnings for auto-resolved failures (joins removed / dimension references removed)
+        /// so the apply report can tell the user the model geometry was adjusted to let the change apply.</summary>
+        public readonly List<string> AutoFixWarnings = new();
         private int _passes;
 
         /// <summary>Resets the per-transaction pass counter. Call right after every tx.Start().</summary>
@@ -1989,12 +2198,28 @@ public sealed class Importer
                     // failure is never auto-resolved sight-unseen. (research-kb\resolution-whitelist.md §6a.)
                     if (IsAllowedFailure(f))
                     {
-                        Messages.Add($"[Error] {desc} — resolved: {rtName}" + (n > 0 ? $" — {n} element(s)" : "") + who);
-                        try { a.ResolveFailure(f); resolved++; } catch { /* ignore */ }
+                        // Resolve FIRST, then record — so the log/warning only ever claims a fix that ACTUALLY happened
+                        // (if ResolveFailure throws, we record nothing and the commit fails honestly).
+                        bool ok = false;
+                        try { a.ResolveFailure(f); ok = true; resolved++; } catch { /* resolution failed → record nothing */ }
+                        if (ok)
+                        {
+                            Messages.Add($"[Error] {desc} — resolved: {rtName}" + (n > 0 ? $" — {n} element(s)" : "") + who);
+                            // User-facing warning: a benign geometry-fixup was auto-applied so the edit could land. Name
+                            // the fix in plain terms (Revit's resolution caption) + the elements, so the user can review
+                            // what was adjusted (joins removed / dimension references removed).
+                            AutoFixWarnings.Add($"{desc.TrimEnd('.')} — auto-fixed by '{rtName}'" + (n > 0 ? $" on {n} element(s)" : "") + who);
+                        }
                     }
                     else
                     {
+                        // TEMP DIAGNOSTIC (2026-06-20): log the failure's actual FailureDefinitionId GUID so we can
+                        // identify WHICH join/geometry-failure variant is firing (the "Can't keep elements joined"
+                        // text maps to several distinct definition ids) and whitelist the correct one. Remove once
+                        // the right id is added to IsAllowedFailure.
+                        string fidGuid; try { fidGuid = f.GetFailureDefinitionId().Guid.ToString(); } catch { fidGuid = "(unavailable)"; }
                         Messages.Add($"[Error] {desc} — NOT auto-resolved (failure id not in allow-list); left for retry/report"
+                                     + $"  [DIAG failureDefinitionId.Guid={fidGuid}]"
                                      + (n > 0 ? $" — {n} element(s)" : "") + who);
                     }
                 }
@@ -2061,7 +2286,31 @@ public sealed class Importer
         /// </summary>
         internal static bool IsAllowedFailure(FailureMessageAccessor f)
         {
-            try { return f.GetFailureDefinitionId() == BuiltInFailures.JoinElementsFailures.CannotKeepJoined; }
+            try
+            {
+                var id = f.GetFailureDefinitionId();
+                // Benign geometry-fixup errors whose DEFAULT resolution IS the intended "just apply it" path — each
+                // observed live (2026-06-20) and user-confirmed to auto-resolve:
+                //   • CannotJoinElementsError (Guid 6650b20b…): the ACTUAL id behind the "Can't keep elements joined"
+                //     error that a door-type RESIZE raises between the host wall's finishes (Stone/Panel Siding) —
+                //     CONFIRMED live via the [DIAG …Guid=] instrumentation. Default resolution = Unjoin/Detach (the
+                //     apply path). NOTE: the "Can't keep elements joined" TEXT maps to several distinct definition ids;
+                //     this resize case is CannotJoinElementsError, NOT CannotKeepJoined — keep both whitelisted.
+                //   • CannotKeepJoined (Guid fe859f1c…): the other join variant (also Unjoin/Detach).
+                //   • DimensionReferencesInvalid (Guid b44c8ba0…, default = Remove Reference(s)): a resize invalidates
+                //     dimensions attached to the element — removing those references IS the apply path (user-directed).
+                // Each auto-resolution is SURFACED as a user warning (apply log + run report name it), so a silent
+                // geometric adjustment never happens unannounced. Other failures stay fail-closed (logged + refused).
+                //
+                // DO NOT whitelist "Instance(s) of <type> not cutting anything" (Guid c4c5d448-87fb-4622-acff-
+                // fdb957172dda). It was added then REVERTED (2026-06-20) after observing it live: its dialog is
+                // "Error - cannot be ignored" and its ONLY resolution is "Delete Instance(s)" — i.e. auto-resolving
+                // it DELETES the door, the opposite of "apply it anyway". Refusing it (rollback + report) is correct:
+                // the user is told the edit didn't take, and no geometry is destroyed.
+                return id == BuiltInFailures.JoinElementsFailures.CannotJoinElementsError
+                    || id == BuiltInFailures.JoinElementsFailures.CannotKeepJoined
+                    || id == BuiltInFailures.DimensionFailures.DimensionReferencesInvalid;
+            }
             catch { return false; }   // can't identify the failure → fail closed (do not resolve)
         }
     }
@@ -2274,12 +2523,14 @@ public sealed class Importer
         if (failed.Count > 0) msg += $", {failed.Count} failed";
         if (unverified.Count > 0) msg += $", {unverified.Count} unverified (value didn't take)";
         if (collector.Messages.Count > 0) msg += $"  —  {collector.Messages.Count} Revit warning(s) (see log)";
+        if (collector.AutoFixWarnings.Count > 0) msg += $"  —  ⚠ {collector.AutoFixWarnings.Count} geometry auto-fix(es) applied (joins/dim refs removed — review)";
         if (newParamNote.Length > 0) msg += $"  —  {newParamNote}";
         // Header renames are folded into `applied` above; call them out so the user sees the caption edits landed.
         int hdrApplied = cs.HeaderChanges.Count(h => h.Selected && h.Outcome == ApplyOutcome.Applied);
         if (hdrApplied > 0) msg += $"  —  {hdrApplied} column heading(s) renamed";
         msg += $". {cs.Skipped.Count(s => s.UserRelevant)} skipped.";   // #64: post-apply count = preview UserRelevant count
 
+        cs.AutoFixWarnings = new List<string>(collector.AutoFixWarnings);
         cs.RevitApplyMessages = new List<string>(collector.Messages);
         cs.DiagnosticLog = BuildApplyLog(applied, failed, unverified, collector.Messages, cs);
         return msg;
@@ -2481,6 +2732,10 @@ public sealed class Importer
                    (errCount > 0 ? $"; {errCount} error(s) blocked the commit (see log)." : " (see log).");
         }
 
+        // Carry the auto-fix warnings recorded during the per-change RETRY transactions (the same collector accumulates
+        // them) — this is the path our join/dimension-ref auto-resolve actually lands on (bulk rollback → retry), so
+        // without this the "geometry auto-fix applied" warning would be silent exactly where it matters most.
+        cs.AutoFixWarnings = new List<string>(collector.AutoFixWarnings);
         cs.RevitApplyMessages = new List<string>(collector.Messages);
         cs.DiagnosticLog = BuildApplyLog(applied, failed, unverified, collector.Messages, cs,
             retryNote: $"*** Initial bulk commit was ROLLED BACK by Revit ({attempted} write(s) discarded); every change was retried in its own transaction. ***\n" +
@@ -2620,6 +2875,7 @@ public sealed class Importer
         }
         if (skippedAbsent.Count > 0) msg += $", {skippedAbsent.Count} skipped (no such parameter on the element)";
         if (stillUnverified.Count > 0) msg += $", {stillUnverified.Count} unverified";
+        if (cs.AutoFixWarnings.Count > 0) msg += $". ⚠ {cs.AutoFixWarnings.Count} geometry auto-fix(es) applied to let edits land (joins / dimension references removed) — review the apply log";
         msg += $". {cs.Skipped.Count(s => s.UserRelevant)} skipped.";   // #64: post-apply count = preview UserRelevant count
         return msg;
     }
@@ -2672,6 +2928,16 @@ public sealed class Importer
             int o2Failed = o2.Count(c => c.Outcome == ApplyOutcome.Failed);
             sb.AppendLine($"option 2 (column→parameter conversion): {o2.Count} change(s) converted "
                           + $"({o2Applied} applied / {o2Failed} failed / {cs.Option2Warnings.Count} type(s) left blank) — see section below");
+        }
+
+        // WARN the user about benign geometry-fixups Transom auto-applied so an edit could land (joins removed /
+        // dimension references removed). These are NOT failures — the edit succeeded — but the model geometry was
+        // adjusted, so the user must be told to review.
+        if (cs.AutoFixWarnings.Count > 0)
+        {
+            sb.AppendLine($"\n== ⚠ geometry auto-fixes applied (review — model geometry was adjusted to let edits land): {cs.AutoFixWarnings.Count} ==");
+            foreach (var w in cs.AutoFixWarnings.Take(cap)) sb.AppendLine("  - " + w);
+            if (cs.AutoFixWarnings.Count > cap) sb.AppendLine($"  … +{cs.AutoFixWarnings.Count - cap} more");
         }
 
         // Preserve the Revit warnings/errors captured during the commit (carried on the changeset).

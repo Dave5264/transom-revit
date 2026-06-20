@@ -39,12 +39,15 @@ public sealed class ImportEventHandler : IExternalEventHandler
             {
                 var wb = new ExcelReader().Read(WorkbookPath, SelectedSheetTabs);   // §16: scoped to picked tabs when set
 
-                // Apply any user-supplied fixes for previously-unparseable cells. Values already in the
-                // schedule's unit format are written back into the workbook; values that parse but differ
-                // come back as reformat suggestions to confirm.
+                // Apply any user-supplied fixes for previously-unparseable cells IN MEMORY only — we never write
+                // the user's workbook file. Values already in the schedule's unit format are accepted for this
+                // import; values that parse but differ come back as reformat suggestions to confirm.
                 System.Collections.Generic.List<ReformatSuggestion> reformats = new();
                 if (Corrections != null && Corrections.Count > 0)
-                    reformats = ExcelCorrector.Apply(WorkbookPath, wb, Corrections, doc.GetUnits()).Reformats;
+                {
+                    var corr = ExcelCorrector.Apply(wb, Corrections, doc.GetUnits());
+                    reformats = corr.Reformats;
+                }
 
                 var cs = new Importer().BuildChangeSet(doc, wb);
                 // Merge — BuildChangeSet itself parks parse-OK-but-wrong-format cells in cs.Reformats;

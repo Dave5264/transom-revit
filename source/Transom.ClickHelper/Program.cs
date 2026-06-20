@@ -40,16 +40,18 @@ internal static class Program
     private static int Main(string[] rawArgs)
     {
         // Declare per-monitor DPI awareness BEFORE any window/coordinate work so screen rectangles,
-        // cursor positioning, and screen capture all operate in true physical pixels.
-        TryBecomeDpiAware();
+        // cursor positioning, and screen capture all operate in true physical pixels. Capture what was
+        // actually achieved — a virtualized-coords run silently mis-clicks on scaled displays, so every
+        // command surfaces this (see RunScreenshot/RunStatus) instead of failing invisibly.
+        _dpiAwareness = TryBecomeDpiAware();
 
         var args = new ArgSet(rawArgs);
         _json = args.Has("--json");
         var command = args.Positional.FirstOrDefault()?.ToLowerInvariant() ?? "";
 
-        const string usage = "edit | finish | cancel | click-id <id> | click-xy <x> <y> | " +
+        const string usage = "edit | finish | cancel | click-id <id> | click-name <text> | click-xy <x> <y> | " +
                              "key <combo> | type <text> | find <text> | dialogs | click-dialog <button> | " +
-                             "tile | screenshot | list | status";
+                             "tile | restore [--window <title>] | screenshot | list | status";
         try
         {
             return command switch
@@ -58,6 +60,7 @@ internal static class Program
                 "finish"       => RunInvoke(args, ButtonSpec.FinishGroup),
                 "cancel"       => RunInvoke(args, ButtonSpec.CancelGroup),
                 "click-id"     => RunClickById(args),
+                "click-name"   => RunClickByName(args),
                 "click-xy"     => RunClickXy(args),
                 "key"          => RunKey(args),
                 "keys"         => RunKeys(args),
@@ -67,6 +70,8 @@ internal static class Program
                 "dialogs"      => RunDialogs(args),
                 "click-dialog" => RunClickDialog(args),
                 "tile"         => RunTile(args),
+                "restore"      => RunRestore(args),
+                "activate"     => RunRestore(args),
                 "screenshot"   => RunScreenshot(args),
                 "list"         => RunList(args),
                 "status"       => RunStatus(args),
@@ -167,6 +172,142 @@ internal static class Program
     }
 
     /// <summary>
+    ///     General LITERAL-MOUSE-CLICK on a control found by its UI-Automation NAME (and optional control
+    ///     type), in ANY target window — Revit ribbon fields, Windows dialogs, the Transom Hub, etc. This is
+    ///     the DPI-/scale-proof path the user asked for: it resolves the control's UIA BoundingRectangle
+    ///     (which UIA reports in CORRECT physical pixels at any scaling) and performs a REAL SetCursorPos +
+    ///     mouse click at its centre — no screenshot-pixel arithmetic, no origin/scale assumptions, so it
+    ///     cannot miss the way the coordinate path does. Prefers the literal click over InvokePattern because
+    ///     the user wants a true mouse click (hover/focus side-effects matter); Invoke is only a last resort
+    ///     if there is no usable on-screen rect.
+    ///
+    ///     Usage: click-name "Apply"  [--control Button|Edit|RadioButton|CheckBox|...]  [--exact]  [--timeout MS]
+    ///       --control : restrict to a UIA ControlType (reduces ambiguity — e.g. the Edit box vs a label).
+    ///       --exact   : require an exact Name match (default: case-insensitive substring).
+    ///     Note: the model VIEWPORT canvas is NOT in the UIA tree (DirectX), so geometry can't be targeted
+    ///     this way — use the bridge model→screen projection + click-xy for that.
+    /// </summary>
+    private static int RunClickByName(ArgSet args)
+    {
+        string? name = args.Positional.Skip(1).FirstOrDefault();
+        if (string.IsNullOrWhiteSpace(name))
+            return Fail("click-name needs a control name, e.g. click-name \"Apply\" [--control Button] [--exact]", 2);
+
+        if (!TryGetRevitRoot(args, out var root, out var proc, out var error)) return Fail(error, 4);
+
+        bool exact = args.Has("--exact");
+        string? wantType = args.GetString("--control");   // optional UIA ControlType local name, e.g. "Button", "Edit"
+        int timeoutMs = args.GetInt("--timeout", 4000);
+        var deadline = Environment.TickCount64 + timeoutMs;
+
+        AutomationElement? match = null;
+        do
+        {
+            // Name match: exact uses a server-side PropertyCondition (fast); substring scans descendants.
+            AutomationElementCollection hits = exact
+                ? root!.FindAll(TreeScope.Descendants, new PropertyCondition(AutomationElement.NameProperty, name))
+                : root!.FindAll(TreeScope.Descendants, Condition.TrueCondition);
+
+            var candidates = new List<AutomationElement>();
+            foreach (AutomationElement e in hits)
+            {
+                if (!exact)
+                {
+                    var nm = SafeName(e);
+                    if (nm.Length == 0 || nm.IndexOf(name, StringComparison.OrdinalIgnoreCase) < 0) continue;
+                }
+                if (wantType != null)
+                {
+                    var ct = SafeProp(e, AutomationElement.ControlTypeProperty);   // e.g. "ControlType.Button"
+                    if (ct.IndexOf(wantType, StringComparison.OrdinalIgnoreCase) < 0) continue;
+                }
+                candidates.Add(e);
+            }
+
+            // Prefer an on-screen, enabled control; among those, the SMALLEST rect (most specific — avoids
+            // picking a big container whose Name happens to contain the text). PickBest handles enabled/onscreen;
+            // we add the smallest-area tiebreak here.
+            match = PickSmallestOnScreen(candidates);
+            if (match != null) break;
+            Thread.Sleep(150);
+        } while (Environment.TickCount64 < deadline);
+
+        if (match == null)
+            return Fail($"no {(wantType ?? "control")} named {(exact ? "" : "~")}'{name}' is currently on screen.", 5);
+
+        // LITERAL mouse click at the UIA rect centre (DPI-correct physical coords) — the requested real click.
+        var rect = SafeRect(match);
+        string how;
+        if (rect is { Width: > 0, Height: > 0 })
+        {
+            int cx = (int)Math.Round(rect.Value.Left + rect.Value.Width / 2);
+            int cy = (int)Math.Round(rect.Value.Top + rect.Value.Height / 2);
+            TryActivate(proc!);                       // control must be on a foreground, non-occluded window
+            GetCursorPos(out var savedX, out var savedY);
+            ClickAt(cx, cy);
+            if (!args.Has("--keep-cursor")) SetCursorPos(savedX, savedY);
+            how = "MouseClick";
+        }
+        else
+        {
+            // No usable rect (off-screen/zero-size) → last resort: InvokePattern (NOT a literal click).
+            var (ok, viaHow, invErr) = InvokeElement(match, proc!);
+            if (!ok) return Fail($"found '{name}' but it has no on-screen rect and could not be invoked: {invErr}", 6);
+            how = viaHow;
+        }
+
+        var rc2 = SafeRect(match);
+        var (winDpi, scalePct) = WindowDpi(ResolveTargetWindow(args, proc!));
+        var result = new Dictionary<string, object?>
+        {
+            ["action"] = "click-name",
+            ["name"] = SafeName(match),
+            ["controlType"] = SafeProp(match, AutomationElement.ControlTypeProperty),
+            ["how"] = how,
+            ["x"] = rc2 is { } r ? (int)Math.Round(r.Left + r.Width / 2) : 0,
+            ["y"] = rc2 is { } r2 ? (int)Math.Round(r2.Top + r2.Height / 2) : 0,
+            ["dpiAwareness"] = _dpiAwareness,
+            ["scalePct"] = scalePct,
+            ["pid"] = proc!.Id,
+        };
+        AddAfterShot(args, proc!, result);   // "screenshot between every click" (--shot)
+        return Ok(result);
+    }
+
+    /// <summary>Among UIA candidates, pick the most specific clickable target: prefer enabled + on-screen with
+    /// a real rect, smallest area first (a tight control, not a big container that merely CONTAINS the text).
+    /// If none are on-screen with a rect, fall back to the enabled &gt; on-screen &gt; invokable scorer so an
+    /// offscreen-but-invokable match can still be Invoked.</summary>
+    private static AutomationElement? PickSmallestOnScreen(List<AutomationElement> els)
+    {
+        AutomationElement? best = null;
+        double bestArea = double.MaxValue;
+        foreach (var e in els)
+        {
+            if (!SafeBool(e, AutomationElement.IsEnabledProperty)) continue;
+            if (SafeBool(e, AutomationElement.IsOffscreenProperty)) continue;
+            var r = SafeRect(e);
+            if (r is not { Width: > 0, Height: > 0 }) continue;
+            double area = r.Value.Width * r.Value.Height;
+            if (area < bestArea) { bestArea = area; best = e; }
+        }
+        if (best != null) return best;
+
+        // Fallback: nothing enabled+on-screen with a rect — score the same way RunClickById's PickBest does
+        // (enabled > on-screen > invokable) so an offscreen-but-invokable control is still usable via Invoke.
+        int bestScore = -1;
+        foreach (var e in els)
+        {
+            int s = 0;
+            if (SafeBool(e, AutomationElement.IsEnabledProperty)) s += 4;
+            if (!SafeBool(e, AutomationElement.IsOffscreenProperty)) s += 2;
+            if (SafeBool(e, AutomationElement.IsInvokePatternAvailableProperty)) s += 1;
+            if (s > bestScore) { bestScore = s; best = e; }
+        }
+        return best;
+    }
+
+    /// <summary>
     ///     Pixel fallback: click an absolute screen coordinate. This is the diagram's "Pixel ID for Click"
     ///     path — used only when there is no named element to target.
     /// </summary>
@@ -175,16 +316,63 @@ internal static class Program
         var nums = args.Positional.Skip(1).ToList();
         if (nums.Count < 2 ||
             !int.TryParse(nums[0], out int x) || !int.TryParse(nums[1], out int y))
-            return Fail("click-xy needs two integers: click-xy <x> <y> (absolute screen pixels)", 2);
+            return Fail("click-xy needs two integers: click-xy <x> <y>  " +
+                        "(absolute screen px; OR window-relative px when --window <title> is given). " +
+                        "Flags: --window <title> (target that owned window — e.g. the non-modal Transom Hub — " +
+                        "and raise IT, not the main frame; coords become relative to its origin), " +
+                        "--no-activate (don't raise any window; click whatever is topmost under the point).", 2);
 
-        // Bring Revit forward so the click lands on it (best effort; ok if there is no single Revit).
-        if (TryGetRevitRoot(args, out _, out var proc, out _)) TryActivate(proc!);
+        TryGetRevitRoot(args, out _, out var proc, out _);
+
+        // ISSUE-1 FIX (2026-06-20): honour --window for click-xy. The Transom HUB is a NON-MODAL owned window;
+        // the old code always raised the MAIN Revit frame (TryActivate → GetBestRevitWindow), which pushed the
+        // Hub BEHIND, so a coordinate then landed on main. Now:
+        //   • --window <title> → resolve THAT window (the Hub), raise IT (ForceForeground on its HWND, not main),
+        //     and treat x,y as RELATIVE to its origin (matches `screenshot --window`'s reported origin) so the
+        //     caller passes in-window coords directly.
+        //   • no --window → legacy behaviour: absolute coords, raise the main frame.
+        //   • --no-activate → raise NOTHING; click the topmost window already under the point as-is.
+        bool windowGiven = !string.IsNullOrWhiteSpace(args.GetString("--window"));
+        bool noActivate = args.Has("--no-activate");
+        IntPtr targetWin = IntPtr.Zero;
+        bool restored = false;
+        if (proc != null)
+        {
+            targetWin = ResolveTargetWindow(args, proc);
+            // A MINIMIZED target is at -32000 — a window-relative click would land off-screen (the exact
+            // silent-miss trap). Un-minimize it first when --window is given so the relative coords are real.
+            if (windowGiven) restored = EnsureRestored(targetWin);
+            if (!noActivate)
+            {
+                if (windowGiven && targetWin != IntPtr.Zero) ForceForeground(targetWin);  // raise the Hub, not main
+                else TryActivate(proc);                                                    // legacy: raise main
+            }
+        }
+
+        // Window-relative → absolute: add the target window's screen origin so the caller can pass coords
+        // straight off a `screenshot --window` of that same window.
+        int sx = x, sy = y;
+        if (windowGiven && targetWin != IntPtr.Zero && GetWindowRect(targetWin, out var wr))
+        {
+            sx = wr.Left + x;
+            sy = wr.Top + y;
+        }
 
         GetCursorPos(out int savedX, out int savedY);
-        ClickAt(x, y);
+        ClickAt(sx, sy);
         if (!args.Has("--keep-cursor")) SetCursorPos(savedX, savedY);
 
-        return Ok(new() { ["action"] = "click-xy", ["x"] = x, ["y"] = y });
+        var result = new Dictionary<string, object?>
+        {
+            ["action"] = "click-xy", ["x"] = sx, ["y"] = sy,
+            ["relativeTo"] = windowGiven ? (args.GetString("--window") ?? "") : "screen",
+            ["raised"] = noActivate ? "none" : (windowGiven && targetWin != IntPtr.Zero ? "window" : "main"),
+            ["restoredFromMinimized"] = restored,   // true = target was minimized and we un-minimized it first
+        };
+        // "screenshot between every click": --shot captures the post-click state (the API can't report it
+        // during group edit). proc may be null if no single Revit resolved — only shoot when we have one.
+        if (proc != null) AddAfterShot(args, proc, result);
+        return Ok(result);
     }
 
     /// <summary>
@@ -428,6 +616,9 @@ internal static class Program
         if (!TryGetRevitRoot(args, out _, out var proc, out var error) || proc is null) return Fail(error, 4);
 
         var hwnd = ResolveTargetWindow(args, proc);
+        // A MINIMIZED target sits off-screen at -32000 — capturing it returns a 160x28 placeholder, not the UI.
+        // Auto-restore first (the trap was silently "capturing" that placeholder repeatedly with an OK status).
+        bool restored = EnsureRestored(hwnd);
         if (!GetWindowRect(hwnd, out var rc))
             return Fail("could not read the Revit window rectangle.", 5);
 
@@ -467,6 +658,7 @@ internal static class Program
             bmp.Save(outPath, System.Drawing.Imaging.ImageFormat.Png);
         }
 
+        var (winDpi, scalePct) = WindowDpi(hwnd);
         return Ok(new()
         {
             ["action"] = "screenshot",
@@ -474,7 +666,73 @@ internal static class Program
             ["path"] = outPath,
             ["x"] = rc.Left, ["y"] = rc.Top, ["width"] = w, ["height"] = h,
             ["pid"] = proc.Id,
+            // DPI surfacing (so a scaled-display miss is never invisible): the process DPI awareness we
+            // actually achieved, and the target window's monitor scale. x,y,width,height above are PHYSICAL
+            // pixels — valid for SetCursorPos/click coords ONLY when dpiAwareness == "PerMonitorV2". If it is
+            // NOT PerMonitorV2, or scalePct != 100, treat coord clicks as suspect (use UIA element clicks).
+            ["dpiAwareness"] = _dpiAwareness,
+            ["windowDpi"] = (int)winDpi,
+            ["scalePct"] = scalePct,
+            ["restoredFromMinimized"] = restored,   // true = target was minimized and we un-minimized it to capture
         });
+    }
+
+    /// <summary>
+    ///     Capture the Revit window to a PNG file and return the method used ("printwindow"/"screen"/
+    ///     "screen-fallback"), or "" on failure. Shared by RunScreenshot and the click commands' --shot
+    ///     after-click capture (the "screenshot between every click" loop the API-locked group-edit flow
+    ///     needs — there's no API to query state, so the only way to know the result of a click is to LOOK).
+    ///     --screen forces the composited on-screen grab (faithful viewport; brings Revit forward), which is
+    ///     what "see exactly what's on screen now" wants during group edit.
+    /// </summary>
+    private static string CaptureRevitWindow(IntPtr hwnd, Process proc, string outPath, bool useScreen)
+    {
+        if (!GetWindowRect(hwnd, out var rc)) return "";
+        int w = rc.Right - rc.Left, h = rc.Bottom - rc.Top;
+        if (w <= 0 || h <= 0) return "";
+        string method = useScreen ? "screen" : "printwindow";
+        try
+        {
+            using var bmp = new System.Drawing.Bitmap(w, h, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+            using (var g = System.Drawing.Graphics.FromImage(bmp))
+            {
+                bool captured = false;
+                if (!useScreen)
+                {
+                    IntPtr hdc = g.GetHdc();
+                    try { captured = PrintWindow(hwnd, hdc, PW_RENDERFULLCONTENT); }
+                    finally { g.ReleaseHdc(hdc); }
+                }
+                if (!captured)
+                {
+                    TryActivate(proc);
+                    using var g2 = System.Drawing.Graphics.FromImage(bmp);
+                    g2.CopyFromScreen(rc.Left, rc.Top, 0, 0, new System.Drawing.Size(w, h));
+                    method = useScreen ? "screen" : "screen-fallback";
+                }
+            }
+            bmp.Save(outPath, System.Drawing.Imaging.ImageFormat.Png);
+            return method;
+        }
+        catch { return ""; }
+    }
+
+    /// <summary>After a click, honour --shot &lt;path&gt; by capturing a FRESH screenshot of the post-click
+    /// screen state and folding its path/method into the result. Enforces "screenshot between every click":
+    /// the API can't report the new state (locked in group edit), so the click's after-image IS the state.
+    /// --shot-screen forces the composited on-screen grab (faithful for the viewport during group edit).</summary>
+    private static void AddAfterShot(ArgSet args, Process proc, Dictionary<string, object?> result)
+    {
+        var shotPath = args.GetString("--shot");
+        if (string.IsNullOrWhiteSpace(shotPath)) return;
+        try
+        {
+            var hwnd = ResolveTargetWindow(args, proc);
+            var method = CaptureRevitWindow(hwnd, proc, shotPath!, args.Has("--shot-screen"));
+            result["shotPath"] = shotPath!;
+            result["shotMethod"] = method.Length > 0 ? method : "failed";
+        }
+        catch { result["shotMethod"] = "failed"; }
     }
 
     /// <summary>
@@ -651,6 +909,45 @@ internal static class Program
             return true;
         }, IntPtr.Zero);
         return list;
+    }
+
+    /// <summary>
+    ///     Un-minimize + foreground the --window-matched window (or the main Revit frame). This is the whole of
+    ///     the 2-second user action "click the taskbar to bring the Hub back": ShowWindow(SW_RESTORE) then
+    ///     foreground. A minimized window sits at -32000,-32000 (off-screen), so click-xy/screenshot can't act
+    ///     on it until it's restored — hence this primitive + the auto-restore guard in those commands.
+    ///     Usage: restore [--window <title>]   (alias: activate)
+    /// </summary>
+    private static int RunRestore(ArgSet args)
+    {
+        if (!TryGetRevitRoot(args, out _, out var proc, out var error) || proc is null) return Fail(error, 4);
+        var hwnd = ResolveTargetWindow(args, proc);
+        if (hwnd == IntPtr.Zero) return Fail("could not resolve a target window to restore.", 5);
+        bool wasIconic = IsIconic(hwnd);
+        if (wasIconic) ShowWindow(hwnd, SW_RESTORE);
+        ForceForeground(hwnd);
+        var (winDpi, scalePct) = WindowDpi(hwnd);
+        GetWindowRect(hwnd, out var rc);
+        return Ok(new()
+        {
+            ["action"] = "restore",
+            ["window"] = args.GetString("--window") ?? "(main)",
+            ["wasMinimized"] = wasIconic,
+            ["x"] = rc.Left, ["y"] = rc.Top, ["width"] = rc.Right - rc.Left, ["height"] = rc.Bottom - rc.Top,
+            ["scalePct"] = scalePct,
+            ["pid"] = proc.Id,
+        });
+    }
+
+    /// <summary>If the window is MINIMIZED (off-screen at -32000), restore it so a click/capture can land —
+    /// returns true if it had to restore. The silent-act-on-(-32000) behavior was the time-eating trap; commands
+    /// that operate on a window's pixels call this first.</summary>
+    private static bool EnsureRestored(IntPtr hwnd)
+    {
+        if (hwnd == IntPtr.Zero || !IsIconic(hwnd)) return false;
+        ShowWindow(hwnd, SW_RESTORE);
+        Thread.Sleep(120);   // let the restore animation settle so GetWindowRect returns the real rect
+        return true;
     }
 
     private static string GetClass(IntPtr h)
@@ -1241,6 +1538,7 @@ internal static class Program
     [DllImport("user32.dll")] private static extern bool EnumWindows(EnumWindowsProc cb, IntPtr lParam);
     [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
     [DllImport("user32.dll")] private static extern bool IsWindowVisible(IntPtr hWnd);
+    [DllImport("user32.dll")] private static extern bool IsIconic(IntPtr hWnd);   // window is MINIMIZED
     [DllImport("user32.dll")] private static extern int GetWindowTextLength(IntPtr hWnd);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetClassName(IntPtr hWnd, StringBuilder s, int max);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetWindowText(IntPtr hWnd, StringBuilder s, int max);
@@ -1262,14 +1560,55 @@ internal static class Program
 
     [DllImport("user32.dll")] private static extern bool SetProcessDpiAwarenessContext(IntPtr value);
     [DllImport("user32.dll")] private static extern bool SetProcessDPIAware();
+    [DllImport("user32.dll")] private static extern IntPtr GetThreadDpiAwarenessContext();
+    [DllImport("user32.dll")] private static extern bool AreDpiAwarenessContextsEqual(IntPtr a, IntPtr b);
+    [DllImport("user32.dll")] private static extern uint GetDpiForWindow(IntPtr hWnd);
     private static readonly IntPtr DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = new(-4);
 
-    /// <summary>Best-effort per-monitor-v2 DPI awareness; falls back to system-DPI-aware on older Windows.</summary>
-    private static void TryBecomeDpiAware()
+    /// <summary>
+    ///     Make this process PER-MONITOR-v2 DPI aware, as EARLY as managed code can (first line of Main),
+    ///     so UIA BoundingRectangle, GetWindowRect, SetCursorPos and CopyFromScreen all operate in true
+    ///     PHYSICAL pixels on any scaled/multi-monitor layout. If this does NOT take, the process is
+    ///     virtualized: GetWindowRect returns LOGICAL px while SetCursorPos expects PHYSICAL px → a
+    ///     systematic offset that misses small targets on a non-100% display (the cross-app missed-click
+    ///     bug). Returns the awareness actually achieved so callers can SURFACE it (a click tool must never
+    ///     silently run virtualized). Order: WinForms SetHighDpiMode (the SDK-sanctioned path that pairs
+    ///     with &lt;ApplicationHighDpiMode&gt;PerMonitorV2&gt;) → raw PMv2 context → system-aware fallback.
+    /// </summary>
+    private static string TryBecomeDpiAware()
     {
-        try { if (SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2)) return; }
+        // WinForms wrapper: the sanctioned mechanism with UseWindowsForms; internally sets the PMv2 context,
+        // and is safe to call from a console Main before any window exists.
+        try { System.Windows.Forms.Application.SetHighDpiMode(System.Windows.Forms.HighDpiMode.PerMonitorV2); }
+        catch { /* fall through to the raw API */ }
+        try { if (SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2)) return "PerMonitorV2"; }
         catch { /* API not present pre-1703 */ }
-        try { SetProcessDPIAware(); } catch { /* ignore */ }
+        // Already-set returns false with ERROR_ACCESS_DENIED — verify whether PMv2 is in effect anyway.
+        try
+        {
+            var ctx = GetThreadDpiAwarenessContext();
+            if (AreDpiAwarenessContextsEqual(ctx, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2)) return "PerMonitorV2";
+        }
+        catch { /* getter not present */ }
+        try { if (SetProcessDPIAware()) return "System"; } catch { /* ignore */ }
+        return "Unknown";
+    }
+
+    /// <summary>The DPI awareness this process actually achieved (set once at startup). Surfaced in command
+    /// output so a virtualized-coords run (which silently mis-clicks on scaled displays) is never invisible.</summary>
+    private static string _dpiAwareness = "Unknown";
+
+    /// <summary>The DPI / scale% of the monitor a window is on (96 dpi = 100%). Lets every coordinate result
+    /// report the scale so a caller never assumes 100% and a scale-driven miss is diagnosable.</summary>
+    private static (uint dpi, int scalePct) WindowDpi(IntPtr hwnd)
+    {
+        try
+        {
+            uint d = GetDpiForWindow(hwnd);
+            if (d == 0) d = 96;
+            return (d, (int)Math.Round(d * 100.0 / 96.0));
+        }
+        catch { return (96, 100); }
     }
 
     private static void GetCursorPos(out int x, out int y)

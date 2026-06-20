@@ -369,7 +369,8 @@
                                 <Button Content="Apply selected" Height="32" Padding="16,0" Margin="8,0,0,0"
                                         Background="{DynamicResource Accent}" Foreground="White" BorderThickness="0" Command="{Binding ApplyCommand}"
                                         Visibility="{Binding InPreviewStep, Converter={StaticResource BoolToVis}}"
-                                        ToolTip="Write the ticked changes into the model" />
+                                        IsEnabled="{Binding CanApply}"
+                                        ToolTip="Preview changes first, then this writes the ticked changes into the model" />
                             </StackPanel>
                             <!-- Cell-level All/None act on the changes grid → hidden during step 1 -->
                             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right"
@@ -679,13 +680,17 @@
                             </DockPanel>
                         </Border>
 
-                        <!-- Changes grid hidden during step 1 (select tabs); shown after Resolve & preview (Change 1, §8.3) -->
+                        <!-- Changes grid hidden during step 1 (select tabs); shown after Resolve & preview (Change 1, §8.3).
+                             RowDetails carries the inline "interpreted as … — confirm" strip for format-mismatched
+                             (NeedsConfirm) rows — rendered BELOW the row (full width, doesn't stretch the row sideways)
+                             so the confirmation sits next to the change it's about, not in a separate bottom pane. -->
                         <DataGrid ItemsSource="{Binding Changes}" AutoGenerateColumns="False" CanUserAddRows="False"
                                   Visibility="{Binding InPreviewStep, Converter={StaticResource BoolToVis}}"
                                   HeadersVisibility="Column" GridLinesVisibility="Horizontal" BorderBrush="{DynamicResource Line}"
                                   BorderThickness="1" FontSize="11.5" RowHeight="24" ColumnHeaderHeight="26"
                                   Background="{DynamicResource Surface}" RowBackground="{DynamicResource Surface}"
-                                  AlternatingRowBackground="{DynamicResource AltRow}" Foreground="{DynamicResource Text}">
+                                  AlternatingRowBackground="{DynamicResource AltRow}" Foreground="{DynamicResource Text}"
+                                  RowDetailsVisibilityMode="Visible">
                             <DataGrid.Columns>
                                 <DataGridTemplateColumn Width="Auto" MinWidth="28">
                                     <DataGridTemplateColumn.CellTemplate>
@@ -705,9 +710,94 @@
                                 </DataGridTextColumn>
                                 <DataGridTextColumn Header="Field" Binding="{Binding Field}" Width="Auto" MinWidth="50" IsReadOnly="True" />
                                 <DataGridTextColumn Header="Old" Binding="{Binding OldValue}" Width="Auto" MinWidth="50" IsReadOnly="True" />
-                                <DataGridTextColumn Header="New" Binding="{Binding NewValue}" Width="Auto" MinWidth="50" IsReadOnly="True" />
+                                <!-- New: a pending (NeedsConfirm) row shows its interpreted value italic + warn-coloured until confirmed -->
+                                <DataGridTextColumn Header="New" Binding="{Binding NewValue}" Width="Auto" MinWidth="50" IsReadOnly="True">
+                                    <DataGridTextColumn.ElementStyle>
+                                        <Style TargetType="TextBlock">
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding NeedsConfirm}" Value="True">
+                                                    <Setter Property="FontStyle" Value="Italic" />
+                                                    <Setter Property="Foreground" Value="{DynamicResource Warn}" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </DataGridTextColumn.ElementStyle>
+                                </DataGridTextColumn>
                                 <DataGridTextColumn Header="Scope" Binding="{Binding Scope}" Width="Auto" IsReadOnly="True" />
                             </DataGrid.Columns>
+                            <DataGrid.RowDetailsTemplate>
+                                <DataTemplate>
+                                    <!-- Inline confirm strip — shown only for pending rows; collapsed for normal changes.
+                                         Same functionality as the old bottom fix-pane (editable value box + Confirm),
+                                         now in line with the row. Edit the box to CORRECT the interpretation (e.g. "7""
+                                         if you meant inches), then Confirm — the interpreted value lands in New. -->
+                                    <Border Background="{DynamicResource WarnBg}" BorderBrush="{DynamicResource WarnLine}" BorderThickness="0,0,0,1"
+                                            Padding="10,5" Visibility="{Binding NeedsConfirm, Converter={StaticResource BoolToVis}}">
+                                        <DockPanel>
+                                            <Button DockPanel.Dock="Right" Content="Confirm" Height="26" Padding="14,0" Margin="8,0,0,0"
+                                                    Background="{DynamicResource Accent}" Foreground="White" BorderThickness="0" FontSize="11"
+                                                    AutomationProperties.Name="ConfirmValue" AutomationProperties.AutomationId="ConfirmValue"
+                                                    PreviewMouseLeftButtonDown="ConfirmButton_PreviewMouseLeftButtonDown"
+                                                    Command="{Binding DataContext.ConfirmRowCommand, RelativeSource={RelativeSource AncestorType=DataGrid}}"
+                                                    CommandParameter="{Binding}" />
+                                            <TextBox DockPanel.Dock="Right" Width="110" Height="26" FontSize="11.5" VerticalContentAlignment="Center"
+                                                     AutomationProperties.Name="ConfirmValueBox" AutomationProperties.AutomationId="ConfirmValueBox"
+                                                     Text="{Binding EditValue, UpdateSourceTrigger=PropertyChanged}"
+                                                     PreviewMouseLeftButtonDown="EditBox_PreviewMouseLeftButtonDown"
+                                                     GotKeyboardFocus="EditBox_GotKeyboardFocus"
+                                                     ToolTip="Edit if Transom read the units wrong (e.g. type 7&quot; for 7 inches), then Confirm" />
+                                            <!-- The interpretation shown for confirmation — updates ONLY on Confirm (never as you type).
+                                                 Replaced by the "enter a usable value" note when the last confirm couldn't parse. -->
+                                            <Grid>
+                                                <!-- (a) readable value: shows the interpretation to confirm. Hidden if there's an
+                                                     error OR no interpretation yet (an unreadable entry not yet fixed). -->
+                                                <TextBlock Foreground="{DynamicResource Warn}" FontSize="11" VerticalAlignment="Center"
+                                                           TextWrapping="Wrap" TextTrimming="CharacterEllipsis">
+                                                    <TextBlock.Style>
+                                                        <Style TargetType="TextBlock">
+                                                            <Setter Property="Visibility" Value="Visible" />
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding HasConfirmError}" Value="True">
+                                                                    <Setter Property="Visibility" Value="Collapsed" />
+                                                                </DataTrigger>
+                                                                <DataTrigger Binding="{Binding Suggestion}" Value="">
+                                                                    <Setter Property="Visibility" Value="Collapsed" />
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </TextBlock.Style>
+                                                    <Run Text="interpreted as “" /><Run Text="{Binding Suggestion, Mode=OneWay}" FontWeight="SemiBold" /><Run Text="” · confirm to apply" />
+                                                </TextBlock>
+                                                <!-- (b) no interpretation yet and no error (e.g. an unreadable entry the user is
+                                                     editing): neutral prompt. -->
+                                                <TextBlock Foreground="{DynamicResource Warn}" FontSize="11" VerticalAlignment="Center"
+                                                           TextWrapping="Wrap" TextTrimming="CharacterEllipsis"
+                                                           Text="enter a value, then confirm">
+                                                    <TextBlock.Style>
+                                                        <Style TargetType="TextBlock">
+                                                            <Setter Property="Visibility" Value="Collapsed" />
+                                                            <Style.Triggers>
+                                                                <MultiDataTrigger>
+                                                                    <MultiDataTrigger.Conditions>
+                                                                        <Condition Binding="{Binding HasConfirmError}" Value="False" />
+                                                                        <Condition Binding="{Binding Suggestion}" Value="" />
+                                                                    </MultiDataTrigger.Conditions>
+                                                                    <Setter Property="Visibility" Value="Visible" />
+                                                                </MultiDataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </TextBlock.Style>
+                                                </TextBlock>
+                                                <!-- (c) the last confirm couldn't read the value: red "enter a usable value". -->
+                                                <TextBlock Foreground="{DynamicResource LegendRed}" FontSize="11" FontWeight="SemiBold" VerticalAlignment="Center"
+                                                           TextWrapping="Wrap" TextTrimming="CharacterEllipsis"
+                                                           Text="{Binding ConfirmError}"
+                                                           Visibility="{Binding HasConfirmError, Converter={StaticResource BoolToVis}}" />
+                                            </Grid>
+                                        </DockPanel>
+                                    </Border>
+                                </DataTemplate>
+                            </DataGrid.RowDetailsTemplate>
                         </DataGrid>
                     </DockPanel>
                 </Border>

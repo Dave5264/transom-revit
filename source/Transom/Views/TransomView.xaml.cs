@@ -55,6 +55,39 @@ public sealed partial class TransomView
 
     private void Close_Click(object sender, System.Windows.RoutedEventArgs e) => Close();
 
+    // ----- Inline confirm-strip value box (DataGrid RowDetails) -----
+    // The DataGrid swallows the FIRST left-click for row selection, so a text box inside RowDetails only took focus on
+    // a second click / drag. Force it to focus (and select its contents) on the first click, so a single click puts
+    // the cursor in and selects the value — the user can immediately type a correction. Mirrors a normal text field.
+
+    private void EditBox_PreviewMouseLeftButtonDown(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        if (sender is TextBox tb && !tb.IsKeyboardFocusWithin)
+        {
+            tb.Focus();          // grab focus before the DataGrid consumes the click for row selection
+            tb.SelectAll();      // select the value so a single click → type replaces it
+            e.Handled = true;    // stop the click bubbling to the DataGrid (which would steal focus back)
+        }
+    }
+
+    private void EditBox_GotKeyboardFocus(object sender, System.Windows.Input.KeyboardFocusChangedEventArgs e)
+    {
+        if (sender is TextBox tb) tb.SelectAll();
+    }
+
+    // The Confirm button has the SAME DataGrid-eats-the-first-click problem as the box: the grid spends the first
+    // click selecting the row, so the button only fired on the second click. Run the confirm command directly on the
+    // first mouse-down and mark it handled — so one click always confirms, regardless of row selection.
+    private void ConfirmButton_PreviewMouseLeftButtonDown(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        if (sender is Button { DataContext: Core.ProposedChange change } && DataContext is TransomViewModel vm
+            && vm.ConfirmRowCommand.CanExecute(change))
+        {
+            vm.ConfirmRowCommand.Execute(change);
+            e.Handled = true;   // stop the DataGrid from consuming this click for row-selection (the second-click cause)
+        }
+    }
+
     private void ClaudeHelp_Click(object sender, System.Windows.RoutedEventArgs e)
     {
         new ClaudeAssistHelpDialog { Owner = this }.ShowDialog();

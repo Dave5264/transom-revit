@@ -1,9 +1,7 @@
 using System;
 using System.Collections.Generic;
-using System.IO;
 using System.Linq;
 using Autodesk.Revit.DB;
-using NPOI.SS.UserModel;
 
 namespace Transom.Core;
 
@@ -35,14 +33,16 @@ public sealed class CorrectionResult
 }
 
 /// <summary>
-///     Applies user corrections to an imported workbook. Each replacement is parsed against its column's
-///     spec (Revit's unit parser); a value already in the schedule's expected format is applied (and written
-///     back into the .xlsx), while one that parses but differs (e.g. "42" → "42' - 0\"") is returned as a
+///     Applies user corrections to an imported workbook IN MEMORY only. Each replacement is parsed against its
+///     column's spec (Revit's unit parser); a value already in the schedule's expected format is applied to the
+///     in-session import data, while one that parses but differs (e.g. "42" → "42' - 0\"") is returned as a
 ///     reformat suggestion for the user to confirm. Unparseable replacements are left to resurface.
+///     The user's workbook FILE is never modified — corrections live only for this import (and are recorded in the
+///     run report if one is produced); we cannot change the user's input without their confirmation.
 /// </summary>
 public static class ExcelCorrector
 {
-    public static CorrectionResult Apply(string path, ImportWorkbook wb, List<CellCorrection> corrections, Units units)
+    public static CorrectionResult Apply(ImportWorkbook wb, List<CellCorrection> corrections, Units units)
     {
         var result = new CorrectionResult();
 
@@ -69,7 +69,7 @@ public static class ExcelCorrector
 
             if (SameFormat(c.NewValue, canonical))
             {
-                // Already in the expected format -> apply (store the canonical so the file stays clean).
+                // Already in the expected format -> accept for this import (canonical drives the in-memory cell).
                 var applied = new CellCorrection
                 {
                     SheetTabName = c.SheetTabName, ExcelRow = c.ExcelRow, ExcelCol = c.ExcelCol, NewValue = canonical,
@@ -90,7 +90,6 @@ public static class ExcelCorrector
             }
         }
 
-        if (result.Applied.Count > 0) WriteBack(path, result.Applied);
         return result;
     }
 
@@ -113,27 +112,5 @@ public static class ExcelCorrector
     private static void SetCell(ImportRow? row, int col, string value)
     {
         if (row != null && col >= 0 && col < row.Cells.Length) row.Cells[col] = value;
-    }
-
-    /// <summary>Persists the validated corrections into the workbook file (best-effort; no-op if the file is locked).</summary>
-    private static void WriteBack(string path, List<CellCorrection> valid)
-    {
-        try
-        {
-            IWorkbook book;
-            using (var fs = File.OpenRead(path)) book = WorkbookFactory.Create(fs);
-
-            foreach (var c in valid)
-            {
-                var ws = book.GetSheet(c.SheetTabName);
-                if (ws == null) continue;
-                var row = ws.GetRow(c.ExcelRow) ?? ws.CreateRow(c.ExcelRow);
-                var cell = row.GetCell(c.ExcelCol) ?? row.CreateCell(c.ExcelCol);
-                cell.SetCellValue(c.NewValue);
-            }
-
-            using (var fs = File.Create(path)) book.Write(fs);
-        }
-        catch { /* file may be open in Excel; in-memory correction still drives this preview */ }
     }
 }

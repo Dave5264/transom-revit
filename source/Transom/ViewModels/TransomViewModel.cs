@@ -188,6 +188,11 @@ public sealed partial class TransomViewModel : ObservableObject
     private readonly TransomSettings _settings;
     private bool _initialized;
     private ChangeSet? _lastChangeSet;
+    /// <summary>"Apply selected" is enabled (not greyed) only after a Preview has produced a change set — i.e. when
+    /// <see cref="_lastChangeSet"/> is non-null. Before any preview (just Browsed), and after a completed apply
+    /// (which nulls _lastChangeSet), it's disabled, so the user must Preview before they can Apply. Raise
+    /// OnPropertyChanged(nameof(CanApply)) wherever _lastChangeSet is set or nulled.</summary>
+    public bool CanApply => _lastChangeSet != null;
     /// <summary>Conflict choices the user already made, keyed by (typeId, parameterId), remembered ACROSS a re-Preview
     /// so confirming a format fix (which re-runs the whole analysis) does NOT re-prompt conflicts already resolved.
     /// Stores the chosen value (parsed double + string) so it can be matched to the re-built conflict's options even
@@ -196,6 +201,9 @@ public sealed partial class TransomViewModel : ObservableObject
     private string _stagedPath = "";
     private string _finalDestination = "";
     private string _pendingGroupNote = "";
+    /// <summary>Set in Apply when format-mismatched rows are still unconfirmed → appended to the post-apply status so
+    /// the user is told those edits weren't applied (not silently dropped). Captured before OnApplied clears Changes.</summary>
+    private string _pendingConfirmNote = "";
     /// <summary>Set while a per-schedule bulk toggle is driving many <see cref="ProposedChange.Selected"/> sets, so the
     /// per-change SelectionChanged handler doesn't re-run the row/helper refresh once per change (the bulk op refreshes
     /// once at the end via OnAffectedSelectionChanged). A single per-CELL edit leaves this false → handler runs.</summary>
@@ -247,8 +255,9 @@ public sealed partial class TransomViewModel : ObservableObject
         _importHandler.OnPreview = cs => _ui.BeginInvoke(() => ShowPreview(cs));
         _importHandler.OnApplied = s => _ui.Invoke(() =>
         {
-            ImportStatus = s + _pendingGroupNote;
+            ImportStatus = s + _pendingGroupNote + _pendingConfirmNote;
             _pendingGroupNote = "";
+            _pendingConfirmNote = "";
             Changes.Clear();
             Skipped.Clear();
             Fixes.Clear();
@@ -259,6 +268,7 @@ public sealed partial class TransomViewModel : ObservableObject
             SkipLogScopedToSelection = false;
             InSelectStep = false;
             _lastChangeSet = null;
+            OnPropertyChanged(nameof(CanApply));   // applied → no change set → re-grey Apply until next Preview
         });
         _importHandler.OnAppliedLog = log => _ui.Invoke(() => _diagnosticLog = log);
         _importHandler.OnError = s => _ui.Invoke(() => ImportStatus = "Error: " + s);
@@ -492,6 +502,7 @@ public sealed partial class TransomViewModel : ObservableObject
         _selectedSheetTabs = null;
         _resolvedConflicts.Clear();   // a new workbook = fresh conflicts; don't carry remembered resolutions
         _lastChangeSet = null;
+        OnPropertyChanged(nameof(CanApply));   // new/changed workbook → no change set yet → Apply greyed until Preview
     }
 
     /// <summary>§16 PHASE 1 (the Preview button): read ONLY the tab names (cheap, cowork_meta only — no model diff) and
@@ -594,10 +605,73 @@ public sealed partial class TransomViewModel : ObservableObject
         RunAnalysis();                  // §16.3: re-analyze the SAME picked tabs (no picker re-prompt); now matches format
     }
 
+    /// <summary>Confirms a PENDING (format-mismatched) preview row from the inline confirm strip — the same editable
+    /// box the old bottom fix-pane had, now in the row. NO shortcut: a parsable value must be SHOWN as an
+    /// interpretation and CONFIRMED before it touches the New cell; the user's input is never silently applied.
+    /// On confirm we parse the box value:
+    ///   • junk (won't parse) → show "enter a usable value" IN the row, stay pending;
+    ///   • parsable, but its interpretation DIFFERS from what the row currently shows (e.g. they typed "6", the row
+    ///     still shows "7'-0"") → UPDATE the shown interpretation to "6'-0"" and stay pending (re-prompt) — they
+    ///     confirm again to accept it;
+    ///   • parsable, and its interpretation MATCHES what's shown (they're confirming the value on screen) → commit it
+    ///     to the New cell, clear pending. POINT 4: if that committed value equals the model, the row drops (no-op).</summary>
+    [RelayCommand]
+    private void ConfirmRow(ProposedChange? change)
+    {
+        if (change is not { NeedsConfirm: true }) return;
+
+        var units = _lastChangeSet?.Units;
+        string entered = (change.EditValue ?? "").Trim();
+
+        // Numeric/length rows: parse the box value against the schedule's units. (String rows have no spec — nothing
+        // to interpret — so they fall straight through to the commit below.)
+        double parsed = 0;
+        bool numeric = units != null && !string.IsNullOrEmpty(change.SpecTypeId);
+        if (numeric)
+        {
+            var spec = new Autodesk.Revit.DB.ForgeTypeId(change.SpecTypeId);
+            if (string.IsNullOrEmpty(entered) || !Autodesk.Revit.DB.UnitFormatUtils.TryParse(units, spec, entered, out parsed))
+            {
+                change.ConfirmError = $"enter a usable value for {change.Field} (e.g. 7' or 7\")";
+                return;   // junk → ask again IN the row, stay pending
+            }
+            var canonical = ExcelCorrector.Canonical(units, spec, parsed, entered);
+            if (!ExcelCorrector.SameFormat(canonical, change.Suggestion))
+            {
+                // The box now means something different from what's shown → re-prompt with the new interpretation
+                // (do NOT commit — the user must confirm what they'll get).
+                change.Suggestion = canonical;
+                change.ConfirmError = "";
+                return;   // stay pending; the row now shows the new interpretation to confirm
+            }
+            // Confirming the value already on screen → commit it.
+            change.NewDouble = parsed;
+            change.NewValue = canonical;
+        }
+
+        change.ConfirmError = "";
+        change.NeedsConfirm = false;   // notifies Selectable → the checkbox enables and the details strip hides
+        // POINT 4: confirmed value == the model's current value (OldValue) ⇒ a no-op ⇒ drop the row entirely.
+        if (ExcelCorrector.SameFormat(change.NewValue, change.OldValue))
+            Changes.Remove(change);
+        else
+            change.Selected = true;    // a real confirmed change is ticked for apply by default
+
+        RefreshAffectedRows();         // its schedule's tri-state now reflects the confirmed/removed change
+        RecomputeAffectedSelectionInfo();
+    }
+
     [RelayCommand]
     private void Apply()
     {
-        var selected = Changes.Where(c => c.Selected).ToList();
+        // SAFETY BELT (code2): apply only rows that are BOTH ticked AND selectable. The confirm-gate already keeps a
+        // pending (NeedsConfirm) row un-ticked, but Selected defaults true, so requiring Selectable here means a
+        // future select-path that forgets the guard can never silently apply a half-interpreted value.
+        var selected = Changes.Where(c => c.Selected && c.Selectable).ToList();
+
+        // Rows the user hasn't confirmed yet (format-mismatched, awaiting the inline confirm) are EXCLUDED above.
+        // Count them so we can tell the user instead of silently dropping their edits (the original complaint).
+        int pending = Changes.Count(c => c.NeedsConfirm);
 
         // Header (column-caption) renames to apply, scoped to the SELECTED schedules (header edits have no per-row
         // checkbox — they ride their schedule's selection). A header edit is included when its schedule is ticked
@@ -606,12 +680,22 @@ public sealed partial class TransomViewModel : ObservableObject
 
         if (selected.Count == 0 && selectedHeaderChanges.Count == 0)
         {
-            // UX_SPEC §4d: name the per-schedule case so an all-deselected import isn't a generic dead-end.
-            ImportStatus = AffectedSchedules.Count > 0
-                ? "No schedules selected — tick at least one schedule to import."
-                : "Nothing selected to apply.";
+            // If the only reason nothing's selected is unconfirmed rows, say THAT (not a generic dead-end) — so the
+            // user knows their edits are waiting on confirmation, not lost.
+            ImportStatus = pending > 0
+                ? $"{pending} row(s) need confirmation before they can be applied — confirm the interpreted value(s) below, then Apply."
+                : AffectedSchedules.Count > 0
+                    ? "No schedules selected — tick at least one schedule to import."
+                    : "Nothing selected to apply.";
             return;
         }
+
+        // Stash a note about rows left unconfirmed so the post-apply status TELLS the user they weren't applied
+        // (rather than silently omitting them from the "Applied N" count — the original silent-drop complaint).
+        // Captured now because OnApplied clears Changes before it builds the status.
+        _pendingConfirmNote = pending > 0
+            ? $"  ⚠ {pending} row(s) were not applied — they still need confirmation (confirm the interpreted value, then Apply again)."
+            : "";
 
         // Clear any stale resolutions from a prior Apply — these ProposedChange objects are shared with the
         // cached change-set, so a cancelled or retried Apply must never route a column by a previous choice.
@@ -721,6 +805,7 @@ public sealed partial class TransomViewModel : ObservableObject
             Changes.Clear();
             Skipped.Clear();
             _lastChangeSet = null;
+            OnPropertyChanged(nameof(CanApply));   // nothing applicable → drop the change set → re-grey Apply
             return;
         }
 
@@ -941,6 +1026,7 @@ public sealed partial class TransomViewModel : ObservableObject
     private void ShowPreview(ChangeSet cs)
     {
         _lastChangeSet = cs;
+        OnPropertyChanged(nameof(CanApply));   // a preview ran → there's a change set → enable Apply
         InTabPickStep = false;   // §16: analysis returned → the pre-analysis tab picker is done
         _diagnosticLog = cs.DiagnosticLog;
         Changes.Clear();
@@ -1081,8 +1167,12 @@ public sealed partial class TransomViewModel : ObservableObject
             {
                 if (!fromMemory)   // remember a freshly-made choice so a later re-Preview won't re-prompt it
                     _resolvedConflicts[key] = (opt.IsString, opt.NewString, opt.NewDouble);
-                // Picking the "keep current" option (= the type's existing value, offered when unedited siblings would
-                // be clobbered) is a NO-OP: don't write the type to the value it already holds — record it as kept.
+                // Drop a TRUE no-op only: the explicit "keep current" option (Display == CurrentDisplay — the type's
+                // current value, offered when unedited siblings would be clobbered). A pick whose value merely EQUALS
+                // the model in a DIFFERENT FORMAT (entered "7" vs current "7'-0"") is NOT dropped here — ResolveToChange
+                // makes it a PENDING (NeedsConfirm) row so the interpretation is confirmed every time, and ConfirmRow
+                // then removes it because the confirmed value equals the model. (ANY workbook↔model difference, even
+                // trivial, is confirmed — never silently canonicalized.)
                 if (opt.Display == conflict.CurrentDisplay)
                     Skipped.Add(new SkippedItem { Reason = "kept current", Detail = $"{conflict.Field} on '{conflict.TypeName}' — left at '{conflict.CurrentDisplay}'",
                         SheetTabName = ConflictTab(conflict.ScheduleUid, conflict.ScheduleName) });

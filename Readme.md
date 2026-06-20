@@ -6,7 +6,7 @@
 
 [![Latest release](https://img.shields.io/github/v/release/Dave5264/transom-revit?label=latest%20release&color=2ea44f&logo=github)](https://github.com/Dave5264/transom-revit/releases/latest)
 
-### ⬇ [Download the installer](https://github.com/Dave5264/transom-revit/releases/download/v1.4.1/Transom-1.4.1-SingleUser.msi)
+### ⬇ [Download the installer](https://github.com/Dave5264/transom-revit/releases/download/v1.4.2/Transom-1.4.2-SingleUser.msi)
 
 **One click, no admin rights** — installs into your per-user Revit add-ins folder.
 Double-click the `.msi`, then start Revit. Supports **Revit 2025, 2026 & 2027**.
@@ -32,8 +32,10 @@ Then drop the guidance file from [`claude/`](claude/) (`CLAUDE.md`) where your c
 so Claude already knows the tools and the safe-write workflow. See [`claude/README.md`](claude/README.md) for
 exactly where each file goes.
 
-> **Status:** v1.4.1 released (Revit 2025/2026/2027) — full export and round-trip import, including grouped
-> schedules (by type or by field) and annotation/keyed-note schedules. v1.4.1 hardens grouped-schedule import:
+> **Status:** v1.4.2 released (Revit 2025/2026/2027) — refreshed installer art plus import-UX improvements:
+> "Apply selected" stays greyed until you Preview, format-mismatched values become inline confirm rows
+> (you confirm "2.5 → 2'-6"" before it applies), the conflict picker accepts any entered value, and the
+> bundled Claude-Assist helper got UI-automation hardening. Built on v1.4.1, which hardened grouped-schedule import:
 > type- and group-organized schedules now key their import baseline **per rendered row**, so editing one row no
 > longer collapses the whole type to a single value or produces phantom edits; grouped built-in *data* params
 > (Mark, Comments, Number, Finish) write directly while only geometry-driving built-ins route through

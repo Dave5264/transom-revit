@@ -26,15 +26,17 @@ public partial class ConflictDialog : Window
         {
             // Label the user's typed value(s) "(entered value)" so they can tell their own input apart from the
             // type's current value (e.g. "2.5  (entered value)" vs "3'-0"").
+            // The picker does NOT parse or validate — EVERY entered value is pickable, including an unreadable one
+            // like "ABC". The picker only chooses WHICH value wins the conflict; parsing/format is handled later on
+            // the inline confirm line (an unreadable pick becomes a pending row that asks for a usable value).
             var entered = opt.IsEntered ? "   (entered value)" : "";
             var rb = new RadioButton
             {
-                Content = opt.Parseable ? $"{opt.Display}{entered}" : $"{opt.Display}{entered}   (can't parse — unavailable)",
-                IsEnabled = opt.Parseable,
+                Content = $"{opt.Display}{entered}",
                 Margin = new Thickness(0, 4, 0, 4),
-                IsChecked = first && opt.Parseable,
+                IsChecked = first,
             };
-            if (first && opt.Parseable) first = false;
+            if (first) first = false;
             _map.Add((rb, opt));
             OptionsPanel.Children.Add(rb);
         }

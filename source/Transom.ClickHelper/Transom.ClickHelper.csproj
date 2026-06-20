@@ -27,8 +27,14 @@
         <AssemblyName>Transom.ClickHelper</AssemblyName>
         <RootNamespace>Transom.ClickHelper</RootNamespace>
         <InvariantGlobalization>true</InvariantGlobalization>
-        <!-- Per-monitor DPI awareness so BoundingRectangle coords, SetCursorPos, and CopyFromScreen
-             all agree in true physical pixels on scaled/multi-monitor setups (Revit is PMv2). -->
+        <!-- Per-monitor DPI awareness so UIA BoundingRectangle, SetCursorPos, GetWindowRect, and
+             CopyFromScreen all agree in true physical pixels on scaled/multi-monitor setups (Revit is PMv2).
+             With UseWindowsForms the SDK-sanctioned mechanism is this property (a manifest dpiAwareness
+             triggers WFAC010 and is overridden by WinForms) — BUT for a console Exe it only takes effect if
+             Application.SetHighDpiMode(PerMonitorV2) is CALLED at startup, which we do as the first line of
+             Main (Program.cs) before any window/rect access. Without that guaranteed-early call the process
+             can stay virtualized: GetWindowRect returns LOGICAL px while SetCursorPos expects PHYSICAL px →
+             systematic missed clicks on scaled displays (the cross-app bug). -->
         <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
     </PropertyGroup>
 
