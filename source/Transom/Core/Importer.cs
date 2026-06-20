@@ -45,13 +45,12 @@ public sealed class ProposedChange
     /// when the group is gated by anchored families; empty otherwise.</summary>
     public string GroupBrokenFamilies = "";
 
-    /// <summary>How a grouped edit gets written durably. ProjectVary = Transom applies in-process (vary flag);
-    /// BuiltinDance = staged for Claude-assist (definition swap). Set only when <see cref="InGroup"/> is true.
-    /// Project/shared params (positive id) vary; built-ins (negative id) can't and need the dance.</summary>
+    /// <summary>How a grouped edit gets written durably (set by <see cref="Importer.Mark"/>, only when <see
+    /// cref="InGroup"/> is true). ProjectVary = set the "vary by group instance" flag + write directly (project/
+    /// shared, positive id). BuiltinDance = stage for Claude-Assist (Edit Group) — only GEOMETRY-driving built-ins
+    /// (Sill/Head Height) need this. None = write directly like an ungrouped instance — built-in DATA params (Mark,
+    /// Comments, Number, Finish) take this path: Revit sets them directly on a grouped instance.</summary>
     public GroupMode GroupMode = GroupMode.None;
-
-    /// <summary>Project/shared parameters carry positive ids; built-in parameters are negative.</summary>
-    public static GroupMode ModeFor(int parameterId) => parameterId >= 0 ? GroupMode.ProjectVary : GroupMode.BuiltinDance;
 
     /// <summary>How the user chose to resolve this change's group conflict (set per-column by the
     /// GroupResolutionDialog on Apply). Null until resolved. Routes the change to the matching backend.</summary>
@@ -99,14 +98,15 @@ public sealed class ProposedChange
     public string SourceScheduleName = "";
     /// <summary>The source schedule's UniqueId (preferred over the name when resolving — survives renames).</summary>
     public string SourceScheduleUid = "";
-    /// <summary>Preview "Scope" cell. Group-conflicted (blue project / yellow built-in) rows say "choose on
-    /// Apply" so the preview is consistent with the per-parameter resolution dialog they'll trigger — they
-    /// are NOT applied silently.</summary>
+    /// <summary>Preview "Scope" cell. Rows that actually route through the per-parameter resolution dialog
+    /// (blue project/shared → vary, yellow geometry built-in → Claude-Assist) say "choose on Apply" so the
+    /// preview matches the dialog they'll trigger — they are NOT applied silently. A grouped built-in DATA param
+    /// (GroupMode.None despite InGroup) writes DIRECTLY, so it shows a normal instance/bulk scope, not the warning.</summary>
     public string Scope
     {
         get
         {
-            if (InGroup)
+            if (GroupMode is GroupMode.ProjectVary or GroupMode.BuiltinDance)
             {
                 var via = GroupMode == GroupMode.BuiltinDance ? "built-in" : "project/shared";
                 return $"⚠ group ({via}) — choose on Apply · {InstancesAffected} inst";
@@ -149,6 +149,10 @@ public sealed class ConflictOption
     public string NewString = "";
     public double NewDouble;
     public bool Parseable = true;
+    /// <summary>True for an option that is a VALUE THE USER TYPED into the schedule (vs the type's existing/current
+    /// value, which is offered as "keep current"). The picker labels these "(entered value)" so the user can tell
+    /// their own input apart from the current value.</summary>
+    public bool IsEntered;
 }
 
 public sealed class TypeConflict
@@ -201,9 +205,12 @@ public sealed class SheetSummary
     public int Conflicts;
     public bool RoundTrippable = true;
 
-    // Bound in XAML (WPF binding ignores public fields, so expose a property).
-    public string Display => $"{ScheduleName} — {Changes} change(s)"
-                             + (Conflicts > 0 ? $", {Conflicts} conflict(s) to resolve" : "")
+    // Bound in XAML (WPF binding ignores public fields, so expose a property). A conflict IS an edit the user made
+    // (it just needs a choice before it can apply), so it counts toward the change total — reporting "0 change(s),
+    // N conflict(s)" read as "nothing happened" even though the user made N edits. Total = changes + conflicts; the
+    // suffix names how many of those still need resolution.
+    public string Display => $"{ScheduleName} — {Changes + Conflicts} change(s)"
+                             + (Conflicts > 0 ? $" ({Conflicts} need resolution)" : "")
                              + (Skipped > 0 ? $", {Skipped} skipped" : "");
 }
 
@@ -356,7 +363,12 @@ public sealed class Importer
         public string CurString = "";
         public double CurDouble;
         public string CurDisplay = "";
-        public readonly List<(int excelRow, string value, string label)> Cells = new();
+        public readonly List<(int excelRow, string value, string label)> Cells = new();   // EDITED cells only
+        /// <summary>Count of ALL schedule rows that resolve to this type for this column (edited OR not). When this
+        /// exceeds Cells.Count, some visible rows of the type were left UNEDITED — and since a type holds one value,
+        /// writing the edited value to the type would silently clobber those siblings (which all show CurDisplay). So
+        /// an edit that differs from CurDisplay with unedited siblings present is a type conflict, not a clean write.</summary>
+        public int TotalRows;
     }
 
     public ChangeSet BuildChangeSet(Document doc, ImportWorkbook wb)
@@ -532,7 +544,9 @@ public sealed class Importer
 
                 if (row.Kind == "type" || row.Kind == "group")
                 {
-                    sheet.Baseline.TryGetValue(row.UniqueId, out var baseRowT);
+                    // Look up the baseline by the SAME per-rendered-row key the export wrote (a type uid alone
+                    // collides across that type's rows). RowBindings stays keyed by the row's anchor uid.
+                    sheet.Baseline.TryGetValue(ScheduleReader.BaselineRowKey(row.UniqueId, row.Kind, row.InstanceIds), out var baseRowT);
                     sheet.RowBindings.TryGetValue(row.UniqueId, out var rbT);
                     HandleTypeRow(doc, sheet, row, cs, typeGroups, units, rbT, baseRowT);
                     continue;
@@ -548,7 +562,9 @@ public sealed class Importer
                     continue;
                 }
 
-                sheet.Baseline.TryGetValue(row.UniqueId, out var baseRow);
+                // Element (itemized) rows have no InstanceIds, so BaselineRowKey returns row.UniqueId — identical to
+                // the historical lookup; routed through the helper only to keep all sites deriving the key one way.
+                sheet.Baseline.TryGetValue(ScheduleReader.BaselineRowKey(row.UniqueId, row.Kind, row.InstanceIds), out var baseRow);
                 var (elInGroup, elGroupName) = GroupInfo(doc, el);
 
                 foreach (var col in sheet.Columns)
@@ -607,14 +623,23 @@ public sealed class Importer
                         cs.Diagnostics.Add(Diag(sheet, row, col, label, "yellow",
                             $"changed since export (was '{baseline}', now '{current}')", cellText, category: "drift"));
 
-                    if (!edited) continue; // not edited -> no write (never revert model drift)
+                    // Count an UNEDITED type-bound row so the type-conflict check knows it would be clobbered by a type
+                    // write (a type holds one value; this row currently shows the type's value). Edited rows are counted
+                    // by RecordType below. (Itemized schedules: each row is an instance, but Width etc. is type-bound,
+                    // so one edited row's value, written to the type, silently changes every other instance of the type.)
+                    if (!edited)
+                    {
+                        if (binding == "type" && !param.IsReadOnly)
+                            EnsureTypeCandidate(typeGroups, sheet, col, host!, param);
+                        continue; // not edited -> no write (never revert model drift)
+                    }
 
                     if (param.StorageType == StorageType.String)
                     {
                         if (binding == "type")
                             RecordType(typeGroups, sheet, col, host!, param, label, row.ExcelRow, cellText);
                         else if ((param.AsString() ?? "") != cellText)
-                            cs.Changes.Add(Mark(InstanceChange(el, col, param.AsString() ?? "", cellText, true, cellText, 0), elInGroup, elGroupName));
+                            cs.Changes.Add(Mark(doc, InstanceChange(el, col, param.AsString() ?? "", cellText, true, cellText, 0), elInGroup, elGroupName));
                     }
                     else if (param.StorageType == StorageType.Integer && binding == "instance")
                     {
@@ -624,7 +649,7 @@ public sealed class Importer
                             cs.Diagnostics.Add(Diag(sheet, row, col, label, "red", "value can't be parsed", cellText));
                         }
                         else if (param.AsInteger() != iv)
-                            cs.Changes.Add(Mark(IntChange(el, col, current, cellText, iv), elInGroup, elGroupName));
+                            cs.Changes.Add(Mark(doc, IntChange(el, col, current, cellText, iv), elInGroup, elGroupName));
                     }
                     else if (param.StorageType == StorageType.Double && col.SpecTypeId != null)
                     {
@@ -643,7 +668,7 @@ public sealed class Importer
                             if (!ExcelCorrector.SameFormat(cellText, canonical))
                                 cs.Reformats.Add(Reformat(sheet, row, col, label, cellText, canonical));
                             else
-                                cs.Changes.Add(Mark(InstanceChange(el, col, param.AsValueString() ?? "", cellText, false, "", parsed), elInGroup, elGroupName));
+                                cs.Changes.Add(Mark(doc, InstanceChange(el, col, param.AsValueString() ?? "", cellText, false, "", parsed), elInGroup, elGroupName));
                         }
                     }
                     // else: non-text/non-numeric (an ElementId / family-or-type selection) can't be set from a cell.
@@ -854,7 +879,7 @@ public sealed class Importer
         }
 
         // All parts passed the gate → commit the (changed) component writes via the normal by-uid apply path.
-        foreach (var ch in pending) cs.Changes.Add(Mark(ch, elInGroup, elGroupName));
+        foreach (var ch in pending) cs.Changes.Add(Mark(doc, ch, elInGroup, elGroupName));
     }
 
     /// <summary>
@@ -1399,6 +1424,19 @@ public sealed class Importer
             }
         }
 
+        // Count this row against its type(s) WITHOUT recording an edit — for an UNEDITED type cell, so the conflict
+        // check knows the row exists (and would be clobbered by a type write). Mirrors RecordTypeAll's type fan-out.
+        void RegisterTypeAll(ImportColumn c)
+        {
+            var targets = row.AggregatedTypeUids ?? new List<string> { row.UniqueId };
+            foreach (var tuid in targets)
+            {
+                var te = doc.GetElement(tuid);
+                var tp = te == null ? null : GetParam(te, c.ParameterId);
+                if (tp != null && !tp.IsReadOnly) EnsureTypeCandidate(typeGroups, sheet, c, te, tp);
+            }
+        }
+
         foreach (var col in sheet.Columns)
         {
             if (!col.Writable || !col.Matched || col.ExcelCol >= row.Cells.Length) continue;
@@ -1435,7 +1473,7 @@ public sealed class Importer
                     && Drifted(param, cellText, units, col.SpecTypeId))
                     cs.Diagnostics.Add(Diag(sheet, row, col, label, "yellow",
                         $"changed since export (was '{baseline}', now '{current}')", cellText, category: "drift"));
-                if (!edited) continue;
+                if (!edited) { RegisterTypeAll(col); continue; }   // count the unedited row for the type-conflict check
 
                 if (param.StorageType == StorageType.String)
                     RecordTypeAll(col, cellText);
@@ -1558,7 +1596,7 @@ public sealed class Importer
                 if (ungrouped.Count > 0)
                     cs.Changes.Add(BulkChange(nameEl, col, ungrouped, oldDisp, cellText, isString, str, dbl, isInt, iv, row.UniqueId));
                 if (grouped.Count > 0)
-                    cs.Changes.Add(Mark(BulkChange(nameEl, col, grouped, oldDisp, cellText, isString, str, dbl, isInt, iv, row.UniqueId), true, gName));
+                    cs.Changes.Add(Mark(doc, BulkChange(nameEl, col, grouped, oldDisp, cellText, isString, str, dbl, isInt, iv, row.UniqueId), true, gName));
             }
             // binding == "none" -> parameter lives on neither host for this type; nothing to write.
         }
@@ -1575,7 +1613,9 @@ public sealed class Importer
         if (ghe.Col < 0 || ghe.Col >= row.Cells.Length) return;
         var cellText = row.Cells[ghe.Col] ?? "";
 
-        sheet.Baseline.TryGetValue(row.UniqueId, out var baseRow);
+        // Group-header rows carry a synthetic unique anchor (no InstanceIds), so BaselineRowKey returns row.UniqueId
+        // — identical to the historical lookup; via the helper so every site derives the key the same way.
+        sheet.Baseline.TryGetValue(ScheduleReader.BaselineRowKey(row.UniqueId, row.Kind, row.InstanceIds), out var baseRow);
         var baseline = baseRow != null && baseRow.TryGetValue(ghe.Col, out var bv) ? bv : null;
         bool edited = baseline != null ? cellText != baseline : !string.IsNullOrEmpty(cellText);
         if (!edited) return;
@@ -1656,7 +1696,7 @@ public sealed class Importer
             ReportRowUid = row.UniqueId,   // W2: overlay the partial-bulk outcome on this visible (type/group) row
         };
         if (ghUngrouped.Count > 0) cs.Changes.Add(MakeGh(ghUngrouped));
-        if (ghGrouped.Count > 0) cs.Changes.Add(Mark(MakeGh(ghGrouped), true, ghGroupName));
+        if (ghGrouped.Count > 0) cs.Changes.Add(Mark(doc, MakeGh(ghGrouped), true, ghGroupName));
     }
 
     private static ProposedChange BulkChange(Element typeEl, ImportColumn col, List<string> instanceIds,
@@ -1674,8 +1714,11 @@ public sealed class Importer
         FieldName = col.FieldName, ElementLabel = label, Entered = entered, Canonical = canonical,
     };
 
-    private static void RecordType(Dictionary<(long, int), TypeCandidate> typeGroups, ImportSheet sheet,
-        ImportColumn col, Element host, Parameter param, string label, int excelRow, string cellText)
+    /// <summary>Ensures the per-(type,param) <see cref="TypeCandidate"/> exists (capturing the type's one current
+    /// value) and counts this schedule row against it — called for EVERY type-bound row, edited or not, so the
+    /// candidate knows how many of the type's schedule rows are unedited (= would be clobbered by a type write).</summary>
+    private static TypeCandidate EnsureTypeCandidate(Dictionary<(long, int), TypeCandidate> typeGroups,
+        ImportSheet sheet, ImportColumn col, Element host, Parameter param)
     {
         var key = (host.Id.Value, col.ParameterId);
         if (!typeGroups.TryGetValue(key, out var tc))
@@ -1696,7 +1739,50 @@ public sealed class Importer
             }
             typeGroups[key] = tc;
         }
-        tc.Cells.Add((excelRow, cellText, label));
+        tc.TotalRows++;
+        return tc;
+    }
+
+    /// <summary>Registers an EDITED type-bound cell (also counts the row via <see cref="EnsureTypeCandidate"/>).</summary>
+    private static void RecordType(Dictionary<(long, int), TypeCandidate> typeGroups, ImportSheet sheet,
+        ImportColumn col, Element host, Parameter param, string label, int excelRow, string cellText)
+        => EnsureTypeCandidate(typeGroups, sheet, col, host, param).Cells.Add((excelRow, cellText, label));
+
+    /// <summary>True when an EDITED value of this type already equals the type's CURRENT value — so the unedited
+    /// siblings (which hold the current value) are NOT in conflict with the edit and CurDisplay must NOT be folded
+    /// into the conflict set. String params compare exact display text; Double params compare the PARSED value
+    /// within 1e-9 (so a non-canonical-but-equal entry like "3' 0"" vs "3'-0"" doesn't spuriously raise a conflict).</summary>
+    private static bool EditMatchesCurrent(TypeCandidate tc, List<string> editedDistinct, Units units)
+    {
+        if (tc.IsString) return editedDistinct.Contains(tc.CurDisplay);
+        foreach (var v in editedDistinct)
+            if (UnitFormatUtils.TryParse(units, new ForgeTypeId(tc.SpecTypeId!), v, out double d)
+                && Math.Abs(d - tc.CurDouble) < 1e-9)
+                return true;
+        return false;
+    }
+
+    /// <summary>Distinct edited values for a type. STRING columns dedup exact text. DOUBLE/length columns dedup by
+    /// PARSED value (within 1e-9) so two rows edited to the same measurement in different formats ("3" and "3'-0"")
+    /// collapse to ONE value (no false conflict, no duplicate picker option). The representative is the USER'S RAW
+    /// ENTERED TEXT (the first-seen of a group) — so the conflict picker shows exactly what the user typed ("3"),
+    /// not a reinterpreted form ("3'-0""), and they recognise their own input. Format interpretation is surfaced
+    /// SEPARATELY by the per-row reformat-confirm in the preview (cs.Reformats), not by rewriting the picker label.
+    /// The value still WRITES correctly: every consumer re-parses the text (raw "3" parses the same as "3'-0"").</summary>
+    private static List<string> EditedDistinct(TypeCandidate tc, Units units)
+    {
+        if (tc.IsString || tc.SpecTypeId == null)
+            return tc.Cells.Select(c => c.value).Distinct().ToList();
+        var byVal = new List<(double key, string raw)>();
+        var unparseable = new List<string>();
+        foreach (var v in tc.Cells.Select(c => c.value).Distinct())
+        {
+            if (!UnitFormatUtils.TryParse(units, new ForgeTypeId(tc.SpecTypeId), v, out double d))
+            { if (!unparseable.Contains(v)) unparseable.Add(v); continue; }
+            if (byVal.Any(b => Math.Abs(b.key - d) < 1e-9)) continue;   // same measurement, different format → one
+            byVal.Add((d, v));                                           // keep the RAW entered text as shown to the user
+        }
+        return byVal.Select(b => b.raw).Concat(unparseable).ToList();
     }
 
     private static void ResolveTypeGroups(ChangeSet cs, Dictionary<(long, int), TypeCandidate> typeGroups, Units units,
@@ -1705,11 +1791,46 @@ public sealed class Importer
         foreach (var kv in typeGroups)
         {
             var tc = kv.Value;
+            if (tc.Cells.Count == 0) continue;   // type with only UNEDITED rows (no edit on it) → nothing to write
             // #1: a type edit changes the TYPE, so it affects EVERY instance of that type — report the real
             // instance count, not the number of schedule rows touched (~1). Falls back to cell count if unknown.
             int affects = typeCounts.TryGetValue(kv.Key.Item1, out var instCount) ? instCount : tc.Cells.Count;
-            var distinct = tc.Cells.Select(c => c.value).Distinct().ToList();
-            if (distinct.Count > 1)
+
+            // PER-ROW FORMAT RESOLUTION: a numeric/length value typed in a non-canonical-but-parseable format ("3",
+            // "1'4"") gets a per-row reformat-confirm in the preview ("interpreted as '3'-0"' — confirm"), exactly
+            // like an instance edit. This is independent of whether the row becomes a clean write or a conflict — the
+            // value still has to be interpreted. (A value already in the schedule's format adds nothing.) The user
+            // confirms in the Fix pane → re-Preview with the canonical text. Type/spec columns only (SpecTypeId set).
+            if (!tc.IsString && tc.SpecTypeId != null)
+                foreach (var cell in tc.Cells)
+                    if (UnitFormatUtils.TryParse(units, new ForgeTypeId(tc.SpecTypeId), cell.value, out double pd))
+                    {
+                        var canon = ExcelCorrector.Canonical(units, new ForgeTypeId(tc.SpecTypeId), pd, cell.value);
+                        if (!ExcelCorrector.SameFormat(cell.value, canon))
+                            cs.Reformats.Add(new ReformatSuggestion
+                            {
+                                SheetTabName = tc.SheetTab, ExcelRow = cell.excelRow, ExcelCol = tc.Col.ExcelCol,
+                                FieldName = tc.Col.FieldName, ElementLabel = cell.label, Entered = cell.value, Canonical = canon,
+                            });
+                    }
+
+            // Distinct EDITED values. For a DOUBLE column dedup by PARSED value (1e-9), not raw text — so two rows
+            // edited to the same width in different formats ("3" and "3'-0"") are ONE value, not a false conflict;
+            // keep the canonical form as the representative. String columns dedup exact.
+            var editedDistinct = EditedDistinct(tc, units);
+
+            // The conflict set = the distinct EFFECTIVE values the type's schedule rows want. Edited rows want their
+            // new value; UNEDITED rows (Cells.Count < TotalRows) want the type's CURRENT value (CurDisplay) — and a
+            // type holds ONE value, so writing an edited value clobbers those siblings. Fold CurDisplay in when any
+            // visible row of the type was left unedited; if the resulting set has >1 value, it's a type conflict the
+            // user must resolve (the whole point: an itemized partial edit must surface the clobber). When every
+            // visible row was edited to one value, the set is just that value → a clean type write (no prompt).
+            bool hasUneditedSiblings = tc.Cells.Count < tc.TotalRows;
+            var effective = new List<string>(editedDistinct);
+            if (hasUneditedSiblings && !EditMatchesCurrent(tc, editedDistinct, units))
+                effective.Add(tc.CurDisplay);
+
+            if (effective.Count > 1)
             {
                 var conflict = new TypeConflict
                 {
@@ -1721,9 +1842,12 @@ public sealed class Importer
                     InstancesAffected = affects,
                     ScheduleName = tc.ScheduleName, ScheduleUid = tc.ScheduleUid,   // C-7
                 };
-                foreach (var v in distinct)
+                foreach (var v in effective)
                 {
-                    var opt = new ConflictOption { Display = v, IsString = tc.IsString, NewString = v };
+                    // Every value EXCEPT the type's current value is something the user TYPED — flag it so the picker
+                    // labels it "(entered value)". (CurDisplay, folded in when unedited siblings exist, is the
+                    // keep-current option, not a user entry.)
+                    var opt = new ConflictOption { Display = v, IsString = tc.IsString, NewString = v, IsEntered = editedDistinct.Contains(v) };
                     if (!tc.IsString)
                     {
                         opt.Parseable = UnitFormatUtils.TryParse(units, new ForgeTypeId(tc.SpecTypeId!), v, out double d);
@@ -1741,7 +1865,8 @@ public sealed class Importer
                 continue;
             }
 
-            var value = distinct[0];
+            // Clean type write: all visible rows of the type agree on one value (no unedited-sibling disagreement).
+            var value = editedDistinct[0];
             if (tc.IsString)
             {
                 if (value == tc.CurString) continue;
@@ -2517,6 +2642,28 @@ public sealed class Importer
         int hdrAppliedLog = cs.HeaderChanges.Count(h => h.Selected && h.Outcome == ApplyOutcome.Applied);
         sb.AppendLine($"applied: {applied + o2ConvertedLog + hdrAppliedLog}");
         sb.AppendLine($"skipped (from preview): {cs.Skipped.Count(s => s.UserRelevant)}");   // #64: user-relevant only
+
+        // Enumerate EXACTLY what landed in the model, so the log alone answers "which edits applied" without probing.
+        // Each line: schedule · element/type · field: old -> new  (× N instances for a type/bulk write). Direct/bulk
+        // writes only (option-2 conversions + header renames are listed in their own sections below).
+        var appliedWrites = cs.Changes
+            .Where(c => !c.Frozen && c.Outcome == ApplyOutcome.Applied
+                        && c.Resolution is not (GroupResolution.NewTypeParam or GroupResolution.NewInstanceParam)
+                        && c.GroupMode != GroupMode.BuiltinDance)
+            .ToList();
+        if (appliedWrites.Count > 0)
+        {
+            sb.AppendLine($"\n== changes applied to the model ({appliedWrites.Count}) ==");
+            foreach (var c in appliedWrites.Take(cap))
+            {
+                string scope = c.Binding == "type" ? $"  [type → {c.InstancesAffected} instance(s)]"
+                             : c.BulkInstanceIds is { Count: > 0 } ? $"  [{c.InstancesAffected} instance(s)]"
+                             : "";
+                string sched = string.IsNullOrEmpty(c.SourceScheduleName) ? "" : $"[{c.SourceScheduleName}] ";
+                sb.AppendLine($"  - {sched}{Label(c)}{scope}");
+            }
+            if (appliedWrites.Count > cap) sb.AppendLine($"  … +{appliedWrites.Count - cap} more");
+        }
 
         if (cs.Option2Result != null)
         {
@@ -3521,7 +3668,9 @@ public sealed class Importer
         catch { return e.Id.ToString(); }
     }
 
-    /// <summary>Whether an element is a member of a Revit group (its instance params can't be written directly), and the group's name.</summary>
+    /// <summary>Whether an element is a member of a Revit group, and the group's name. Group membership only
+    /// constrains <em>some</em> instance writes (project/shared need "vary"; geometry built-ins need Edit Group) —
+    /// built-in DATA params still write directly. <see cref="Mark"/> picks the right path per parameter.</summary>
     private static (bool inGroup, string name) GroupInfo(Document doc, Element e)
     {
         var gid = e.GroupId;
@@ -3530,13 +3679,23 @@ public sealed class Importer
         return (true, g != null ? SafeName(g) : "Group");
     }
 
-    private static ProposedChange Mark(ProposedChange ch, bool inGroup, string groupName)
+    private static ProposedChange Mark(Document doc, ProposedChange ch, bool inGroup, string groupName)
     {
         ch.InGroup = inGroup;
         ch.GroupName = groupName;
-        // Project/shared params (positive id) can be set to vary per group instance — Transom applies them.
-        // Built-in params (negative id) can't vary; they need the Claude-assist definition-swap.
-        ch.GroupMode = inGroup ? ProposedChange.ModeFor(ch.ParameterId) : GroupMode.None;
+        // How a grouped edit gets written durably:
+        //   • Project/shared params (positive id) → ProjectVary: set the "vary by group instance" flag, write directly.
+        //   • IDENTITY built-ins Revit lets differ between group instances (Mark, Number — see
+        //     ScheduleReader.IsInstanceIdentityBuiltin) → None: a direct write COMMITS on a grouped instance
+        //     (live-verified), exactly like an ungrouped one.
+        //   • Every OTHER grouped built-in (negative id) → BuiltinDance (option 2b / Claude-Assist): Revit refuses a
+        //     direct write inside a group ("group edit mode") and these can't vary — true for both geometry built-ins
+        //     (Sill/Head Height, which 2b can't fix either → Claude-Assist) AND ordinary data built-ins like Comments.
+        //     (Routing Comments to None — the earlier over-generalization — made its grouped writes roll back.)
+        if (!inGroup) ch.GroupMode = GroupMode.None;
+        else if (ch.ParameterId >= 0) ch.GroupMode = GroupMode.ProjectVary;
+        else if (ScheduleReader.IsInstanceIdentityBuiltin(ch.ParameterId)) ch.GroupMode = GroupMode.None;
+        else ch.GroupMode = GroupMode.BuiltinDance;
         return ch;
     }
 }

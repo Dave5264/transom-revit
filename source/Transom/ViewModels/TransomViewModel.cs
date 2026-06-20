@@ -125,17 +125,31 @@ public sealed partial class AffectedScheduleRow : ObservableObject
     /// because it appears under EVERY driving parent (each owns its own copy), so another selected parent keeps it.</summary>
     public bool ShowDependents => HasDependents && IsExpanded && SelectionState != false;
 
+    /// <summary>For a CONFLICT-ONLY schedule (no selectable changes, but ≥1 unresolved TYPE conflict) there are no
+    /// per-change Selected bits to drive the tri-state, so the checkbox is backed by this flag. Default TRUE: a
+    /// conflict-only schedule is selected by default so its conflicts reach the resolution dialog on Apply (else the
+    /// schedule is unselectable → its conflicts are skipped "not selected" → the picker never fires).</summary>
+    private bool _conflictsOnlySelected = true;
+
+    /// <summary>True when this schedule has unresolved conflicts but NO selectable changes — the checkbox state then
+    /// comes from <see cref="_conflictsOnlySelected"/>, not the (empty) change set.</summary>
+    private bool ConflictsOnly => _summary.Conflicts > 0 && !_changesFor(_summary).Any(c => c.Selectable);
+
     /// <summary>Tri-state: true = all selectable changes selected, false = none, null = mixed. GET is computed from
     /// the changes; SET (from the checkbox) selects/deselects all this schedule's SELECTABLE changes (a null set from
-    /// the UI is ignored — indeterminate is never user-chosen).</summary>
+    /// the UI is ignored — indeterminate is never user-chosen). A conflict-only schedule (no changes, ≥1 conflict)
+    /// is tracked by <see cref="_conflictsOnlySelected"/> so it can still be ticked to resolve its conflicts.</summary>
     public bool? SelectionState
     {
         get
         {
             // Only SELECTABLE (non-frozen) changes participate — a frozen change is never applied, so it must not
-            // drag the tri-state to "mixed". A schedule with no selectable changes reads as unchecked.
+            // drag the tri-state to "mixed".
             var selectable = _changesFor(_summary).Where(c => c.Selectable).ToList();
-            if (selectable.Count == 0) return false;
+            // No selectable changes: a schedule with unresolved CONFLICTS is still selectable (backed by
+            // _conflictsOnlySelected) so the user can include it and reach the conflict picker on Apply; otherwise
+            // (truly nothing to do) it reads as unchecked.
+            if (selectable.Count == 0) return _summary.Conflicts > 0 ? _conflictsOnlySelected : false;
             bool anySelected = selectable.Any(c => c.Selected);
             bool anyUnselected = selectable.Any(c => !c.Selected);
             if (anySelected && anyUnselected) return null;   // mixed → indeterminate
@@ -144,6 +158,7 @@ public sealed partial class AffectedScheduleRow : ObservableObject
         set
         {
             if (value == null) return;            // indeterminate is display-only; never set from the UI
+            if (ConflictsOnly) _conflictsOnlySelected = value.Value;   // no changes to flip; track the conflict-only choice
             foreach (var c in _changesFor(_summary))
                 if (c.Selectable) c.Selected = value.Value;   // raises ProposedChange.SelectionChanged per change
             _afterToggle();                       // refresh grid + recompute counts/other rows
@@ -173,6 +188,11 @@ public sealed partial class TransomViewModel : ObservableObject
     private readonly TransomSettings _settings;
     private bool _initialized;
     private ChangeSet? _lastChangeSet;
+    /// <summary>Conflict choices the user already made, keyed by (typeId, parameterId), remembered ACROSS a re-Preview
+    /// so confirming a format fix (which re-runs the whole analysis) does NOT re-prompt conflicts already resolved.
+    /// Stores the chosen value (parsed double + string) so it can be matched to the re-built conflict's options even
+    /// after the value's format changed (e.g. "2.5" → "2'-6""). Cleared when the workbook path changes.</summary>
+    private readonly System.Collections.Generic.Dictionary<(long, int), (bool isString, string str, double dbl)> _resolvedConflicts = new();
     private string _stagedPath = "";
     private string _finalDestination = "";
     private string _pendingGroupNote = "";
@@ -470,6 +490,7 @@ public sealed partial class TransomViewModel : ObservableObject
         InTabPickStep = false;        // §16: clear the tab picker
         PickableTabs.Clear();
         _selectedSheetTabs = null;
+        _resolvedConflicts.Clear();   // a new workbook = fresh conflicts; don't carry remembered resolutions
         _lastChangeSet = null;
     }
 
@@ -484,6 +505,10 @@ public sealed partial class TransomViewModel : ObservableObject
             ImportStatus = "Choose a workbook first.";
             return;
         }
+        // A DELIBERATE fresh Preview starts with no remembered conflict choices — so if the workbook changed on disk
+        // since the last Preview, every conflict is re-asked. (The reformat re-Preview goes through ConfirmFix→
+        // RunAnalysis, which does NOT call Preview(), so it correctly KEEPS the remembered choices — the whole point.)
+        _resolvedConflicts.Clear();
         System.Collections.Generic.IReadOnlyList<(string scheduleName, string sheetTab, string uid)> names;
         try
         {
@@ -1036,9 +1061,34 @@ public sealed partial class TransomViewModel : ObservableObject
                 });
                 continue;
             }
-            var opt = ConflictResolver?.Invoke(conflict);
+            // Reuse a choice the user already made for this (type, parameter) — so confirming a format fix (which
+            // re-runs the whole analysis) does NOT re-ask a conflict they already resolved. The remembered value is
+            // matched to one of THIS rebuilt conflict's options (string exact, or double within 1e-9 so a reformatted
+            // "2.5"→"2'-6"" still matches), and we apply that option silently. Only prompt for a genuinely new conflict.
+            var key = (conflict.TypeId, conflict.ParameterId);
+            ConflictOption? opt = null;
+            bool fromMemory = false;
+            if (_resolvedConflicts.TryGetValue(key, out var prev))
+            {
+                opt = conflict.Options.FirstOrDefault(o => o.Parseable &&
+                    (prev.isString ? o.NewString == prev.str : System.Math.Abs(o.NewDouble - prev.dbl) < 1e-9));
+                fromMemory = opt != null;
+            }
+            if (opt == null)
+                opt = ConflictResolver?.Invoke(conflict);
+
             if (opt != null)
-                Changes.Add(Importer.ResolveToChange(conflict, opt));
+            {
+                if (!fromMemory)   // remember a freshly-made choice so a later re-Preview won't re-prompt it
+                    _resolvedConflicts[key] = (opt.IsString, opt.NewString, opt.NewDouble);
+                // Picking the "keep current" option (= the type's existing value, offered when unedited siblings would
+                // be clobbered) is a NO-OP: don't write the type to the value it already holds — record it as kept.
+                if (opt.Display == conflict.CurrentDisplay)
+                    Skipped.Add(new SkippedItem { Reason = "kept current", Detail = $"{conflict.Field} on '{conflict.TypeName}' — left at '{conflict.CurrentDisplay}'",
+                        SheetTabName = ConflictTab(conflict.ScheduleUid, conflict.ScheduleName) });
+                else
+                    Changes.Add(Importer.ResolveToChange(conflict, opt));
+            }
             else
                 Skipped.Add(new SkippedItem { Reason = "conflict — unresolved", Detail = $"{conflict.Field} on '{conflict.TypeName}'",
                     SheetTabName = ConflictTab(conflict.ScheduleUid, conflict.ScheduleName) });

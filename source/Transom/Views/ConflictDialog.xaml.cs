@@ -24,9 +24,12 @@ public partial class ConflictDialog : Window
         var first = true;
         foreach (var opt in c.Options)
         {
+            // Label the user's typed value(s) "(entered value)" so they can tell their own input apart from the
+            // type's current value (e.g. "2.5  (entered value)" vs "3'-0"").
+            var entered = opt.IsEntered ? "   (entered value)" : "";
             var rb = new RadioButton
             {
-                Content = opt.Parseable ? opt.Display : $"{opt.Display}   (can't parse — unavailable)",
+                Content = opt.Parseable ? $"{opt.Display}{entered}" : $"{opt.Display}{entered}   (can't parse — unavailable)",
                 IsEnabled = opt.Parseable,
                 Margin = new Thickness(0, 4, 0, 4),
                 IsChecked = first && opt.Parseable,

@@ -69,17 +69,22 @@ public sealed class ImportSheet
     /// <summary>Resolved binding per element: uniqueId -> (column -> instance|type|none).</summary>
     public Dictionary<string, Dictionary<int, string>> RowBindings = new();
 
-    /// <summary>Row kind per anchor: uniqueId -> "element" | "type".</summary>
-    public Dictionary<string, string> RowKinds = new();
+    // The four dicts below are keyed by SHEET ROW (the meta's excelRow, emitted as the actual sheet row), NOT by
+    // uniqueId: a type-organized schedule renders many rows under one TYPE uid, so uid-keying collapses these
+    // per-rendered-row values last-writer-wins (every row of a type would get the last row's InstanceIds → wrong
+    // bulk-write target + a baseline-key miss → phantom edits). Sheet-row keys are unique per rendered row.
 
-    /// <summary>Type rows only: type uniqueId -> instances it represents (bulk write-back).</summary>
-    public Dictionary<string, List<string>> RowInstanceIds = new();
+    /// <summary>Row kind per rendered row: sheetRow -> "element" | "type" | "group".</summary>
+    public Dictionary<int, string> RowKinds = new();
 
-    /// <summary>Multi-type rows: anchor uniqueId -> the full list of type uids a type edit must fan out to.</summary>
-    public Dictionary<string, List<string>> RowAggregatedTypeUids = new();
+    /// <summary>Type/group rows: sheetRow -> the instances that row represents (bulk write-back).</summary>
+    public Dictionary<int, List<string>> RowInstanceIds = new();
 
-    /// <summary>Editable group-header rows: synthetic uid -> its bulk-write spec.</summary>
-    public Dictionary<string, GroupHeaderEdit> RowGroupHeaderEdits = new();
+    /// <summary>Multi-type rows: sheetRow -> the full list of type uids a type edit must fan out to.</summary>
+    public Dictionary<int, List<string>> RowAggregatedTypeUids = new();
+
+    /// <summary>Editable group-header rows: sheetRow -> its bulk-write spec.</summary>
+    public Dictionary<int, GroupHeaderEdit> RowGroupHeaderEdits = new();
 
     /// <summary>Data cells (excelRow, excelCol) that are non-top-left members of a merged region — a user merge
     /// blanks them, which would otherwise look like "clear this value"; the importer skips + reports them.</summary>
@@ -213,13 +218,23 @@ public sealed class ExcelReader
                     imp.Baseline[uidProp.Name] = map;
                 }
 
-            // Per-row metadata keyed by uniqueId: resolved bindings, kind, and (type rows) instance lists.
+            // Per-row metadata: RowBindings stays keyed by uniqueId (bindings are per-TYPE, shared across a type's
+            // rows). Kind / InstanceIds / AggregatedTypeUids / GroupHeaderEdit are per-RENDERED-ROW, so they key by
+            // the meta's excelRow (= the actual sheet row, see ExcelWriter) to avoid the type-uid collapse.
             if (sheetMeta.TryGetProperty("rows", out var rowsEl) && rowsEl.ValueKind == JsonValueKind.Array)
                 foreach (var rm in rowsEl.EnumerateArray())
                 {
                     if (!rm.TryGetProperty("uniqueId", out var uidp) || uidp.ValueKind != JsonValueKind.String)
                         continue;
                     var uid = uidp.GetString()!;
+                    // The sheet-row key for this rendered row. excelRow has ALWAYS been emitted; prior builds wrote it
+                    // as the raw TABLE INDEX, this build writes it as the actual SHEET ROW (table index + synth-header
+                    // offset). So a stale (pre-this-build) workbook re-imported here keys these dicts by the table
+                    // index: on a REAL-header schedule table-index == sheet-row (harmless), but on a HEADERS-OFF
+                    // schedule it's off by one → mis-key (the only path this fix could regress). The fix is correct for
+                    // any FRESH export. (If excelRow is ever truly absent, the dicts go unpopulated → compare-vs-live.)
+                    int? sheetRow = rm.TryGetProperty("excelRow", out var erp) && erp.ValueKind == JsonValueKind.Number
+                        ? erp.GetInt32() : (int?)null;
 
                     if (rm.TryGetProperty("bindings", out var bel) && bel.ValueKind == JsonValueKind.Object)
                     {
@@ -230,15 +245,17 @@ public sealed class ExcelReader
                         imp.RowBindings[uid] = map;
                     }
 
+                    if (sheetRow is not { } sr) continue;   // no sheet-row key → can't place per-row metadata
+
                     if (rm.TryGetProperty("kind", out var kp) && kp.ValueKind == JsonValueKind.String)
-                        imp.RowKinds[uid] = kp.GetString() ?? "element";
+                        imp.RowKinds[sr] = kp.GetString() ?? "element";
 
                     if (rm.TryGetProperty("instanceIds", out var iel) && iel.ValueKind == JsonValueKind.Array)
                     {
                         var ids = new List<string>();
                         foreach (var ip in iel.EnumerateArray())
                             if (ip.ValueKind == JsonValueKind.String) ids.Add(ip.GetString()!);
-                        imp.RowInstanceIds[uid] = ids;
+                        imp.RowInstanceIds[sr] = ids;
                     }
 
                     if (rm.TryGetProperty("aggregatedTypeUids", out var ael) && ael.ValueKind == JsonValueKind.Array)
@@ -246,7 +263,7 @@ public sealed class ExcelReader
                         var agg = new List<string>();
                         foreach (var ap in ael.EnumerateArray())
                             if (ap.ValueKind == JsonValueKind.String) agg.Add(ap.GetString()!);
-                        if (agg.Count > 0) imp.RowAggregatedTypeUids[uid] = agg;
+                        if (agg.Count > 0) imp.RowAggregatedTypeUids[sr] = agg;
                     }
 
                     if (rm.TryGetProperty("groupHeaderEdit", out var gh) && gh.ValueKind == JsonValueKind.Object)
@@ -263,7 +280,7 @@ public sealed class ExcelReader
                         if (gh.TryGetProperty("instanceIds", out var gie) && gie.ValueKind == JsonValueKind.Array)
                             foreach (var ip in gie.EnumerateArray())
                                 if (ip.ValueKind == JsonValueKind.String) g.InstanceIds.Add(ip.GetString()!);
-                        imp.RowGroupHeaderEdits[uid] = g;
+                        imp.RowGroupHeaderEdits[sr] = g;
                     }
                 }
 
@@ -459,7 +476,7 @@ public sealed class ExcelReader
             var uid = row.GetCell(anchorCol)?.ToString() ?? "";
             if (string.IsNullOrEmpty(uid)) continue; // header/group/blank rows carry no anchor
 
-            var kind = imp.RowKinds.TryGetValue(uid, out var k) ? k : "element";
+            var kind = imp.RowKinds.TryGetValue(r, out var k) ? k : "element";   // keyed by sheet row, not uid
             var cells = new string[anchorCol];
             for (int c = 0; c < anchorCol; c++)
                 cells[c] = row.GetCell(c)?.ToString() ?? "";
@@ -479,9 +496,11 @@ public sealed class ExcelReader
                 ExcelRow = r,
                 UniqueId = uid,
                 Kind = kind,
-                InstanceIds = imp.RowInstanceIds.TryGetValue(uid, out var ids) ? ids : null,
-                AggregatedTypeUids = imp.RowAggregatedTypeUids.TryGetValue(uid, out var agg) ? agg : null,
-                GroupHeaderEdit = imp.RowGroupHeaderEdits.TryGetValue(uid, out var ghe) ? ghe : null,
+                // Per-row metadata keyed by sheet row r (not uid) — so each rendered row of a type gets ITS OWN
+                // instance subset, not the last row's (the type-uid collapse that caused phantom edits + wrong writes).
+                InstanceIds = imp.RowInstanceIds.TryGetValue(r, out var ids) ? ids : null,
+                AggregatedTypeUids = imp.RowAggregatedTypeUids.TryGetValue(r, out var agg) ? agg : null,
+                GroupHeaderEdit = imp.RowGroupHeaderEdits.TryGetValue(r, out var ghe) ? ghe : null,
                 Cells = cells,
             });
         }

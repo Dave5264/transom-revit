@@ -505,9 +505,13 @@ public sealed class ExcelWriter
                         separator = cp.Separator, binding = cp.Binding, specTypeId = cp.SpecTypeId,
                     }).ToArray(),
                 }).ToArray(),
+                // excelRow is emitted as the ACTUAL SHEET ROW (table index + the synth-header offset), NOT the table
+                // index — so the import side can key per-row metadata by it and match the worksheet row it reads from.
+                // rowOffset mirrors WriteSheet's `synth ? 1 : 0` (headers-off / empty schedule shifts the body down 1).
                 rows = p.t.Rows.Select(r => new
                 {
-                    excelRow = r.ExcelRow, uniqueId = r.UniqueId, kind = r.Kind, bindings = r.Bindings,
+                    excelRow = r.ExcelRow + ((!p.t.HasHeaderRow || p.t.RowCount == 0) ? 1 : 0),
+                    uniqueId = r.UniqueId, kind = r.Kind, bindings = r.Bindings,
                     instanceIds = r.InstanceIds, aggregatedTypeUids = r.AggregatedTypeUids,
                     groupHeaderEdit = r.GroupHeaderEdit == null ? null : new
                     {
@@ -582,7 +586,10 @@ public sealed class ExcelWriter
             foreach (var col in writableCols)
                 if (col < t.ColCount)
                     map[col.ToString()] = t.Cells[i][col].Text;
-            baseline[rm.UniqueId!] = map;
+            // Key per RENDERED ROW (not per type uid): a type/group schedule renders many instances under one type
+            // anchor, so the bare type uid collides across rows and loses each row's per-instance snapshot. The
+            // import side looks this up with the SAME helper. (ScheduleReader.BaselineRowKey.)
+            baseline[ScheduleReader.BaselineRowKey(rm.UniqueId, rm.Kind, rm.InstanceIds)] = map;
         }
         return baseline;
     }

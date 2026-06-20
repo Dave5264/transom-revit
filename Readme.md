@@ -6,7 +6,7 @@
 
 [![Latest release](https://img.shields.io/github/v/release/Dave5264/transom-revit?label=latest%20release&color=2ea44f&logo=github)](https://github.com/Dave5264/transom-revit/releases/latest)
 
-### ⬇ [Download the installer](https://github.com/Dave5264/transom-revit/releases/download/v1.3.1/Transom-1.3.1-SingleUser.msi)
+### ⬇ [Download the installer](https://github.com/Dave5264/transom-revit/releases/download/v1.4.1/Transom-1.4.1-SingleUser.msi)
 
 **One click, no admin rights** — installs into your per-user Revit add-ins folder.
 Double-click the `.msi`, then start Revit. Supports **Revit 2025, 2026 & 2027**.
@@ -32,11 +32,18 @@ Then drop the guidance file from [`claude/`](claude/) (`CLAUDE.md`) where your c
 so Claude already knows the tools and the safe-write workflow. See [`claude/README.md`](claude/README.md) for
 exactly where each file goes.
 
-> **Status:** v1.3.1 released (Revit 2025/2026/2027) — full export and round-trip import, including grouped
-> schedules (by type or by field) and annotation/keyed-note schedules. v1.3.1 bundles the MCP shim and
-> auto-registers it on first launch, so the Claude bridge connects with no manual setup. v1.3.0 added
-> group-aware editing: project parameters on grouped elements apply in-place (via "vary by group instance"),
-> built-in params are staged for Claude-assist, and group-header edits no longer error. Requirements are locked in
+> **Status:** v1.4.1 released (Revit 2025/2026/2027) — full export and round-trip import, including grouped
+> schedules (by type or by field) and annotation/keyed-note schedules. v1.4.1 hardens grouped-schedule import:
+> type- and group-organized schedules now key their import baseline **per rendered row**, so editing one row no
+> longer collapses the whole type to a single value or produces phantom edits; grouped built-in *data* params
+> (Mark, Comments, Number, Finish) write directly while only geometry-driving built-ins route through
+> Claude-Assist; and conflict-only schedules stay selectable so their type conflicts reach the resolution dialog.
+> v1.4.0 added **editable column headers** (rename a column caption or a grouped super-header in the spreadsheet
+> and it writes back), **hidden-group instance resolution**, and a clearer **per-parameter color contract** —
+> every cell gets a definite color: no-fill = directly editable instance, green = type/bulk, blue = grouped
+> instance Transom resolves without AI, yellow = grouped geometry-driving built-in (Claude-Assist only),
+> grey = not settable. v1.3.1 bundled the MCP shim and auto-registers it on first launch, so the Claude bridge
+> connects with no manual setup. Requirements are locked in
 > [`SPEC.md`](SPEC.md); the build approach is in [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md).
 
 ## Install

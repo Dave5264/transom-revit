@@ -14,6 +14,38 @@ public sealed class ScheduleReader
 {
     public const string AnchorSentinel = "__transom_uid__";
 
+    /// <summary>
+    ///     The per-RENDERED-ROW key for the import baseline (three-way diff). MUST be derived identically on the
+    ///     export side (<see cref="ExcelWriter"/>'s baseline build) and the import side (<see cref="Importer"/>'s
+    ///     baseline lookup), so this single helper is the only place that computes it.
+    ///     <para/>
+    ///     A TYPE- or GROUP-organized schedule renders MANY instances under one anchor row whose UniqueId is the
+    ///     TYPE uid — NOT unique across rows. Keying the baseline by the type uid alone makes every row of a type
+    ///     overwrite the last, so each row's per-instance snapshot (e.g. a per-instance Mark) is lost and the
+    ///     importer mis-detects edits. Including the row's primary resolved instance uid makes the key unique per
+    ///     rendered row. Element rows (itemized) and header rows have no InstanceIds, so they keep their own
+    ///     UniqueId — byte-identical to the historical behavior, so those paths are unaffected.
+    /// </summary>
+    public static string BaselineRowKey(string? uniqueId, string kind, IReadOnlyList<string>? instanceIds)
+    {
+        if ((kind == "type" || kind == "group") && instanceIds is { Count: > 0 })
+            return uniqueId + "|" + instanceIds[0];   // type uid + first instance = unique per rendered row
+        return uniqueId ?? "";                          // element rows: instance uid; headers: synthetic uid
+    }
+
+    /// <summary>
+    ///     Built-in INSTANCE-IDENTITY parameters Revit lets DIFFER between instances of the same group type, so a
+    ///     direct write commits on a grouped instance (no "vary", no Edit Group) — live-verified for Mark
+    ///     (-1001203) 2026-06-19. Ordinary built-in data params (e.g. Comments -1010106) are NOT in this set: a
+    ///     direct grouped write rolls back and they can't vary, so they must use option 2b / Claude-Assist. No
+    ///     public API flag separates the two, so this is a curated allow-list shared by the export colouring
+    ///     (NORMAL vs blue) and the import routing (<see cref="Importer"/> GroupMode.None vs BuiltinDance).
+    /// </summary>
+    public static bool IsInstanceIdentityBuiltin(int parameterId) =>
+        parameterId == (int)BuiltInParameter.ALL_MODEL_MARK     // "Mark" (door/window/family Number maps here)
+        || parameterId == (int)BuiltInParameter.DOOR_NUMBER     // doors "Mark"/Number (== ALL_MODEL_MARK on doors)
+        || parameterId == (int)BuiltInParameter.ROOM_NUMBER;    // room "Number" (identity, varies per instance)
+
     private readonly Document _doc;
 
     /// <summary>Set by the export handler so the rolled-back anchor pass can auto-dismiss side-effect dialogs
@@ -508,10 +540,18 @@ public sealed class ScheduleReader
                                 // model — the schedule would desync from the 3D geometry). The only honest in-group edit is
                                 // Revit's Edit Group mode → Claude-Assist (option 3). Option 2 is suppressed (ComputeOption2*).
                                 groupBuiltinCols.Add(col.Col);
+                            else if (IsInstanceIdentityBuiltin(col.ParameterId))
+                                // NORMAL (no fill) = a grouped IDENTITY built-in instance param (Mark, Number) Revit lets
+                                // differ between group instances: a direct write COMMITS (verified live 2026-06-19), so it
+                                // round-trips exactly like an ungrouped instance cell. NO set → ExcelWriter leaves it
+                                // unfilled and the importer writes it in the direct pass (GroupMode.None).
+                                { /* normal: direct instance write */ }
                             else
                                 // BLUE = a grouped instance param Transom resolves WITHOUT AI: project/shared (positive id)
-                                // via option 1 (vary by group instance); built-in DATA (string/int — Comments, Mark, Finish)
-                                // via option 2b (new instance param). Grouped built-in TYPE cols → GREEN (the `type` branch).
+                                // via option 1 (vary by group instance); OR an ordinary built-in DATA param (Comments,
+                                // Finish — negative id, NOT identity) which Revit refuses to write directly in a group and
+                                // can't vary, so it goes via option 2b (new instance param). Grouped built-in TYPE cols →
+                                // GREEN (the `type` branch below).
                                 groupProjectCols.Add(col.Col);
                         }
                         else if (bind == "type")
@@ -606,9 +646,15 @@ public sealed class ScheduleReader
                         // YELLOW = grouped geometry-driving built-in instance param (Sill/Head Height): can't vary, can't
                         // safely 2b-replace (would desync 3D) → Claude-Assist only. See IsGeometryDrivingBuiltin.
                         groupBuiltin.Add(col.Col);
+                    else if (IsInstanceIdentityBuiltin(col.ParameterId))
+                        // NORMAL (no fill) = grouped IDENTITY built-in instance param (Mark, Number) Revit lets differ
+                        // between group instances → direct write commits (GroupMode.None). Add to NO set → unfilled.
+                        // (Matches the single-type row path above.)
+                        { /* normal: direct instance write */ }
                     else
-                        // BLUE = grouped instance param Transom resolves without AI: project/shared via vary (preserves
-                        // geometry), built-in DATA via option 2b (new instance param).
+                        // BLUE = grouped instance param resolved without AI: project/shared (positive id) via vary
+                        // (option 1, preserves geometry); OR an ordinary built-in DATA param (Comments, Finish — NOT
+                        // identity) via option 2b (Revit refuses a direct grouped write and it can't vary).
                         groupProject.Add(col.Col);
                 }
                 else if (bind == "type")
