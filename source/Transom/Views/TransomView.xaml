@@ -576,7 +576,7 @@
                                                                 CommandParameter="{Binding}" />
                                                         <TextBlock Foreground="{DynamicResource Accent}" FontSize="11" VerticalAlignment="Center"
                                                                    TextTrimming="CharacterEllipsis">
-                                                            <Run Text="interpreted as “" /><Run Text="{Binding Suggested, Mode=OneWay}" FontWeight="SemiBold" /><Run Text="” — confirm to use the schedule's format" />
+                                                            <Run Text="you typed “" /><Run Text="{Binding BadValue, Mode=OneWay}" FontWeight="SemiBold" /><Run Text="” — interpreted as “" /><Run Text="{Binding Suggested, Mode=OneWay}" FontWeight="SemiBold" /><Run Text="” — confirm to use the schedule's format" />
                                                         </TextBlock>
                                                     </DockPanel>
                                                 </StackPanel>
@@ -766,7 +766,7 @@
                                                             </Style.Triggers>
                                                         </Style>
                                                     </TextBlock.Style>
-                                                    <Run Text="interpreted as “" /><Run Text="{Binding Suggestion, Mode=OneWay}" FontWeight="SemiBold" /><Run Text="” · confirm to apply" />
+                                                    <Run Text="{Binding ElementName, Mode=OneWay}" /><Run Text=": you typed “" /><Run Text="{Binding EnteredValue, Mode=OneWay}" FontWeight="SemiBold" /><Run Text="” — interpreted as “" /><Run Text="{Binding Suggestion, Mode=OneWay}" FontWeight="SemiBold" /><Run Text="” · confirm to apply" />
                                                 </TextBlock>
                                                 <!-- (b) no interpretation yet and no error (e.g. an unreadable entry the user is
                                                      editing): neutral prompt. -->

@@ -703,10 +703,19 @@ public sealed class Importer
                     var current = CurrentDisplay(param);
                     bool edited = baseline != null ? cellText != baseline : cellText != current;
 
-                    // §15-E: an edit to a READ-ONLY (family/type-driven) cell DROPS SILENTLY — not a change, not a
-                    // skip, not shown, no "frozen" tally. A read-only cell is never the user's editable edit, so per
-                    // the guiding principle (alert only to deviations on cells that CAN be edited) we surface nothing.
-                    if (param.IsReadOnly) continue;
+                    // §15-E (REVISED — defect #1 fix): a read-only cell can't be written by import. An UNEDITED read-only
+                    // cell still surfaces nothing (alert only on cells that CAN be edited). But an EDITED read-only cell
+                    // is a user edit that WON'T apply — drop it to the SKIPPED bucket (reason "read-only") so the report
+                    // says "M skipped (read-only)" instead of silently dropping it and reporting "0 skipped".
+                    if (param.IsReadOnly)
+                    {
+                        if (edited)
+                        {
+                            cs.Skipped.Add(new SkippedItem { Reason = "read-only parameter", Detail = $"{col.FieldName} ({label}) — read-only, can't be changed by import (driven by the family or type)" });
+                            cs.Diagnostics.Add(Diag(sheet, row, col, label, "grey", "read-only — can't be changed by import", cellText));
+                        }
+                        continue;
+                    }
 
                     // Drift: current model value differs from what was exported. §15-C: only flag drift on a cell the
                     // user did NOT edit — a cell the user is CHANGING is intent, not drift. (Never knowable without a
@@ -1594,8 +1603,17 @@ public sealed class Importer
                 }
                 var current = CurrentDisplay(param);
                 bool edited = baseline != null ? cellText != baseline : cellText != current;
-                // §15-E: an edit to a READ-ONLY type cell DROPS SILENTLY (no change, no skip, no diagnostic, no tally).
-                if (param.IsReadOnly) continue;
+                // §15-E (REVISED — defect #1 fix): an EDITED read-only type cell is a user edit that won't apply →
+                // SKIPPED bucket (reason "read-only") so it's reported, not silently dropped. Unedited stays silent.
+                if (param.IsReadOnly)
+                {
+                    if (edited)
+                    {
+                        cs.Skipped.Add(new SkippedItem { Reason = "read-only parameter", Detail = $"{col.FieldName} ({label}) — read-only, can't be changed by import (driven by the family or type)" });
+                        cs.Diagnostics.Add(Diag(sheet, row, col, label, "grey", "read-only — can't be changed by import", cellText));
+                    }
+                    continue;
+                }
                 // §15-C: drift only on a cell the user did NOT edit. (Skip the "<varies>" sentinel — see element-row site.)
                 // §15-C gap fix: also suppress drift when the workbook cell ALREADY MATCHES the current model value
                 // (`Drifted(param, cellText, …)` false) — the user's own earlier-applied edit, not a model deviation.
@@ -1649,8 +1667,14 @@ public sealed class Importer
                     cs.Diagnostics.Add(Diag(sheet, row, col, label, "red", "parameter not found", cellText));
                     continue;
                 }
-                // §15-E: an edit to a READ-ONLY instance-bulk cell DROPS SILENTLY (no change, skip, diagnostic, tally).
-                if (rparam.IsReadOnly) continue;
+                // §15-E (REVISED — defect #1 fix): this cell is edited (checked above), so a read-only param means a
+                // user edit that won't apply → SKIPPED bucket (reason "read-only"), not a silent drop.
+                if (rparam.IsReadOnly)
+                {
+                    cs.Skipped.Add(new SkippedItem { Reason = "read-only parameter", Detail = $"{col.FieldName} ({label}) — read-only, can't be changed by import (driven by the family or type)" });
+                    cs.Diagnostics.Add(Diag(sheet, row, col, label, "grey", "read-only — can't be changed by import", cellText));
+                    continue;
+                }
 
                 var oldDisp = string.IsNullOrEmpty(baseline) ? "(varies)" : baseline;
                 bool isString = false, isInt = false;
@@ -2180,6 +2204,22 @@ public sealed class Importer
                 if (sev == FailureSeverity.Warning)
                 {
                     Messages.Add($"[{sev}] {desc}" + (n > 0 ? $" — {n} element(s)" : "") + who);
+                    // DEFECT #2 fix: some warnings are family auto-RESOLUTIONS that adjusted geometry to let an edit land
+                    // ("...automatically resolved..." with an "Error Resolution: Delete Splitting Element / Delete
+                    // Instance(s) / Delete Element(s)" in the description). These were logged in Messages but NOT counted
+                    // in the headline geometry-fix count, so the summary said "N geometry auto-fixes" while extra geometry
+                    // ops happened. Surface them: fold each into AutoFixWarnings (the counted+reviewed headline bucket) so
+                    // the user-facing count == all geometry ops.
+                    // IMPORTANT (verified live 2026-06-21, GUID 121bb0f3, before/after element-id diff): a resolution
+                    // CAPTION containing "Delete" is NOT a model deletion — door count stayed 283, all named ids
+                    // (8217022/8249282/8249283) remained present, and +35 NEW sub-element ids appeared. Revit drops a
+                    // stale internal cut-sketch and REBUILDS the family geometry = a REGENERATION/REPAIR, not a deletion.
+                    // So we surface it as "family geometry regenerated/repaired", NOT "deleted". (A TRUE deletion is only
+                    // the RevitDeletions / DocumentChanged path — ImportEventHandler.cs:109-110 — which correctly did NOT
+                    // fire here. Genuinely-destructive resolutions like "Delete Instance(s)" never reach this branch:
+                    // they're refused at the IsAllowedFailure whitelist.)
+                    if (DescribesDeletion(desc))
+                        AutoFixWarnings.Add($"family geometry regenerated/repaired to let the edit land — {DeletionSummary(desc)}" + (n > 0 ? $" on {n} element(s)" : "") + who);
                     try { a.DeleteWarning(f); } catch { /* ignore */ }
                 }
                 else if (sev == FailureSeverity.Error && f.HasResolutions())
@@ -2254,6 +2294,38 @@ public sealed class Importer
                 return ": " + string.Join(", ", parts) + (ids.Count > 8 ? $" … +{ids.Count - 8} more" : "");
             }
             catch { return ""; }
+        }
+
+        /// <summary>DEFECT #2: true when a (warning) failure description indicates Revit auto-resolved it via a family
+        /// geometry REGENERATION/REPAIR — e.g. a family error "automatically resolved" via "Error Resolution: Delete
+        /// Splitting Element / Delete Instance(s) / Delete Element(s)". Despite the "Delete" caption, this is NOT a model
+        /// deletion (verified live 2026-06-21: 0 elements removed, ids preserved, sub-geometry rebuilt) — Revit drops a
+        /// stale internal cut-sketch and rebuilds. These were otherwise only in the log, not the headline count, so the
+        /// apply summary under-reported them. Matches the resolution phrasing Revit emits (case-insensitive), guarded so
+        /// a benign warning that merely contains the word "delete" isn't flagged.</summary>
+        private static bool DescribesDeletion(string desc)
+        {
+            if (string.IsNullOrEmpty(desc)) return false;
+            var d = desc.ToLowerInvariant();
+            return d.Contains("delete splitting element")
+                || d.Contains("delete instance")
+                || d.Contains("delete element")
+                || (d.Contains("error resolution") && d.Contains("delete"));
+        }
+
+        /// <summary>DEFECT #2: a short label for the family geometry REGEN/REPAIR kind extracted from a warning
+        /// description (the "Error Resolution: Delete …" clause). The "Delete" caption is Revit's, but the verified
+        /// effect is a sketch/extrusion REBUILD (not a model deletion), so the surfaced text says "rebuilt/regenerated",
+        /// never "deleted". Best-effort string parse — elements/count appended separately by the caller.</summary>
+        private static string DeletionSummary(string desc)
+        {
+            if (string.IsNullOrEmpty(desc)) return "family geometry regenerated";
+            var d = desc.ToLowerInvariant();
+            if (d.Contains("delete splitting element")) return "rebuilt family sketch/extrusion geometry (stale split sketch dropped)";
+            if (d.Contains("delete instance")) return "regenerated family geometry (invalid solid rebuilt)";
+            if (d.Contains("delete element")) return "regenerated family geometry (invalid solid rebuilt)";
+            // generic "Error Resolution: Delete X" — a family auto-repair, not a model deletion
+            return "family geometry regenerated/repaired";
         }
 
         /// <summary>
@@ -2523,7 +2595,7 @@ public sealed class Importer
         if (failed.Count > 0) msg += $", {failed.Count} failed";
         if (unverified.Count > 0) msg += $", {unverified.Count} unverified (value didn't take)";
         if (collector.Messages.Count > 0) msg += $"  —  {collector.Messages.Count} Revit warning(s) (see log)";
-        if (collector.AutoFixWarnings.Count > 0) msg += $"  —  ⚠ {collector.AutoFixWarnings.Count} geometry auto-fix(es) applied (joins/dim refs removed — review)";
+        if (collector.AutoFixWarnings.Count > 0) msg += $"  —  ⚠ {collector.AutoFixWarnings.Count} geometry auto-fix(es) applied (joins/dim refs removed or family geometry regenerated — review)";
         if (newParamNote.Length > 0) msg += $"  —  {newParamNote}";
         // Header renames are folded into `applied` above; call them out so the user sees the caption edits landed.
         int hdrApplied = cs.HeaderChanges.Count(h => h.Selected && h.Outcome == ApplyOutcome.Applied);
@@ -2875,7 +2947,7 @@ public sealed class Importer
         }
         if (skippedAbsent.Count > 0) msg += $", {skippedAbsent.Count} skipped (no such parameter on the element)";
         if (stillUnverified.Count > 0) msg += $", {stillUnverified.Count} unverified";
-        if (cs.AutoFixWarnings.Count > 0) msg += $". ⚠ {cs.AutoFixWarnings.Count} geometry auto-fix(es) applied to let edits land (joins / dimension references removed) — review the apply log";
+        if (cs.AutoFixWarnings.Count > 0) msg += $". ⚠ {cs.AutoFixWarnings.Count} geometry auto-fix(es) applied to let edits land (joins / dimension references removed or family geometry regenerated) — review the apply log";
         msg += $". {cs.Skipped.Count(s => s.UserRelevant)} skipped.";   // #64: post-apply count = preview UserRelevant count
         return msg;
     }
@@ -2935,7 +3007,7 @@ public sealed class Importer
         // adjusted, so the user must be told to review.
         if (cs.AutoFixWarnings.Count > 0)
         {
-            sb.AppendLine($"\n== ⚠ geometry auto-fixes applied (review — model geometry was adjusted to let edits land): {cs.AutoFixWarnings.Count} ==");
+            sb.AppendLine($"\n== ⚠ geometry auto-fixes applied (review — model geometry was adjusted or family geometry regenerated to let edits land): {cs.AutoFixWarnings.Count} ==");
             foreach (var w in cs.AutoFixWarnings.Take(cap)) sb.AppendLine("  - " + w);
             if (cs.AutoFixWarnings.Count > cap) sb.AppendLine($"  … +{cs.AutoFixWarnings.Count - cap} more");
         }

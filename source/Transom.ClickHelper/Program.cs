@@ -67,6 +67,10 @@ internal static class Program
                 "type"         => RunType(args),
                 "scroll"       => RunScroll(args),
                 "find"         => RunFind(args),
+                "read-text"    => RunReadText(args),
+                "dump-controls"=> RunDumpControls(args),
+                "set-field"    => RunSetField(args),
+                "clear-field"  => RunSetField(args),
                 "dialogs"      => RunDialogs(args),
                 "click-dialog" => RunClickDialog(args),
                 "tile"         => RunTile(args),
@@ -570,6 +574,8 @@ internal static class Program
         string needle = (args.Positional.Skip(1).FirstOrDefault() ?? "").ToLowerInvariant();
         if (needle.Length == 0) return Fail("find needs a search string, e.g. find finish", 2);
         if (!TryGetRevitRoot(args, out var root, out var proc, out var error)) return Fail(error, 4);
+        // Diagnostic: which top-level window did we actually root on? (so a --window mis-target is never invisible)
+        IntPtr rootedHwnd = ResolveTargetWindow(args, proc!);
 
         var rows = new List<Dictionary<string, object?>>();
         foreach (AutomationElement e in root!.FindAll(TreeScope.Descendants, Condition.TrueCondition))
@@ -595,9 +601,12 @@ internal static class Program
         }
 
         if (_json)
-            Console.WriteLine(Json.Object(new() { ["ok"] = true, ["pid"] = proc!.Id, ["count"] = rows.Count, ["matches"] = rows }));
+            Console.WriteLine(Json.Object(new() { ["ok"] = true, ["pid"] = proc!.Id, ["count"] = rows.Count,
+                ["rootedHwnd"] = rootedHwnd.ToInt64(), ["rootedTitle"] = WindowTitle(rootedHwnd),
+                ["window"] = args.GetString("--window") ?? "(main)", ["matches"] = rows }));
         else
         {
+            Console.WriteLine($"rooted on hwnd 0x{rootedHwnd.ToInt64():X} \"{WindowTitle(rootedHwnd)}\" (--window={args.GetString("--window") ?? "(main)"})");
             Console.WriteLine($"{rows.Count} match(es) for '{needle}':");
             foreach (var r in rows)
                 Console.WriteLine($"  • {Pad(r["name"]?.ToString(), 24)} {Pad(r["controlType"]?.ToString(), 8)} " +
@@ -605,6 +614,120 @@ internal static class Program
                                   $"center=({r["centerX"]},{r["centerY"]})");
         }
         return 0;
+    }
+
+    /// <summary>Find a single element under the resolved window by --name (substring of Name) or --id
+    /// (exact AutomationId). Prefers an on-screen, enabled match. Null if none.</summary>
+    private static AutomationElement? FindOne(AutomationElement root, string? name, string? autoId)
+    {
+        AutomationElement? best = null;
+        foreach (AutomationElement e in root.FindAll(TreeScope.Descendants, Condition.TrueCondition))
+        {
+            if (autoId != null && SafeProp(e, AutomationElement.AutomationIdProperty) != autoId) continue;
+            if (name != null && !(SafeName(e).ToLowerInvariant().Contains(name.ToLowerInvariant()))) continue;
+            if (best == null) best = e;
+            if (!SafeBool(e, AutomationElement.IsOffscreenProperty)) { best = e; break; } // prefer on-screen
+        }
+        return best;
+    }
+
+    /// <summary>read-text: dump a control's text/state (Name, ValuePattern value, TextPattern text, IsEnabled,
+    /// Toggle state) — read the Hub banner / a field / a checkbox without a screenshot. Targets --window (the Hub).
+    /// Usage: read-text [--window "Transom"] [--name "<label>" | --id "<autoId>"]  (no name/id ⇒ best-effort window text).</summary>
+    private static int RunReadText(ArgSet args)
+    {
+        if (!TryGetRevitRoot(args, out var root, out var proc, out var error)) return Fail(error, 4);
+        var name = args.GetString("--name"); var autoId = args.GetString("--id");
+        if (name == null && autoId == null)
+            return Fail("read-text needs --name or --id (e.g. read-text --window \"Transom\" --name \"Apply\")", 2);
+        var el = FindOne(root!, name, autoId);
+        if (el == null) return Fail($"no control matching {(autoId != null ? "id=" + autoId : "name~" + name)} under the target window.", 5);
+        string val = "";
+        try { if (el.TryGetCurrentPattern(ValuePattern.Pattern, out var vp)) val = ((ValuePattern)vp).Current.Value ?? ""; } catch { }
+        string txt = "";
+        try { if (el.TryGetCurrentPattern(TextPattern.Pattern, out var tp)) txt = ((TextPattern)tp).DocumentRange.GetText(4000) ?? ""; } catch { }
+        string toggle = "";
+        try { if (el.TryGetCurrentPattern(TogglePattern.Pattern, out var tg)) toggle = ((TogglePattern)tg).Current.ToggleState.ToString(); } catch { }
+        return Ok(new()
+        {
+            ["action"] = "read-text",
+            ["name"] = SafeName(el),
+            ["controlType"] = SafeControlType(el),
+            ["automationId"] = SafeProp(el, AutomationElement.AutomationIdProperty),
+            ["value"] = val,
+            ["text"] = txt,
+            ["enabled"] = SafeBool(el, AutomationElement.IsEnabledProperty),
+            ["toggleState"] = toggle,
+            ["window"] = args.GetString("--window") ?? "(main)",
+        });
+    }
+
+    /// <summary>dump-controls: list ALL controls under --window with name/type/id/value/enabled/checked/rect —
+    /// the full picture of the Hub (banner, grid rows, "N of M selected", checkbox/button state) without GDI crops.
+    /// Usage: dump-controls [--window "Transom"] [--type Button|Text|Edit|... filter]</summary>
+    private static int RunDumpControls(ArgSet args)
+    {
+        if (!TryGetRevitRoot(args, out var root, out var proc, out var error)) return Fail(error, 4);
+        IntPtr rootedHwnd = ResolveTargetWindow(args, proc!);
+        var typeFilter = args.GetString("--type")?.ToLowerInvariant();
+        var rows = new List<Dictionary<string, object?>>();
+        foreach (AutomationElement e in root!.FindAll(TreeScope.Descendants, Condition.TrueCondition))
+        {
+            string ct = SafeControlType(e);
+            if (typeFilter != null && !ct.ToLowerInvariant().Contains(typeFilter)) continue;
+            string nm = SafeName(e);
+            string aid = SafeProp(e, AutomationElement.AutomationIdProperty);
+            if (string.IsNullOrEmpty(nm) && string.IsNullOrEmpty(aid)) continue;
+            string val = "";
+            try { if (e.TryGetCurrentPattern(ValuePattern.Pattern, out var vp)) val = ((ValuePattern)vp).Current.Value ?? ""; } catch { }
+            string toggle = "";
+            try { if (e.TryGetCurrentPattern(TogglePattern.Pattern, out var tg)) toggle = ((TogglePattern)tg).Current.ToggleState.ToString(); } catch { }
+            var rect = SafeRect(e);
+            rows.Add(new()
+            {
+                ["name"] = nm, ["controlType"] = ct, ["automationId"] = aid,
+                ["value"] = val, ["toggleState"] = toggle,
+                ["enabled"] = SafeBool(e, AutomationElement.IsEnabledProperty),
+                ["onscreen"] = !SafeBool(e, AutomationElement.IsOffscreenProperty),
+                ["centerX"] = rect is { } r ? (int)(r.Left + r.Width / 2) : (object?)null,
+                ["centerY"] = rect is { } r2 ? (int)(r2.Top + r2.Height / 2) : (object?)null,
+            });
+        }
+        return Ok(new() { ["action"] = "dump-controls", ["count"] = rows.Count,
+            ["rootedHwnd"] = rootedHwnd.ToInt64(), ["rootedTitle"] = WindowTitle(rootedHwnd),
+            ["window"] = args.GetString("--window") ?? "(main)", ["controls"] = rows });
+    }
+
+    /// <summary>set-field / clear-field: set a WPF TextBox/edit value via ValuePattern.SetValue (REPLACES atomically —
+    /// no select-all needed; fixes the append-only `type` + ctrl-a-doesn't-clear issue). clear-field = set to "".
+    /// Usage: set-field [--window "Transom"] (--name "<label>"|--id "<autoId>") "<text>"   ·   clear-field ... </summary>
+    private static int RunSetField(ArgSet args)
+    {
+        if (!TryGetRevitRoot(args, out var root, out var proc, out var error)) return Fail(error, 4);
+        var name = args.GetString("--name"); var autoId = args.GetString("--id");
+        if (name == null && autoId == null)
+            return Fail("set-field/clear-field needs --name or --id", 2);
+        // clear-field => "", else the positional text (skip the command word)
+        bool isClear = (args.Positional.FirstOrDefault() ?? "") == "clear-field";
+        string text = isClear ? "" : (args.Positional.Skip(1).FirstOrDefault() ?? "");
+        var el = FindOne(root!, name, autoId);
+        if (el == null) return Fail($"no field matching {(autoId != null ? "id=" + autoId : "name~" + name)} under the target window.", 5);
+        if (!el.TryGetCurrentPattern(ValuePattern.Pattern, out var vpObj))
+            return Fail("target control does not support ValuePattern (not an editable field).", 5);
+        var vp = (ValuePattern)vpObj;
+        if (vp.Current.IsReadOnly) return Fail("target field is read-only.", 5);
+        try { el.SetFocus(); } catch { }
+        try { vp.SetValue(text); }
+        catch (Exception ex) { return Fail("SetValue failed: " + ex.Message, 5); }
+        string after = "";
+        try { after = vp.Current.Value ?? ""; } catch { }
+        return Ok(new()
+        {
+            ["action"] = isClear ? "clear-field" : "set-field",
+            ["name"] = SafeName(el), ["automationId"] = SafeProp(el, AutomationElement.AutomationIdProperty),
+            ["requested"] = text, ["valueAfter"] = after, ["ok"] = after == text,
+            ["window"] = args.GetString("--window") ?? "(main)",
+        });
     }
 
     /// <summary>
@@ -1341,29 +1464,44 @@ internal static class Program
         return best;
     }
 
-    /// <summary>The process's visible top-level window whose title contains <paramref name="substring"/>
-    /// (case-insensitive) — used by --window to target an owned window (e.g. the "Transom" Schedule Hub window)
-    /// instead of Revit's main frame. Largest match wins; IntPtr.Zero if none.</summary>
+    /// <summary>The visible top-level window whose title contains <paramref name="substring"/>
+    /// (case-insensitive) — used by --window to target an owned window (e.g. the "Transom" Schedule Hub window,
+    /// a SIBLING top-level HWND of the main Revit frame under the same pid) instead of Revit's main frame.
+    /// PASS 1: windows owned by <paramref name="proc"/>. PASS 2 (fallback): ANY process's window — the Hub is a
+    /// WPF HwndWrapper and its window→pid association via GetWindowThreadProcessId is normally proc's pid, but
+    /// fall back globally so a hosting quirk can't hide it (this was the bug: --window resolved to the main
+    /// frame and find/screenshot walked the wrong subtree). Smallest-but-nonzero match preferred when the
+    /// substring is specific (the Hub is smaller than the main frame); largest otherwise. Zero if none.</summary>
     private static IntPtr GetWindowByTitle(Process proc, string substring)
     {
-        IntPtr best = IntPtr.Zero; long bestArea = -1;
-        uint target = (uint)proc.Id;
         var needle = substring.ToLowerInvariant();
+        IntPtr ownedBest = IntPtr.Zero; long ownedArea = -1;
+        IntPtr anyBest = IntPtr.Zero; long anyArea = -1;
+        uint target = (uint)proc.Id;
         EnumWindows((h, _) =>
         {
-            GetWindowThreadProcessId(h, out uint wpid);
-            if (wpid != target || !IsWindowVisible(h)) return true;
+            if (!IsWindowVisible(h)) return true;
             int len = GetWindowTextLength(h);
             if (len == 0) return true;
             var sb = new StringBuilder(len + 1);
             GetWindowText(h, sb, sb.Capacity);
-            if (!sb.ToString().ToLowerInvariant().Contains(needle)) return true;
+            var title = sb.ToString().ToLowerInvariant();
+            if (!title.Contains(needle)) return true;
             if (!GetWindowRect(h, out var r)) return true;
             long area = (long)(r.Right - r.Left) * (r.Bottom - r.Top);
-            if (area > bestArea) { bestArea = area; best = h; }
+            GetWindowThreadProcessId(h, out uint wpid);
+            if (wpid == target) { if (area > ownedArea) { ownedArea = area; ownedBest = h; } }
+            if (area > anyArea) { anyArea = area; anyBest = h; }
             return true;
         }, IntPtr.Zero);
-        return best;
+        return ownedBest != IntPtr.Zero ? ownedBest : anyBest;
+    }
+
+    /// <summary>Title of a window (best-effort), for diagnostics.</summary>
+    private static string WindowTitle(IntPtr h)
+    {
+        try { int len = GetWindowTextLength(h); var sb = new StringBuilder(len + 1); GetWindowText(h, sb, sb.Capacity); return sb.ToString(); }
+        catch { return ""; }
     }
 
     /// <summary>The window a command targets: the --window title match when given, else Revit's main frame.</summary>
