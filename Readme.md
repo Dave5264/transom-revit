@@ -6,7 +6,7 @@
 
 [![Latest release](https://img.shields.io/github/v/release/Dave5264/transom-revit?label=latest%20release&color=2ea44f&logo=github)](https://github.com/Dave5264/transom-revit/releases/latest)
 
-### ⬇ [Download the installer](https://github.com/Dave5264/transom-revit/releases/download/v1.4.2/Transom-1.4.2-SingleUser.msi)
+### ⬇ [Download the installer](https://github.com/Dave5264/transom-revit/releases/download/v1.4.3/Transom-1.4.3-SingleUser.msi)
 
 **One click, no admin rights** — installs into your per-user Revit add-ins folder.
 Double-click the `.msi`, then start Revit. Supports **Revit 2025, 2026 & 2027**.
@@ -32,7 +32,10 @@ Then drop the guidance file from [`claude/`](claude/) (`CLAUDE.md`) where your c
 so Claude already knows the tools and the safe-write workflow. See [`claude/README.md`](claude/README.md) for
 exactly where each file goes.
 
-> **Status:** v1.4.2 released (Revit 2025/2026/2027) — refreshed installer art plus import-UX improvements:
+> **Status:** v1.4.3 released (Revit 2025/2026/2027) — import-correctness fix: on type-organized schedules,
+> a new-type-parameter edit (the option-2a "(Transom)" column path) now routes each value to its own type
+> instead of occasionally shifting it to a neighbouring type, and an edit to a read-only cell is now reported
+> as skipped rather than dropped silently. Built on v1.4.2, which refreshed the installer art plus import-UX:
 > "Apply selected" stays greyed until you Preview, format-mismatched values become inline confirm rows
 > (you confirm "2.5 → 2'-6"" before it applies), the conflict picker accepts any entered value, and the
 > bundled Claude-Assist helper got UI-automation hardening. Built on v1.4.1, which hardened grouped-schedule import:
