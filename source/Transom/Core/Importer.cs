@@ -3367,11 +3367,37 @@ public sealed class Importer
                 else // TYPE binding
                 {
                     // Edit lookup: type id → the change carrying that type's edit.
+                    // DEFECT D1 FIX: key by the LIVE type id of EACH instance the change targets — NOT by a single
+                    // representative (ElementTypeIdOf used only BulkInstanceIds[0].GetTypeId()). The old single-rep
+                    // keying mis-routed values: for a TYPE-organized schedule the changes are instance-bulk (Binding
+                    // "instance", BulkInstanceIds = the row's instances, TypeId unset), and keying off only [0] let
+                    // two type-rows collide on the same dictionary key (last-write-wins) → a neighbor-shift where some
+                    // types got an adjacent type's value (5/16 wrong, silent). Mapping every instance's resolved type
+                    // makes the key set EXACTLY match the write loop's GroupBy(e.GetTypeId().Value), so each type pulls
+                    // its OWN edit. Prefer the change's stamped TypeId when present (type-conflict-picker changes set
+                    // it); otherwise resolve per instance.
                     var editByType = new Dictionary<long, ProposedChange>();
                     foreach (var ch in list.Where(c => c.SourceScheduleUid == schedUid))
                     {
-                        long t = ElementTypeIdOf(doc, ch);
-                        if (t >= 0) editByType[t] = ch;
+                        // 1) If the change carries an explicit TypeId (type-conflict picker), trust it.
+                        if (ch.TypeId != 0) { editByType[ch.TypeId] = ch; continue; }
+                        // 2) Otherwise map EACH targeted instance's live type → this change (instance-bulk changes).
+                        var uids = ch.BulkInstanceIds ?? (string.IsNullOrEmpty(ch.UniqueId) ? new List<string>() : new List<string> { ch.UniqueId });
+                        bool mappedAny = false;
+                        foreach (var uid in uids)
+                        {
+                            if (string.IsNullOrEmpty(uid)) continue;
+                            var inst = doc.GetElement(uid);
+                            var tid = inst?.GetTypeId();
+                            if (tid != null && tid != ElementId.InvalidElementId) { editByType[tid.Value] = ch; mappedAny = true; }
+                        }
+                        // 3) Last-resort fallback (no resolvable instances): the old single-rep behavior, so a change
+                        // is never silently dropped if BulkInstanceIds is empty but a UniqueId resolves.
+                        if (!mappedAny)
+                        {
+                            long t = ElementTypeIdOf(doc, ch);
+                            if (t >= 0) editByType[t] = ch;
+                        }
                     }
 
                     // Group the schedule's elements by type; each type writes ONE value to its type param.
