@@ -730,18 +730,53 @@ public sealed partial class TransomViewModel : ObservableObject
             foreach (var c in groupedList) { c.Resolution = res; c.NewParamName = p.ChosenParamName; }
             newParamChanges.AddRange(groupedList);
 
-            var key = (groupedList[0].ParameterId, groupedList[0].Field);
-            var scheds = groupedList.Select(c => c.SourceScheduleUid).ToHashSet();
-            var ungrouped = directChanges
-                .Where(c => c.ParameterId == key.Item1 && c.Field == key.Item2 && scheds.Contains(c.SourceScheduleUid))
-                .ToList();
-            foreach (var c in ungrouped)
+            foreach (var c in MatchingUngrouped(groupedList))
             {
                 c.Resolution = res;
                 c.NewParamName = p.ChosenParamName;
                 directChanges.Remove(c);
                 newParamChanges.Add(c);
             }
+        }
+
+        // DEFECT D3 FIX (#100) — MIRROR of AdoptColumn for the SKIP path. The per-parameter picker runs ONLY over
+        // grouped changes; a column's UNGROUPED instances live in directChanges (GroupMode.None) and the direct-write
+        // pass applies them UNCONDITIONALLY. So picking Skip left the grouped changes unbucketed (correctly not applied)
+        // but the ungrouped portion still wrote — Skip wasn't honored for them (user-found: 17 Hardware rows applied on
+        // Skip). SkipColumn REMOVES the matching ungrouped directChanges (same ParameterId+Field, scoped to the grouped
+        // changes' SourceScheduleUid set — same F2 scope as AdoptColumn) so NOTHING from a skipped column writes, and
+        // records them as skipped so the report is honest.
+        int SkipColumn(List<ProposedChange> groupedList)
+        {
+            int removed = 0;
+            foreach (var c in MatchingUngrouped(groupedList))
+            {
+                directChanges.Remove(c);
+                // F3: record one SkippedItem PER INSTANCE so the post-apply "N skipped" count (which counts
+                // SkippedItems) matches the inline note's instance count — an honest, consistent skip report.
+                int n = c.BulkInstanceIds?.Count ?? 1;
+                for (int i = 0; i < n; i++)
+                    _lastChangeSet?.Skipped.Add(new Core.SkippedItem
+                    {
+                        Reason = "skipped by user",
+                        Detail = $"{c.Field} ({c.ElementName}) — column skipped at the group-conflict prompt",
+                    });
+                removed += n;
+            }
+            return removed;
+        }
+
+        // The ungrouped directChanges belonging to the SAME column (ParameterId + Field) as a set of grouped changes,
+        // scoped to those grouped changes' source schedule(s) — shared by AdoptColumn (pull IN) and SkipColumn (pull OUT)
+        // so the column-matching + F2 cross-schedule scope can't diverge between the two.
+        List<ProposedChange> MatchingUngrouped(List<ProposedChange> groupedList)
+        {
+            var pid = groupedList[0].ParameterId;
+            var field = groupedList[0].Field;
+            var scheds = groupedList.Select(c => c.SourceScheduleUid).ToHashSet();
+            return directChanges
+                .Where(c => c.ParameterId == pid && c.Field == field && scheds.Contains(c.SourceScheduleUid))
+                .ToList();
         }
 
         // ONE picker per distinct blue/yellow column (parameter); the user chooses a resolution path for each.
@@ -790,6 +825,10 @@ public sealed partial class TransomViewModel : ObservableObject
             switch (choice ?? GroupResolution.Skip)
             {
                 case GroupResolution.Vary:
+                    // NOTE: Vary does NOT adopt/remove the column's ungrouped instances — they stay in directChanges and
+                    // direct-write the ORIGINAL param, which is exactly right (Vary keeps the original param; ungrouped
+                    // members just don't need 'vary by group instance'). Do NOT "symmetry-fix" this into MatchingUngrouped
+                    // like Skip/Adopt/Assist — that would wrongly pull Vary's ungrouped edits off the write path.
                     foreach (var c in list) c.Resolution = GroupResolution.Vary;
                     varyChanges.AddRange(list);
                     break;
@@ -804,10 +843,23 @@ public sealed partial class TransomViewModel : ObservableObject
                 case GroupResolution.ClaudeAssist:
                     foreach (var c in list) c.Resolution = GroupResolution.ClaudeAssist;
                     stagedChanges.AddRange(list);
+                    // CHANGE B (#100, user-directed): the WHOLE column goes to Claude, not a split — so the column's
+                    // UNGROUPED instances must NOT direct-write the original param. Pull them out of directChanges (so
+                    // the direct pass skips them) and stage them WITH the grouped ones. Same column-match + F2 scope as
+                    // Skip/Adopt via the shared MatchingUngrouped helper. Result: an Assist column commits NOTHING now.
+                    foreach (var c in MatchingUngrouped(list))
+                    {
+                        c.Resolution = GroupResolution.ClaudeAssist;
+                        directChanges.Remove(c);
+                        stagedChanges.Add(c);
+                    }
                     wantClickHelper = true;
                     break;
                 default: // Skip
-                    notes.Add($"{InstanceCountOf(list)} edit(s) to “{grp.Key.Field}” skipped");
+                    // D3 FIX (#100): Skip must skip the WHOLE column — also pull the ungrouped instances OUT of
+                    // directChanges so the direct pass doesn't write them. Count them in the skipped total.
+                    int skippedUngrouped = SkipColumn(list);
+                    notes.Add($"{InstanceCountOf(list) + skippedUngrouped} edit(s) to “{grp.Key.Field}” skipped");
                     break;
             }
         }
@@ -816,7 +868,11 @@ public sealed partial class TransomViewModel : ObservableObject
         if (stagedChanges.Count > 0)
         {
             var path = ChooseArtifactPath();
-            if (path == null) notes.Add($"{InstanceCountOf(stagedChanges)} group edit(s) not staged (no file chosen)");
+            if (path == null)
+            {
+                notes.Add($"{InstanceCountOf(stagedChanges)} group edit(s) not staged (no file chosen)");
+                RescueUngroupedStaged();   // F1: don't silently drop the ungrouped edits on a Save-cancel
+            }
             else
             {
                 var staged = StageGroupEdits(stagedChanges, path);
@@ -826,7 +882,27 @@ public sealed partial class TransomViewModel : ObservableObject
                     if (wantClickHelper) notes.Add(EnsureClickHelper());
                     ClaudeStagedNotice?.Invoke(staged);
                 }
-                else notes.Add($"{InstanceCountOf(stagedChanges)} group edit(s) could not be staged");
+                else
+                {
+                    notes.Add($"{InstanceCountOf(stagedChanges)} group edit(s) could not be staged");
+                    RescueUngroupedStaged();   // F1: staging failed → still apply the ungrouped edits directly
+                }
+            }
+        }
+
+        // F1 (data-loss fix): CHANGE B moved an Assist column's UNGROUPED instances out of directChanges into
+        // stagedChanges. If staging is cancelled (no file) or fails, those rows would be in NEITHER bucket and silently
+        // vanish (pre-v1.4.5 they direct-wrote regardless of the dialog). So on the cancel/fail paths, put the ungrouped
+        // (GroupMode.None) staged changes BACK on the direct-write path — they can apply without Claude. The GROUPED
+        // (BuiltinDance) staged changes are NOT rescued: Revit refuses a direct grouped built-in write, so they can only
+        // go through Claude — dropping them on a stage-cancel is correct (they were never directly applicable).
+        void RescueUngroupedStaged()
+        {
+            foreach (var c in stagedChanges.Where(c => c.GroupMode == GroupMode.None).ToList())
+            {
+                c.Resolution = null;          // clear the Assist routing so the direct pass writes it normally
+                stagedChanges.Remove(c);
+                if (!directChanges.Contains(c)) directChanges.Add(c);
             }
         }
 
@@ -884,12 +960,13 @@ public sealed partial class TransomViewModel : ObservableObject
     /// <summary>The dialog's explanatory note for an ambiguous option-2 binding (empty when there's nothing to disambiguate).</summary>
     private static string BindingNoteFor(Option2Mode mode) => mode switch
     {
+        // No "Recommended" wording anywhere in the dialog (user-directed 2026-06-22) — these notes just explain the
+        // inferred binding so the user can choose; they no longer flag one option as recommended.
         Option2Mode.AmbiguousPreferType =>
-            "Recommended: type — this schedule is organized by type, so a type parameter keeps one value per " +
-            "type and unifies the variations.",
+            "This schedule is organized by type, so a type parameter keeps one value per type and unifies the variations.",
         Option2Mode.AmbiguousPreferInstance =>
-            "Recommended: instance — this schedule itemizes every instance (or isn't grouped by type), so an " +
-            "instance parameter preserves each element's own value.",
+            "This schedule itemizes every instance (or isn't grouped by type), so an instance parameter preserves " +
+            "each element's own value.",
         _ => "",
     };
 
@@ -935,16 +1012,20 @@ public sealed partial class TransomViewModel : ObservableObject
                 kind = "group-edits",
                 schedule = _lastChangeSet?.ScheduleName ?? "",
                 project = SelectedProject,
-                note = "These are parameter edits on elements inside Revit MODEL GROUPS that the user chose to " +
-                       "apply via Claude. parameterId >= 0 = PROJECT/SHARED params: writable per group instance " +
-                       "after enabling 'vary by group instance', or via the bridge set_parameter (which handles " +
-                       "group members directly). parameterId < 0 = BUILT-IN params: these CANNOT vary per instance, " +
-                       "so a direct write is rejected ('Changes to groups are allowed only in group edit mode') — " +
-                       "do NOT use set_parameter; change them UNIFORMLY in the group DEFINITION via the safe " +
-                       "definition-swap procedure in 'Transom - Apply staged edits with Claude.md' in this same " +
-                       "folder (rebuild type -> repoint all instances -> delete old -> rename, with the " +
-                       "attached-detail/nested/excluded-group guards, conflict handling, and verification). Use the " +
-                       "Transom UI-Assist (ClickHelper) tools to open groups when needed, and verify every write.",
+                note = "These are parameter edits the user chose to apply via Claude — on elements inside Revit MODEL " +
+                       "GROUPS, plus any UNGROUPED instances of the same column staged with them. FIRST check 'group': " +
+                       "an EMPTY 'group' means the element is NOT in a model group, so it is ALWAYS a plain per-instance " +
+                       "write via set_parameter (no group-edit-mode, no definition-swap) — this holds REGARDLESS of the " +
+                       "parameterId sign. The parameterId rules below apply ONLY to entries WITH a non-empty 'group':\n" +
+                       "  • parameterId >= 0 = PROJECT/SHARED params: writable per group instance after enabling 'vary " +
+                       "by group instance', or via the bridge set_parameter (which handles group members directly).\n" +
+                       "  • parameterId < 0 = BUILT-IN params on a GROUP member: these CANNOT vary per instance, so a " +
+                       "direct write is rejected ('Changes to groups are allowed only in group edit mode') — do NOT use " +
+                       "set_parameter; change them UNIFORMLY in the group DEFINITION via the safe definition-swap " +
+                       "procedure in 'Transom - Apply staged edits with Claude.md' in this same folder (rebuild type -> " +
+                       "repoint all instances -> delete old -> rename, with the attached-detail/nested/excluded-group " +
+                       "guards, conflict handling, and verification). Use the Transom UI-Assist (ClickHelper) tools to " +
+                       "open groups when needed, and verify every write.",
                 edits,
             };
             File.WriteAllText(path, System.Text.Json.JsonSerializer.Serialize(payload,

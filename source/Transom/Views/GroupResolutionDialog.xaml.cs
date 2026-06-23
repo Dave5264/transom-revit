@@ -54,7 +54,7 @@ public partial class GroupResolutionDialog : Window
 
         // Option 2 — REPLACE the source column with one new parameter (the original values merged with the
         // user's edits). The binding (type vs instance) is inferred at build time and carried in Option2Mode;
-        // when ambiguous we offer BOTH, recommended-first, with an explanatory note.
+        // when ambiguous we offer BOTH (type first), with an explanatory note on the inferred binding.
         switch (p.Option2Mode)
         {
             case Option2Mode.AutoType:
@@ -68,10 +68,10 @@ public partial class GroupResolutionDialog : Window
                 break;
 
             case Option2Mode.AmbiguousPreferType:
-                // Both offered → label them per the user convention: "2a" = type, "2b" = instance (recommended one
-                // still listed first + marked Recommended).
+                // Both offered → label them per the user convention: "2a" = type, "2b" = instance. (User-directed
+                // 2026-06-22: no "Recommended" tag on any option — the type option is listed first but not marked.)
                 AddOption(GroupResolution.NewTypeParam,
-                    "2a.  Replace the column with a new type parameter  (Recommended)",
+                    "2a.  Replace the column with a new type parameter",
                     "Moves the existing values AND your edits into one type parameter — one column, original data preserved, no more group conflicts.",
                     "Stored as a new shared parameter (the column keeps its heading).");
                 // TASK #93A: offer the new-INSTANCE-parameter path (2b) ONLY when option 1 (Vary) is NOT available —
