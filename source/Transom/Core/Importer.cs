@@ -352,6 +352,10 @@ public sealed class ChangeSet
     /// thread without a live Document (uses the captured GUID). See <c>Importer.BuildDiagnosticLog(cs, selectedUids)</c>.</summary>
     public ImportWorkbook? SourceWorkbook;
     public string DocCreationGuid = "";
+    /// <summary>The document's full file path (<c>Document.PathName</c>) captured at build time. Staged into the
+    /// Claude-Assist group-edits JSON so Cowork can DISAMBIGUATE the right open model — two of the user's models
+    /// SHARE a CreationGUID, so title+GUID alone can pick the wrong doc; the path is the tiebreaker.</summary>
+    public string DocPath = "";
 
     /// <summary>The document's unit settings, captured at build time (API thread) so the inline confirm strip can
     /// RE-PARSE a user-corrected value (e.g. "7"" instead of "7'-0"") on the UI thread without a re-Preview — drives
@@ -862,6 +866,7 @@ public sealed class Importer
         // CHANGE 2 §3b surface-3: keep wb + doc GUID so the copy-log diagnostic can be rebuilt scoped post-selection.
         cs.SourceWorkbook = wb;
         cs.DocCreationGuid = doc.CreationGUID.ToString();
+        try { cs.DocPath = doc.PathName ?? ""; } catch { /* unsaved/odd doc — path stays empty */ }
         cs.DiagnosticLog = BuildDiagnosticLog(doc, wb, cs);
         return cs;
     }

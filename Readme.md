@@ -6,7 +6,7 @@
 
 [![Latest release](https://img.shields.io/github/v/release/Dave5264/transom-revit?label=latest%20release&color=2ea44f&logo=github)](https://github.com/Dave5264/transom-revit/releases/latest)
 
-### ⬇ [Download the installer](https://github.com/Dave5264/transom-revit/releases/download/v1.4.5/Transom-1.4.5-SingleUser.msi)
+### ⬇ [Download the installer](https://github.com/Dave5264/transom-revit/releases/download/v1.4.6/Transom-1.4.6-SingleUser.msi)
 
 **One click, no admin rights** — installs into your per-user Revit add-ins folder.
 Double-click the `.msi`, then start Revit. Supports **Revit 2025, 2026 & 2027**.
@@ -32,8 +32,13 @@ Then drop the guidance file from [`claude/`](claude/) (`CLAUDE.md`) where your c
 so Claude already knows the tools and the safe-write workflow. See [`claude/README.md`](claude/README.md) for
 exactly where each file goes.
 
-> **Status:** v1.4.5 released (Revit 2025/2026/2027) — grouped-import correctness + option-2 UX. When a
-> column edit touches members of a model group, the chosen resolution now applies to the column's **ungrouped**
+> **Status:** v1.4.6 released (Revit 2025/2026/2027) — **seamless Claude-Assist setup**. The per-user installer now
+> places the MCP shim into `%LocalAppData%` at **install time**, so the Claude bridge connects with the current shim
+> without needing to open Revit first; and the Claude-Assist guidance now directs the **manual "Edit Group" mode**
+> path (drive the Revit UI to edit a grouped built-in) instead of an API group-rebuild, with richer staging files
+> (doc path + GUID, old→new values, the new-parameter name) so Cowork can apply and verify reliably. Built on v1.4.5
+> (grouped-import correctness + option-2 UX): when a column edit touches members of a model group, the chosen
+> resolution now applies to the column's **ungrouped**
 > instances too: Skip skips them (they no longer write anyway), Claude-Assist stages them with the grouped ones,
 > and the new-parameter (option-2a/2b) path writes the edit to the new param for ungrouped members instead of
 > leaving it on the old hidden column. The group-conflict dialog now lets you **confirm/rename the new parameter**
@@ -56,6 +61,24 @@ exactly where each file goes.
 > grey = not settable. v1.3.1 bundled the MCP shim and auto-registers it on first launch, so the Claude bridge
 > connects with no manual setup. Requirements are locked in
 > [`SPEC.md`](SPEC.md); the build approach is in [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md).
+
+### Using Claude-Assist
+
+Most edits apply directly. But a **built-in** parameter (Comments, Finish, …) on an element **inside a Revit
+model group** can't be written automatically — Revit only allows it in "Edit Group" mode. For those, Transom
+hands the edit to **Claude-Assist**, which drives the Revit UI like a person would:
+
+1. **Export** the schedule, edit the cells in the spreadsheet, then **Import** it back and click **Preview**.
+2. On a grouped built-in cell, **Apply** prompts a resolution dialog — pick **"Claude-Assist"**.
+3. Transom writes a small **staging `.json`** (plus a step-by-step `.md`) to a folder you choose — it does **not**
+   change the model itself.
+4. Hand that folder to **Cowork** (the Claude client with the `transom-ui-assist` UI-automation tools). Cowork
+   opens "Edit Group" mode, sets the parameter via the Properties palette, finishes, and verifies the result.
+
+Editing a built-in this way sets it **uniformly for every instance of that group type** (that's how Revit
+groups work). If you need **different** values per instance, use the new-**instance**-parameter option (2b) in
+the resolution dialog instead. Notes: Claude-Assist drives the live UI, so run it on a **throwaway/non-production
+model first**, and if the model is **workshared, never Synchronize with Central mid-run** (you control sync).
 
 ## Install
 

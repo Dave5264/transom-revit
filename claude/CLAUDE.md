@@ -56,12 +56,42 @@ Don't guess your way past a failed `status` — surface the specific remediation
 Notes that matter:
 - Only columns where `writable` is true can be set. The bridge **refuses** read-only
   and family/type-driven parameters and tells you why — relay that, don't retry blindly.
-- **Instance parameters on elements inside Revit groups** are exactly what this bridge
-  unlocks (a normal schedule import refuses those "blue" cells). They can legally vary
-  per group instance, so editing one member is expected behavior.
+- **Parameters on elements inside Revit groups — know which kind:**
+  - A **project/shared** instance param ("blue" cell) CAN vary per group instance, so
+    `set_parameter` works on a group member (Transom/the bridge enables "vary by group
+    instance"). This is the case the bridge unlocks vs a plain schedule import.
+  - A **built-in** instance param on a group member (Comments, Finish, Mark, …) **CANNOT**
+    vary per instance — the bridge **REFUSES** a direct write: *"Changes to groups are
+    allowed only in group edit mode."* Do **not** retry `set_parameter`. Apply it through the
+    **Claude-Assist group-edit flow** (next section) — the manual Revit "Edit Group" UI via
+    the **`transom-ui-assist`** MCP.
 - A **type** parameter write affects every instance of that type — the result includes
   `instancesAffected`. Confirm with the user before changing type params.
 - Values are passed as strings; the bridge coerces to the parameter's storage type.
+
+## Claude-Assist group-edit flow (grouped BUILT-IN params)
+
+When the user picks **Claude-Assist** for a grouped built-in column, Transom writes a
+**group-edits JSON** (`{"tool":"Transom","kind":"group-edits"}`) plus a how-to markdown
+(`Transom - Apply staged edits with Claude.md`) into a folder, for you to apply. These can't
+go through `set_parameter` (the bridge refuses grouped built-ins, above) — you apply them by
+**driving Revit's real "Edit Group" mode in the UI**, which requires a SECOND MCP server:
+
+- **`transom-ui-assist`** (the ClickHelper UI-automation MCP — registered alongside the data
+  bridge). It exposes screenshot / find / click / type / key / dialogs tools to drive the
+  Revit window like a human. Inside Edit Group mode the **data bridge / Revit API is
+  unavailable** — `transom-ui-assist` is the only way to select the member, set the param in
+  the Properties palette, and Finish. The Revit API's only role is BEFORE entering / AFTER
+  finishing: select+zoom, the red color-override locator, and the post-Finish verify.
+- **Per-entry routing** (the JSON's `note` is authoritative): an **empty `group`** = an
+  ungrouped instance → a plain `set_parameter` (no Edit Group mode). A **non-empty `group`
+  with `parameterId < 0`** = the grouped built-in → the Edit-Group-mode UI path. A built-in
+  edited this way goes **uniform across the whole group type** (its definition); per-instance
+  **divergent** built-in values aren't possible while grouped — those need an instance shared
+  param (import **option 2b**), which never ungroups and is exclusion-safe.
+- Full step-by-step is in the staged `Transom - Apply staged edits with Claude.md` (excluded
+  members / attached detail groups / nested groups do **not** block the manual path — a person
+  edits through them; proven live). Throwaway model first; if workshared, **never** sync mid-run.
 
 ## Diagnostic fallback (only if asked to debug the connection)
 

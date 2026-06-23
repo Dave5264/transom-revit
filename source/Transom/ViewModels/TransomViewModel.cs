@@ -1003,6 +1003,10 @@ public sealed partial class TransomViewModel : ObservableObject
                 elementName = g.ElementName,
                 parameterId = g.ParameterId,
                 value = g.NewValue,
+                oldValue = g.OldValue,                 // Cowork verifies "was oldValue -> now value"
+                // The new shared-param name when this column is being converted via option 2a/2b (#97); empty for a
+                // plain in-place edit. Cowork/the verifier reads THIS field rather than the original param (ties to #99).
+                newParamName = string.IsNullOrWhiteSpace(g.NewParamName) ? null : g.NewParamName.Trim(),
                 memberUniqueIds = g.BulkInstanceIds ?? new List<string> { g.UniqueId },
             }).ToArray();
 
@@ -1011,6 +1015,11 @@ public sealed partial class TransomViewModel : ObservableObject
                 tool = "Transom",
                 kind = "group-edits",
                 schedule = _lastChangeSet?.ScheduleName ?? "",
+                // Doc identity for Cowork to pick the RIGHT open model: title + path + CreationGUID. Title+GUID alone is
+                // NOT enough — two of the user's models SHARE a CreationGUID, so the PATH is the disambiguator.
+                docTitle = SelectedProject,
+                docPath = _lastChangeSet?.DocPath ?? "",
+                docCreationGuid = _lastChangeSet?.DocCreationGuid ?? "",
                 project = SelectedProject,
                 note = "These are parameter edits the user chose to apply via Claude — on elements inside Revit MODEL " +
                        "GROUPS, plus any UNGROUPED instances of the same column staged with them. FIRST check 'group': " +
@@ -1019,13 +1028,15 @@ public sealed partial class TransomViewModel : ObservableObject
                        "parameterId sign. The parameterId rules below apply ONLY to entries WITH a non-empty 'group':\n" +
                        "  • parameterId >= 0 = PROJECT/SHARED params: writable per group instance after enabling 'vary " +
                        "by group instance', or via the bridge set_parameter (which handles group members directly).\n" +
-                       "  • parameterId < 0 = BUILT-IN params on a GROUP member: these CANNOT vary per instance, so a " +
-                       "direct write is rejected ('Changes to groups are allowed only in group edit mode') — do NOT use " +
-                       "set_parameter; change them UNIFORMLY in the group DEFINITION via the safe definition-swap " +
-                       "procedure in 'Transom - Apply staged edits with Claude.md' in this same folder (rebuild type -> " +
-                       "repoint all instances -> delete old -> rename, with the attached-detail/nested/excluded-group " +
-                       "guards, conflict handling, and verification). Use the Transom UI-Assist (ClickHelper) tools to " +
-                       "open groups when needed, and verify every write.",
+                       "  • parameterId < 0 = BUILT-IN params on a GROUP member: a direct write is rejected ('Changes to " +
+                       "groups are allowed only in group edit mode') and the API can't edit a group member — so apply " +
+                       "these by driving Revit's 'Edit Group' MODE in the UI with the Transom UI-Assist (ClickHelper) " +
+                       "tools (select+zoom+red-locator via API, then enter Edit Group, pick the member, set the param in " +
+                       "Properties, Finish, then verify the value + that the group member COUNT is unchanged). This sets " +
+                       "the value UNIFORMLY for every instance of the group type (the group definition) — that is correct " +
+                       "and durable; per-instance DIVERGENT built-in values are not possible while grouped and need an " +
+                       "instance shared parameter (import option 2b) instead. Full step-by-step is in 'Transom - Apply " +
+                       "staged edits with Claude.md' in this same folder. Verify every write.",
                 edits,
             };
             File.WriteAllText(path, System.Text.Json.JsonSerializer.Serialize(payload,
@@ -1519,64 +1530,96 @@ public sealed partial class TransomViewModel : ObservableObject
     private string ClaudeGuideMarkdown() => @"# Transom — Applying staged BUILT-IN group edits with Claude
 
 This file sits **next to the staged group-edits JSON** (same folder). When you import with **Claude Assist**,
-Transom stages **built-in parameter edits on elements inside Revit MODEL GROUPS** into a group-edits JSON in
-this **same folder**, and drops these instructions alongside it. Built-in params (Comments, Mark, Level, …)
-**cannot vary per group instance**, so they must be
-changed **uniformly in the group DEFINITION**. These steps are for Claude to follow.
+Transom stages **built-in parameter edits on elements inside Revit MODEL GROUPS** (plus any ungrouped instances
+of the same column) into a group-edits JSON in this **same folder**, and drops these instructions alongside it.
+A built-in param (Comments, Finish, Mark, …) on a GROUP member **can't be written by the API** — a direct write
+is rejected with *""Changes to groups are allowed only in group edit mode.""* So you apply it the way a person
+would: drive Revit's **""Edit Group"" mode** in the UI with the ClickHelper tools. These steps are for Claude.
 
-> Project parameters on grouped elements are NOT here — Transom applies those itself (it enables ""vary
-> by group instance"" and writes them). This file is only the built-in edits, which need the swap below.
+> Project/shared parameters on grouped elements are NOT here — Transom applies those itself (it enables
+> ""vary by group instance"" and writes them). This file is only the built-in edits, which need the UI path below.
 
-## What you need
-A way to run Revit API code on the open model (e.g. the Revit MCP `execute_revit_code`). The Transom
-write-bridge's `set_parameter` will **not** work here — a direct write to a group member is rejected with
-*""Changes to groups are allowed only in group edit mode.""* You must use the definition-swap below.
+## THE KEY FACT: the API is useless for editing a group member — this is a SCREENSHOT-DRIVEN UI task
+Inside Edit Group mode the Revit API / pyRevit routes are UNAVAILABLE: you cannot select, read, write, or
+verify a member via the API while editing the group. The API's ONLY role is 3 things, all BEFORE you enter
+Edit Group or AFTER you Finish: (a) SELECT/zoom to set up the view, (b) apply/remove a RED color override as a
+visual locator, (c) the final post-Finish VERIFY (param value + group member count). EVERYTHING between —
+entering edit mode, picking the element, opening Properties, typing the value, applying, finishing — is
+**screenshot + ClickHelper clicks/keys**. **Take a screenshot after almost every click/type/scroll, READ it,
+and confirm the expected state before the next action** — a wrong-element pick, a mis-focused field, and a
+missed button are all SILENT; the screenshot is the only way you catch them. Use the **Transom UI-Assist
+(ClickHelper)** tools.
 
 ## 1. Find the staging file
 In **this same folder**, find the file that parses as JSON with top-level `""tool"":""Transom""` and
 `""kind"":""group-edits""` (default name `transom_group_edits.json`; match by **content, not name**). This
 `.md` is not it. If several exist, use the most recent or ask the user.
 
-## 2. Confirm the model
+## 2. Confirm the model + SAFETY
 The open Revit document must match the JSON's `project`/`schedule`. **If not, STOP and tell the user.**
+This procedure COMMITS edits — only do it on a **throwaway / non-production** model unless the user explicitly
+says otherwise. If the model is **workshared, NEVER Synchronize with Central or Save** (the user controls sync).
 
-## 3. Group the edits and check for conflicts
-Each entry = one `parameterId` (negative = built-in) set to one `value` across `memberUniqueIds` (the
-member elements, one per group instance). Resolve each member's group type:
-`el = doc.GetElement(uid); groupTypeId = doc.GetElement(el.GroupId).GetTypeId()`. Group the entries by
-group type.
+## 3. Read the entries
+Each entry = one `parameterId` set to one `value` across `memberUniqueIds`. **Check `group` FIRST:** an empty
+`group` is an UNGROUPED instance → a plain per-instance write via the bridge `set_parameter` (no Edit Group
+mode needed), regardless of parameterId sign. A non-empty `group` with `parameterId < 0` is the built-in
+GROUP-member case this UI path handles. (A non-empty `group` with `parameterId >= 0` is project/shared and
+writable via `set_parameter` / ""vary by group instance"" — Transom usually applies those itself.)
 
-**Conflict check (before changing anything):** within one group type, if two entries target the same
-member role with **different** values, they can't both hold while grouped (a built-in can't differ across
-instances of one type). Do **not** guess — report it and ask the user whether to ungroup those instances
-or pick one value.
+**One value per group, uniformly.** Editing a built-in in Edit Group mode changes the group **definition**, so
+**every instance of that group type gets the same value** — that is correct and durable. If two entries want
+**different** values on the same member role of one group type, they can't both hold while grouped: a built-in
+can't differ between instances of a type. Do NOT guess — tell the user that per-instance divergent values need
+an **instance shared parameter (import option 2b)** instead (2b never ungroups and is exclusion-safe), or to
+pick one uniform value.
 
-## 4. The safe definition-swap (per group type)
-Run it all in ONE transaction with a FailuresPreprocessor (DeleteWarning + Continue) AND a
-DialogBoxShowing handler (OverrideResult to dismiss) so nothing blocks:
+> NOTE: excluded members, attached detail groups, and nested groups do **not** block this UI path — a person
+> (and you) can edit a member through all of those by hand. Proven live: a built-in was written on a member of
+> a group that HAD an excluded member, with the member count unchanged and nothing lost. (This differs from the
+> retired API definition-swap, which had to skip those cases. Do not skip them here.)
 
-a. **Safety guard.** Inspect one instance of the type. If it has attached detail groups
-   (`GetAvailableAttachedDetailGroupTypeIds` / `GetShownAttachedDetailGroupTypeIds` non-empty), nested
-   groups (a member that is itself a Model Group), or excluded members — **SKIP this type** and report
-   ""manual edit needed"". The swap can silently lose these.
-b. Pick one instance **A**. Record A's member ids, then `A.UngroupMembers()`.
-c. For each staged entry for this type, find the member among A's freed ids (its uid is in the entry's
-   `memberUniqueIds`) and set the parameter to `value` (pass unit text verbatim; parse doubles via
-   `UnitFormatUtils`). `doc.Regenerate()`.
-d. `doc.Create.NewGroup(freedIds)` → newGroup (a new group type).
-e. For **every other** instance of the original type: `group.ChangeTypeId(newGroup.GetTypeId())`.
-   Use **ChangeTypeId**, NOT the `GroupType` property setter (the setter pops a modal dialog).
-f. Delete the original (now-unused) group type, then rename newGroup's type back to the original name.
-g. **Verify:** read the parameter on members across several instances — every one must equal `value`.
-   If verification fails for a type, roll back that type's work and report it; never leave a half state.
+## 4. Apply each built-in group edit via Edit Group mode (per member element)
+PRECONDITION: turn **Thin Lines ON** (lineweights off) so overlapping geometry is easy to pick — `key esc`
+(canvas focus), then `keys tl`; screenshot to confirm crisp single lines.
 
-## 5. Report
-Per group type: applied / skipped (with reason) / conflicts. Note this changed the group **definition**,
-so all instances now share the new value — **durable** (unlike a per-instance override, which Revit
-silently drops on the next type change, reload, or sync).
+For each member to edit:
+1. **SELECT + ZOOM via API:** `uidoc.Selection.SetElementIds([id])`, `uidoc.ShowElements([id])`. Screenshot;
+   confirm it's visible (Revit highlights it cyan).
+2. **RED LOCATOR via API:** in a transaction, `view.SetElementOverrides(id, ogs)` with a RED projection-line +
+   solid surface fill (a `FillPatternElement` whose `GetFillPattern().IsSolidFill`). Commit, then deselect
+   (`SetElementIds([])`). Screenshot → confirm you can SEE the red element. (The override survives into Edit
+   Group mode and scales with zoom.)
+3. **ENTER EDIT GROUP:** select the GROUP instance via API (`SetElementIds([groupInstanceId])`) → screenshot
+   (ribbon = ""Modify | Model Groups"") → `find ""Edit Group""` and `click-id` it (the center coord is often
+   off-screen/negative — use click-id, not click-xy). The Edit Group toolbar now shows in `dialogs`
+   [add, remove, attach, finish, cancel]. **From here the API is unavailable.**
+4. **PICK THE MEMBER by its red color:** read the screenshot, click the red element's screen coord
+   (`click-xy`). OVERLAP HAZARD: a click can grab an element on top — if the screenshot shows the wrong/
+   overlapping element selected, `scroll <x> <y> <+notches>` to ZOOM IN until they separate, then click the
+   red body (or `key tab` to cycle alternates under the cursor). **Screenshot + read the Properties header /
+   status bar to CONFIRM the right element before editing** — a wrong pick is silent.
+5. **REVEAL + SET THE PARAM** (built-in instance params like Comments live in the Properties palette's
+   **Identity Data** section — `scroll` the palette down to it): click the value cell to focus → screenshot,
+   confirm the caret is in the field → `type --at=X,Y ""VALUE""` (field empty first; put text LAST — `--enter`
+   before the text breaks parsing) → then `key enter --at=X,Y` to commit. Confirm `fgIsRevit=True`. The
+   Properties **""Apply""** button enables → click it; screenshot → value shows + Apply greys out = committed.
+6. **FINISH:** `key esc` to deselect → `click-dialog ""finish""` → `dialogs` shows **0 open = committed**.
 
-## After applying
-Review in Revit; if **workshared**, **Synchronize with Central**; delete the JSON when done.
+## 5. Verify (API available again)
+Per member: re-read the parameter (must equal `value`), confirm its `GroupId` (still grouped), and the group's
+**member COUNT is UNCHANGED** (= nothing lost or un-excluded). Then REMOVE the red override:
+`view.SetElementOverrides(id, OverrideGraphicSettings())` in a transaction; screenshot → red gone.
+If a write didn't take or the count changed, report it — never leave a half-applied state.
+
+## 6. Report
+Per group type / member: applied / skipped (with reason) / conflicts (per-instance divergence → point to
+option 2b). Note this changed the group **definition**, so all instances of the type share the new value.
+
+## Workshared close (if you ever close the model)
+NEVER click ""synchronize"" or ""save"" on a close dialog. LOOP on `dialogs`: issue ONE `click-dialog` per call,
+first match wins — ""do not save"" (Changes Not Saved) → ""keep ownership"" (Editable Elements / Close Without
+Saving). Never bare `click-dialog` (defaults to cancel/close → aborts the close). The user controls sync.
 ";
 
     partial void OnExchangeFolderChanged(string value)
