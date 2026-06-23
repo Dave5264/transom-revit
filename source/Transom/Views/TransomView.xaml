@@ -213,13 +213,19 @@
                                 <Grid.ColumnDefinitions><ColumnDefinition Width="16" /><ColumnDefinition Width="56" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
                                 <Border Grid.Column="0" Width="12" Height="12" CornerRadius="2" Background="#DDEBF7" BorderBrush="#CFCDC4" BorderThickness="1" VerticalAlignment="Top" Margin="0,1,0,0" />
                                 <TextBlock Grid.Column="1" Text="blue" FontWeight="SemiBold" Foreground="{DynamicResource Accent}" FontSize="11.5" />
-                                <TextBlock Grid.Column="2" Text="grouped element's instance parameter — Transom resolves it on import (a project/shared param by enabling “vary by group instance”; a built-in data param by replacing the column with a new instance parameter)" Foreground="{DynamicResource Muted}" FontSize="11.5" TextWrapping="Wrap" />
+                                <TextBlock Grid.Column="2" Text="grouped element's project/shared instance parameter — Transom resolves it on import by enabling “vary by group instance” (option 1), preserving each element's own value" Foreground="{DynamicResource Muted}" FontSize="11.5" TextWrapping="Wrap" />
                             </Grid>
                             <Grid Margin="0,1">
                                 <Grid.ColumnDefinitions><ColumnDefinition Width="16" /><ColumnDefinition Width="56" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
                                 <Border Grid.Column="0" Width="12" Height="12" CornerRadius="2" Background="#FFF2CC" BorderBrush="#CFCDC4" BorderThickness="1" VerticalAlignment="Top" Margin="0,1,0,0" />
                                 <TextBlock Grid.Column="1" Text="yellow" FontWeight="SemiBold" Foreground="{DynamicResource LegendYellow}" FontSize="11.5" />
-                                <TextBlock Grid.Column="2" Text="grouped element's geometry-driving parameter (e.g. sill/head height) — can't be auto-resolved (replacing it would desync the 3D model); edit it in Revit's Edit Group mode, or import it with Claude-Assist" Foreground="{DynamicResource Muted}" FontSize="11.5" TextWrapping="Wrap" />
+                                <TextBlock Grid.Column="2" Text="grouped element's built-in data parameter (e.g. Comments, Finish) — resolved on import by replacing the column with a new instance or type parameter (it can't vary and can't be written in place)" Foreground="{DynamicResource Muted}" FontSize="11.5" TextWrapping="Wrap" />
+                            </Grid>
+                            <Grid Margin="0,1">
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="16" /><ColumnDefinition Width="56" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                                <Border Grid.Column="0" Width="12" Height="12" CornerRadius="2" Background="#F8D2D5" BorderBrush="#CFCDC4" BorderThickness="1" VerticalAlignment="Top" Margin="0,1,0,0" />
+                                <TextBlock Grid.Column="1" Text="red" FontWeight="SemiBold" Foreground="{DynamicResource LegendRed}" FontSize="11.5" />
+                                <TextBlock Grid.Column="2" Text="grouped element's geometry-driving parameter (e.g. sill/head height) — can only be resolved with Claude-Assist (replacing it would desync the 3D model); otherwise edit it in Revit's Edit Group mode" Foreground="{DynamicResource Muted}" FontSize="11.5" TextWrapping="Wrap" />
                             </Grid>
                             <Grid Margin="0,1">
                                 <Grid.ColumnDefinitions><ColumnDefinition Width="16" /><ColumnDefinition Width="56" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>

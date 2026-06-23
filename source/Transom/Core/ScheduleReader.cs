@@ -493,7 +493,7 @@ public sealed class ScheduleReader
                     var frozen = new HashSet<int>();    // grey: never importable
                     var groupProjectCols = new HashSet<int>(); // blue: grouped project param -> Transom sets vary + writes
                     var groupBuiltinCols = new HashSet<int>(); // yellow: grouped built-in param, SIMPLE group -> dance
-                    var groupBrokenCols = new HashSet<int>();  // red: grouped built-in param, BROKEN group -> option 2/4/5
+                    var groupBrokenCols = new HashSet<int>();  // red (#94): grouped geometry-driving built-in -> Claude-Assist only
                     var bulkCols = new HashSet<int>();  // green: type param -> edits every instance of the type
                     // A grouped (non-itemized) row bulk-writes instance params to all its members; if any member
                     // lives in a Revit model group, those instance writes need Claude-assist too (blue), just like
@@ -531,28 +531,15 @@ public sealed class ScheduleReader
                         if (!col.ImportEditable) { frozen.Add(col.Col); continue; }      // read-only / family-type
                         if ((inGroup || anyMemberGrouped) && bind == "instance")
                         {
-                            // Colour a grouped instance cell by the PARAMETER's nature (user rule 2026-06-19: decide per
-                            // parameter; there is NO "ambiguous" outcome). A multi-row type's row now carries its own
-                            // hidden-group instance subset (resolved above), so row count is no longer a factor.
-                            if (IsGeometryDrivingBuiltin(GetParamOn(host, col.ParameterId)))
-                                // YELLOW = a grouped GEOMETRY-driving built-in instance param (Sill/Head Height, offsets):
-                                // can't vary (built-in) and can't be safely replaced via 2b (a new param wouldn't drive the
-                                // model — the schedule would desync from the 3D geometry). The only honest in-group edit is
-                                // Revit's Edit Group mode → Claude-Assist (option 3). Option 2 is suppressed (ComputeOption2*).
-                                groupBuiltinCols.Add(col.Col);
-                            else if (IsInstanceIdentityBuiltin(col.ParameterId))
-                                // NORMAL (no fill) = a grouped IDENTITY built-in instance param (Mark, Number) Revit lets
-                                // differ between group instances: a direct write COMMITS (verified live 2026-06-19), so it
-                                // round-trips exactly like an ungrouped instance cell. NO set → ExcelWriter leaves it
-                                // unfilled and the importer writes it in the direct pass (GroupMode.None).
-                                { /* normal: direct instance write */ }
-                            else
-                                // BLUE = a grouped instance param Transom resolves WITHOUT AI: project/shared (positive id)
-                                // via option 1 (vary by group instance); OR an ordinary built-in DATA param (Comments,
-                                // Finish — negative id, NOT identity) which Revit refuses to write directly in a group and
-                                // can't vary, so it goes via option 2b (new instance param). Grouped built-in TYPE cols →
-                                // GREEN (the `type` branch below).
-                                groupProjectCols.Add(col.Col);
+                            // Colour a grouped instance cell by the PARAMETER's nature via the shared classifier (#94 —
+                            // single source of truth; user rule 2026-06-19: decide per parameter, no "ambiguous" outcome).
+                            switch (ClassifyGroupedInstance(host, col.ParameterId))
+                            {
+                                case GroupedInstanceColor.Red: groupBrokenCols.Add(col.Col); break;     // geometry-driving → Assist
+                                case GroupedInstanceColor.Blue: groupProjectCols.Add(col.Col); break;   // project/shared → vary
+                                case GroupedInstanceColor.Yellow: groupBuiltinCols.Add(col.Col); break; // built-in data → new param
+                                // Normal (identity built-in Mark/Number): no fill — direct write commits (GroupMode.None).
+                            }
                         }
                         else if (bind == "type")
                         {
@@ -619,8 +606,9 @@ public sealed class ScheduleReader
         var allInstances = new List<string>();
         var bindings = new Dictionary<int, string>();
         var frozen = new HashSet<int>();
-        var groupProject = new HashSet<int>();
-        var groupBuiltin = new HashSet<int>();
+        var groupProject = new HashSet<int>();   // blue: grouped project/shared instance param → option 1 (vary)
+        var groupBuiltin = new HashSet<int>();   // yellow: grouped built-in DATA instance param → new param (2a/2b)
+        var groupBroken = new HashSet<int>();    // red (#94): grouped geometry-driving built-in → Claude-Assist only
         var bulk = new HashSet<int>();
 
         // Per-cell type read-only check uses the row's ANCHOR type (same element the import write anchors on).
@@ -642,20 +630,14 @@ public sealed class ScheduleReader
                 if (!col.ImportEditable) { frozen.Add(col.Col); continue; }
                 if (anyMemberGrouped && bind == "instance")
                 {
-                    if (IsGeometryDrivingBuiltin(GetParamOn(repr, col.ParameterId)))
-                        // YELLOW = grouped geometry-driving built-in instance param (Sill/Head Height): can't vary, can't
-                        // safely 2b-replace (would desync 3D) → Claude-Assist only. See IsGeometryDrivingBuiltin.
-                        groupBuiltin.Add(col.Col);
-                    else if (IsInstanceIdentityBuiltin(col.ParameterId))
-                        // NORMAL (no fill) = grouped IDENTITY built-in instance param (Mark, Number) Revit lets differ
-                        // between group instances → direct write commits (GroupMode.None). Add to NO set → unfilled.
-                        // (Matches the single-type row path above.)
-                        { /* normal: direct instance write */ }
-                    else
-                        // BLUE = grouped instance param resolved without AI: project/shared (positive id) via vary
-                        // (option 1, preserves geometry); OR an ordinary built-in DATA param (Comments, Finish — NOT
-                        // identity) via option 2b (Revit refuses a direct grouped write and it can't vary).
-                        groupProject.Add(col.Col);
+                    // Shared classifier (#94 — same mapping as every other site).
+                    switch (ClassifyGroupedInstance(repr, col.ParameterId))
+                    {
+                        case GroupedInstanceColor.Red: groupBroken.Add(col.Col); break;     // geometry-driving → Assist
+                        case GroupedInstanceColor.Blue: groupProject.Add(col.Col); break;   // project/shared → vary
+                        case GroupedInstanceColor.Yellow: groupBuiltin.Add(col.Col); break; // built-in data → new param
+                        // Normal (identity built-in Mark/Number): no fill — direct write commits (GroupMode.None).
+                    }
                 }
                 else if (bind == "type")
                 {
@@ -673,6 +655,7 @@ public sealed class ScheduleReader
         if (frozen.Count > 0) meta.FrozenCols = frozen;
         if (groupProject.Count > 0) meta.GroupProjectCols = groupProject;
         if (groupBuiltin.Count > 0) meta.GroupBuiltinCols = groupBuiltin;
+        if (groupBroken.Count > 0) meta.GroupBrokenCols = groupBroken;   // red (#94): geometry-driving grouped built-ins
         if (bulk.Count > 0) meta.BulkCols = bulk;
     }
 
@@ -821,11 +804,16 @@ public sealed class ScheduleReader
                         if (!col.Writable || !col.ImportEditable) (rm.FrozenCols ??= new HashSet<int>()).Add(destCol);
                         else if (inGroup && bind == "instance")
                         {
-                            // YELLOW only for geometry-driving built-ins (can't vary, can't safely 2b-replace);
-                            // project/shared AND built-in DATA params resolve without AI → BLUE. (See IsGeometryDrivingBuiltin.)
-                            if (IsGeometryDrivingBuiltin(GetParamOn(el, col.ParameterId)))
-                                (rm.GroupBuiltinCols ??= new HashSet<int>()).Add(destCol);
-                            else (rm.GroupProjectCols ??= new HashSet<int>()).Add(destCol);
+                            // #94/F3: classify via the SHARED helper, same as the main passes (previously this appended
+                            // column used a stale 2-way mapping — geometry→yellow, everything else→blue — and never
+                            // produced red or split built-in data into yellow).
+                            switch (ClassifyGroupedInstance(el, col.ParameterId))
+                            {
+                                case GroupedInstanceColor.Red: (rm.GroupBrokenCols ??= new HashSet<int>()).Add(destCol); break;
+                                case GroupedInstanceColor.Blue: (rm.GroupProjectCols ??= new HashSet<int>()).Add(destCol); break;
+                                case GroupedInstanceColor.Yellow: (rm.GroupBuiltinCols ??= new HashSet<int>()).Add(destCol); break;
+                                // Normal (identity built-in): no fill — direct write commits.
+                            }
                         }
                         else if (bind == "type") (rm.BulkCols ??= new HashSet<int>()).Add(destCol);
                     }
@@ -869,15 +857,39 @@ public sealed class ScheduleReader
         || (p.StorageType == StorageType.Double && spec != null);
 
     /// <summary>
+    ///     The export edit-hint colour for a GROUPED INSTANCE cell (#94). SINGLE SOURCE OF TRUTH shared by every
+    ///     classifier site (the itemized per-row pass, the multi-type meta pass, and the combined-column append) so the
+    ///     colour→behaviour mapping can't diverge between them. Decide PER PARAMETER:
+    ///       • RED    — geometry-driving built-in (Sill/Head Height): can't vary, can't safely replace (a new param
+    ///                  wouldn't drive the 3D) → Claude-Assist only; option 2 suppressed.
+    ///       • NORMAL — instance-identity built-in (Mark, Number): Revit lets it differ between group instances, so a
+    ///                  direct write commits (GroupMode.None) — no fill; round-trips like an ungrouped instance cell.
+    ///       • BLUE   — project/shared instance param (positive id) → option 1 (vary by group instance), preserves value.
+    ///       • YELLOW — ordinary built-in DATA param (negative id, not geometry, not identity — e.g. Comments, Finish)
+    ///                  → resolved via a new parameter (option 2a type / 2b instance); can't vary, can't write in place.
+    /// </summary>
+    private GroupedInstanceColor ClassifyGroupedInstance(Element? host, int parameterId)
+    {
+        // The geometry-driving test needs a live element to read the param's storage/spec; without one we can't
+        // distinguish a geometry-driving built-in, so skip Red (all current callers pass a non-null host).
+        if (host != null && IsGeometryDrivingBuiltin(GetParamOn(host, parameterId))) return GroupedInstanceColor.Red;
+        if (IsInstanceIdentityBuiltin(parameterId)) return GroupedInstanceColor.Normal;
+        return parameterId >= 0 ? GroupedInstanceColor.Blue : GroupedInstanceColor.Yellow;
+    }
+
+    /// <summary>#94: the export edit-hint colour for a grouped instance cell — see <see cref="ClassifyGroupedInstance"/>.</summary>
+    private enum GroupedInstanceColor { Normal, Blue, Yellow, Red }
+
+    /// <summary>
     ///     True when a parameter is a BUILT-IN INSTANCE param that DRIVES GEOMETRY / a model quantity — i.e. a
     ///     measurable Double (length/offset/height, via <see cref="UnitUtils.IsMeasurableSpec"/>) on a built-in
     ///     (negative-id) param. These can't round-trip inside a group by any safe automatic path: built-ins can't
     ///     "vary by group instance", and replacing the column with a NEW instance param (option 2b) would desync the
     ///     schedule from the actual geometry (the new param isn't wired to the model — e.g. Sill/Head Height drive the
-    ///     window's position). The only honest edit is in Revit's Edit Group mode (Claude-Assist). So these colour
-    ///     YELLOW (not blue) and option 2 is suppressed for them. (Project/shared instance params — positive id — vary
-    ///     instead, which preserves geometry, so they stay blue even when geometric. Built-in DATA params — string/int,
-    ///     e.g. Comments/Mark/Finish — are safely 2b-replaceable, so they stay blue.)
+    ///     window's position). The only honest edit is in Revit's Edit Group mode (Claude-Assist). So these colour RED
+    ///     (#94) and option 2 is suppressed for them. (Project/shared instance params — positive id — vary instead,
+    ///     which preserves geometry, so they stay BLUE even when geometric. Built-in DATA params — string/int, e.g.
+    ///     Comments/Finish — colour YELLOW: resolved via a new parameter.)
     /// </summary>
     private static bool IsGeometryDrivingBuiltin(Parameter p)
     {

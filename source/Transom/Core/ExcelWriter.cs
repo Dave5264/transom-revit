@@ -149,16 +149,15 @@ public sealed class ExcelWriter
                 var tc = table.Cells[r][c];
                 var cell = row.CreateCell(c);
                 cell.SetCellValue(tc.Text);
-                // Colour precedence: grey (can't import) > blue (grouped project param, Transom applies via vary)
-                // > yellow (grouped built-in param — can't be written in place; resolve via option 2 (new type
-                //          parameter) or Claude-Assist). Change 3 (2026-06-14): the former BROKEN-group RED is GONE —
-                //          a broken-group built-in now colours YELLOW, exactly like the simple-grouped-built-in case,
-                //          so the exported workbook has NO red cells (matches the legend's removal of the red swatch and
-                //          the clean removal of the model dance on the colour side). groupBrokenCols folds into yellow.
-                // > green (bulk: edits many elements) > normal. An editable group-header cell is a bulk write -> green.
+                // Colour precedence (#94): grey (can't import) > blue (grouped PROJECT/SHARED instance param → option 1
+                //          vary) > yellow (grouped built-in DATA param e.g. Comments → resolved via a new parameter) >
+                //          red (grouped GEOMETRY-driving built-in e.g. sill/head height → Claude-Assist only; replacing
+                //          it would desync the 3D) > green (bulk: edits many elements) > normal. An editable group-header
+                //          cell is a bulk write -> green. (#94 split the former blue catch-all into blue/yellow and
+                //          repurposed groupBrokenCols as RED for the geometry-driving set — previously folded into yellow.)
                 bool isGroupEditCell = ghe != null && c == ghe.Col;
-                bool groupBuiltin = (groupBrokenCols != null && groupBrokenCols.Contains(c))
-                                    || (groupBuiltinCols != null && groupBuiltinCols.Contains(c));
+                bool groupBroken = groupBrokenCols != null && groupBrokenCols.Contains(c);
+                bool groupBuiltin = groupBuiltinCols != null && groupBuiltinCols.Contains(c);
                 // A header-band cell is a round-trippable CAPTION when EITHER its text matches the column's exported
                 // heading (per-column caption → ScheduleField.ColumnHeading) OR it's the top-left of a grouped
                 // super-header merge (→ ViewSchedule.GroupHeaders). Both are editable on import → no fill. Remaining
@@ -177,6 +176,7 @@ public sealed class ExcelWriter
                     : frozen != null && frozen.Contains(c) ? GreyOf(tc.Style)
                     : groupProjectCols != null && groupProjectCols.Contains(c) ? BlueOf(tc.Style)
                     : groupBuiltin ? YellowOf(tc.Style)
+                    : groupBroken ? RedOf(tc.Style)               // #94: grouped geometry-driving built-in → Claude-Assist only
                     : bulk != null && bulk.Contains(c) ? GreenOf(tc.Style)
                     : tc.Style;
 

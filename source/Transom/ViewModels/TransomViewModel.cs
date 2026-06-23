@@ -712,6 +712,38 @@ public sealed partial class TransomViewModel : ObservableObject
         var stagedChanges = new List<ProposedChange>();    // option 3 — staged for Claude (UI-assist)
         bool wantClickHelper = false;
 
+        // DEFECT D2 FIX (#96) + F1/F2 — SHARED adoption helper for the option-2 (2a TYPE / 2b INSTANCE) paths.
+        // ApplyNewParam REPLACES the whole column and REPOINTS the schedule field (AddOrReplaceField) for BOTH 2a and
+        // 2b — so every instance the column touches must be written on the NEW param, including the UNGROUPED ones
+        // (which arrived as GroupMode.None directChanges; only grouped members route through the picker). Otherwise the
+        // ungrouped edits land on the OLD param while the displayed (new) column shows their stale value.
+        //   (a) stamp Resolution + the user-confirmed #97 name on the grouped changes and bucket them as option-2;
+        //   (b) MOVE the matching ungrouped directChanges into newParamChanges so ApplyNewParam owns the whole column
+        //       (same ColumnKey → grouped into ONE param; their BulkInstanceIds make editByUid isEdit=true → EditVal;
+        //       Resolution set BEFORE the direct pass so it skips them and never writes the old param).
+        // F2 SCOPE: directChanges + the picker are GLOBAL across all selected schedules, and a built-in param shares the
+        // same negative ParameterId across schedules — so the adoption MUST be scoped to the SAME SourceScheduleUid(s)
+        // as the grouped changes being resolved, or resolving schedule A's column would silently convert+repoint
+        // schedule B's same-named column where the user had no conflict/dialog. Used by BOTH the 2a and 2b cases.
+        void AdoptColumn(List<ProposedChange> groupedList, GroupResolution res, GroupResolutionPrompt p)
+        {
+            foreach (var c in groupedList) { c.Resolution = res; c.NewParamName = p.ChosenParamName; }
+            newParamChanges.AddRange(groupedList);
+
+            var key = (groupedList[0].ParameterId, groupedList[0].Field);
+            var scheds = groupedList.Select(c => c.SourceScheduleUid).ToHashSet();
+            var ungrouped = directChanges
+                .Where(c => c.ParameterId == key.Item1 && c.Field == key.Item2 && scheds.Contains(c.SourceScheduleUid))
+                .ToList();
+            foreach (var c in ungrouped)
+            {
+                c.Resolution = res;
+                c.NewParamName = p.ChosenParamName;
+                directChanges.Remove(c);
+                newParamChanges.Add(c);
+            }
+        }
+
         // ONE picker per distinct blue/yellow column (parameter); the user chooses a resolution path for each.
         foreach (var grp in groupChanges.GroupBy(c => (c.ParameterId, c.Field)))
         {
@@ -728,6 +760,9 @@ public sealed partial class TransomViewModel : ObservableObject
             var prompt = new GroupResolutionPrompt
             {
                 Field = grp.Key.Field,
+                // #93B: the column's custom display heading (when it differs from the real parameter name) so the
+                // dialog can name the actual parameter being changed even for a renamed column.
+                Header = list.Select(c => c.SourceHeading).FirstOrDefault(h => !string.IsNullOrEmpty(h)) ?? "",
                 ParameterId = grp.Key.ParameterId,
                 IsBuiltin = isBuiltin,
                 IsBroken = broken != null,
@@ -759,12 +794,12 @@ public sealed partial class TransomViewModel : ObservableObject
                     varyChanges.AddRange(list);
                     break;
                 case GroupResolution.NewTypeParam:
-                    foreach (var c in list) c.Resolution = GroupResolution.NewTypeParam;
-                    newParamChanges.AddRange(list);
+                    // F1: 2a repoints the column too (AddOrReplaceField), so it adopts the ungrouped instances exactly
+                    // like 2b — via the shared helper, no copy-paste. (#97 name + #96 D2 fix + F2 scope folded in.)
+                    AdoptColumn(list, GroupResolution.NewTypeParam, prompt);
                     break;
                 case GroupResolution.NewInstanceParam:
-                    foreach (var c in list) c.Resolution = GroupResolution.NewInstanceParam;
-                    newParamChanges.AddRange(list);   // same bucket as NewTypeParam — ApplyNewParam branches on the resolution
+                    AdoptColumn(list, GroupResolution.NewInstanceParam, prompt);
                     break;
                 case GroupResolution.ClaudeAssist:
                     foreach (var c in list) c.Resolution = GroupResolution.ClaudeAssist;

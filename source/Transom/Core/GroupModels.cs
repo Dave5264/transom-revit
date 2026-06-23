@@ -45,7 +45,10 @@ public enum Option2Mode
 /// </summary>
 public sealed class GroupResolutionPrompt
 {
-    public string Field = "";              // schedule column header / parameter name (for the heading)
+    public string Field = "";              // the underlying parameter's real name (Definition.Name)
+    public string Header = "";             // the schedule column's custom display heading (ScheduleField.ColumnHeading),
+                                           // when it differs from Field — shown in the dialog so a renamed column still
+                                           // names the real parameter being changed (#93B). Empty / == Field ⇒ not shown.
     public int ParameterId;
     public bool IsBuiltin;                 // true = built-in (no vary, option 1); false = project (blue)
     public bool IsBroken;                  // true = the HARD dance gate tripped (level-anchored families, true
@@ -62,6 +65,12 @@ public sealed class GroupResolutionPrompt
                                            // option 2 is suppressed (replacing it desyncs the 3D) → Claude-Assist or
                                            // Skip only; drives the accurate "why option 2 is unavailable" message.
     public List<ProposedChange> Changes = new();
+
+    /// <summary>#97: the new parameter NAME the user confirmed/edited in the dialog when they chose option 2a (type)
+    /// or 2b (instance). The dialog writes it back here; the apply path (<c>Importer.ApplyNewParam</c>) uses it as the
+    /// created parameter's visible name instead of the hardcoded "&lt;field&gt; (Transom)" default. Empty ⇒ the user
+    /// didn't pick a new-param option, so the default suggestion applies.</summary>
+    public string ChosenParamName = "";
 
     public List<string> GroupNames => Changes
         .Select(c => string.IsNullOrEmpty(c.GroupName) ? "Group" : c.GroupName)

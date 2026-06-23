@@ -151,6 +151,11 @@ public sealed class ProposedChange : System.ComponentModel.INotifyPropertyChange
     /// Used by option 2 to give the new column a clean visible title instead of the verbose param name.
     /// Empty falls back to Field.</summary>
     public string SourceHeading { get; set; } = "";
+    /// <summary>#97: the new parameter NAME the user confirmed in the group-resolution dialog for an option-2a/2b
+    /// conversion (copied from <c>GroupResolutionPrompt.ChosenParamName</c> when the choice is committed). Used by
+    /// <c>ApplyNewParam</c> as the created parameter's name instead of the hardcoded "&lt;field&gt; (Transom)"
+    /// default. Empty ⇒ use the default suggestion.</summary>
+    public string NewParamName { get; set; } = "";
     public string OldValue { get; set; } = "";
 
     /// <summary>The value shown in the preview's New cell. MUST notify — <c>ConfirmRow</c> updates it IN PLACE when
@@ -1166,8 +1171,15 @@ public sealed class Importer
             bool editsAligned = cs.Option2EligibleParams.Contains(pg.Key);
             bool sourceAligned = SourceUniformPerType(doc, vs, sample.ParameterId);
 
+            // TASK #95: suppress option 2a (new TYPE param) on a TYPE CONFLICT. A type param holds ONE value per type,
+            // so when the edits do NOT align per type (instances of one type were given different values) a type-param
+            // conversion can't preserve them — the apply path's §10b pre-scan (ColumnRejectedItemized) would reject it
+            // outright. Reflect that in the DIALOG gating, not just at apply time: treat a non-aligned column as
+            // INSTANCE-only (AmbiguousPreferInstance) so 2a is never offered/recommended for a conflict. Result:
+            // project/shared+conflict → 1/3/4 (no 2a); built-in+conflict → 2b/3/4 (no 2a). AutoType still requires
+            // editsAligned, so only the clean-aligned grouped-by-type case keeps a type-param option.
             var mode = organizedByType && sourceAligned && editsAligned ? Option2Mode.AutoType
-                     : organizedByType ? Option2Mode.AmbiguousPreferType
+                     : organizedByType && editsAligned ? Option2Mode.AmbiguousPreferType
                      : Option2Mode.AmbiguousPreferInstance;
             cs.Option2Modes[pg.Key] = mode;
         }
@@ -3148,7 +3160,9 @@ public sealed class Importer
                 string outcome = c.Outcome == ApplyOutcome.Applied ? "applied"
                     : c.Outcome == ApplyOutcome.Failed ? "FAILED" : c.Outcome.ToString().ToLower();
                 string note = string.IsNullOrEmpty(c.OutcomeNote) ? "" : $" — {c.OutcomeNote}";
-                sb.AppendLine($"    - {where}{c.ElementName} · {c.Field} → '{c.Field} (Transom)' = '{c.NewValue}'  [{outcome}]{note}");
+                // F4: log the ACTUAL new-param name the user confirmed (#97), not the hardcoded default.
+                string newName = string.IsNullOrWhiteSpace(c.NewParamName) ? $"{c.Field} (Transom)" : c.NewParamName.Trim();
+                sb.AppendLine($"    - {where}{c.ElementName} · {c.Field} → '{newName}' = '{c.NewValue}'  [{outcome}]{note}");
             }
             if (o2changes.Count > cap) sb.AppendLine($"    … +{o2changes.Count - cap} more");
         }
@@ -3257,7 +3271,12 @@ public sealed class Importer
 
             // §8: the param NAME encodes the binding kind ("_instance" suffix for instance) so type/instance
             // params can never collide on a name — EnsureSharedParam applies the suffix. ColumnHeading stays clean.
-            var name = $"{sample.Field} (Transom)";
+            // #97: use the name the user confirmed/edited in the dialog (NewParamName) when present; otherwise the
+            // default suggestion. The "_instance" suffix is still applied inside EnsureSharedParam for instance binding,
+            // so the user edits the visible base name only — type/instance params still can't collide.
+            var name = !string.IsNullOrWhiteSpace(sample.NewParamName)
+                ? sample.NewParamName.Trim()
+                : $"{sample.Field} (Transom)";
             ElementId paramId; Guid guid;
             try { (paramId, guid) = EnsureSharedParam(doc, app, name, spec, cats, instanceBinding); }
             catch (Exception ex) { var why = $"new {kind} param threw on create/bind: {ex.Message}"; failed.Add($"{sample.Field} — {why}"); StampFailed(list, why); continue; }
@@ -3742,12 +3761,20 @@ public sealed class Importer
             if (def.GetFieldOrder().Any(fid => def.GetField(fid).ParameterId == newParamId))
                 return AddFieldResult.AlreadyPresent;
 
-            // Locate the SOURCE field by its parameter id → its STABLE id + current index.
+            // Locate the SOURCE field by its parameter id → its STABLE id + current index. Capture its text
+            // justification (#98) while the field still exists, to carry onto the replacement below.
             ScheduleFieldId? srcFid = null;
             int srcIdx = -1;
+            ScheduleHorizontalAlignment? srcAlign = null;
             foreach (var fid in def.GetFieldOrder())
             {
-                if (def.GetField(fid).ParameterId.Value == sourceParamId) { srcFid = fid; srcIdx = def.GetFieldIndex(fid); break; }
+                var f = def.GetField(fid);
+                if (f.ParameterId.Value == sourceParamId)
+                {
+                    srcFid = fid; srcIdx = def.GetFieldIndex(fid);
+                    try { srcAlign = f.HorizontalAlignment; } catch { /* alignment is cosmetic; carry only if readable */ }
+                    break;
+                }
             }
 
             void SetHeading(ScheduleField f)
@@ -3774,6 +3801,11 @@ public sealed class Importer
             // REPLACE: insert AT the source index, set the new heading, then remove the ORIGINAL by stable id.
             var newField = def.InsertField(sf, srcIdx);
             SetHeading(newField);
+            // #98: the replacement column inherits the OLD column's text justification (left/center/right) so a
+            // center-justified column stays center-justified after the option-2 swap. Replace path only (an appended
+            // column has no old field to match — leave default). Cosmetic → never fail the replace over it.
+            if (srcAlign != null)
+                try { newField.HorizontalAlignment = srcAlign.Value; } catch { /* alignment is cosmetic */ }
             try
             {
                 def.RemoveField(srcFid!); // by STABLE ScheduleFieldId — new field settles at srcIdx, count unchanged
