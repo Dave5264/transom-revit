@@ -6,7 +6,7 @@
 
 [![Latest release](https://img.shields.io/github/v/release/Dave5264/transom-revit?label=latest%20release&color=2ea44f&logo=github)](https://github.com/Dave5264/transom-revit/releases/latest)
 
-### ⬇ [Download the installer](https://github.com/Dave5264/transom-revit/releases/download/v1.4.3/Transom-1.4.3-SingleUser.msi)
+### ⬇ [Download the installer](https://github.com/Dave5264/transom-revit/releases/download/v1.4.5/Transom-1.4.5-SingleUser.msi)
 
 **One click, no admin rights** — installs into your per-user Revit add-ins folder.
 Double-click the `.msi`, then start Revit. Supports **Revit 2025, 2026 & 2027**.
@@ -32,10 +32,16 @@ Then drop the guidance file from [`claude/`](claude/) (`CLAUDE.md`) where your c
 so Claude already knows the tools and the safe-write workflow. See [`claude/README.md`](claude/README.md) for
 exactly where each file goes.
 
-> **Status:** v1.4.3 released (Revit 2025/2026/2027) — import-correctness fix: on type-organized schedules,
-> a new-type-parameter edit (the option-2a "(Transom)" column path) now routes each value to its own type
-> instead of occasionally shifting it to a neighbouring type, and an edit to a read-only cell is now reported
-> as skipped rather than dropped silently. Built on v1.4.2, which refreshed the installer art plus import-UX:
+> **Status:** v1.4.5 released (Revit 2025/2026/2027) — grouped-import correctness + option-2 UX. When a
+> column edit touches members of a model group, the chosen resolution now applies to the column's **ungrouped**
+> instances too: Skip skips them (they no longer write anyway), Claude-Assist stages them with the grouped ones,
+> and the new-parameter (option-2a/2b) path writes the edit to the new param for ungrouped members instead of
+> leaving it on the old hidden column. The group-conflict dialog now lets you **confirm/rename the new parameter**
+> before it's created, drops the misleading "Recommended" tag, offers the new-instance-param path only when
+> per-instance Vary isn't available, suppresses the type-param option on a per-type conflict, and the replacement
+> column inherits the original column's text justification. The installer dialogs were also fixed so their title
+> text is readable (was dark-on-dark). Built on v1.4.3, which fixed option-2a value routing on type-organized
+> schedules + read-only-edit reporting; and v1.4.2, which refreshed the installer art plus import-UX:
 > "Apply selected" stays greyed until you Preview, format-mismatched values become inline confirm rows
 > (you confirm "2.5 → 2'-6"" before it applies), the conflict picker accepts any entered value, and the
 > bundled Claude-Assist helper got UI-automation hardening. Built on v1.4.1, which hardened grouped-schedule import:
