@@ -6,6 +6,34 @@ using WixSharp.Controls;
 const string outputName = "Transom";
 const string projectName = "Transom";
 
+// #105 BUILD-ENV FIX: packing a WixSharp ManagedAction compiles a native SfxCA via ILCompiler (PublishAot), whose
+// native LINK step shells `vswhere.exe` (unqualified) to locate the VC++ toolchain (link.exe). On a machine where
+// vswhere isn't on PATH the link fails ("'vswhere.exe' is not recognized" → link.exe exit 123 → MSB3073) and WixSharp
+// emits NO SfxCA binary → the SingleUser MSI build dies with WIX0103 "Cannot find the Binary file" — while the
+// CA-less MultiUser MSI still builds, so the run looks like a (partial) success. vswhere ships in a fixed location;
+// make the AOT link reproducible (NOT dependent on an ambient/dev-prompt PATH) by ensuring that dir is on PATH for
+// this process — ILCompiler runs as a child and inherits it. Idempotent; no-op if vswhere is already resolvable.
+EnsureVsWhereOnPath();
+
+void EnsureVsWhereOnPath()
+{
+    try
+    {
+        // Already resolvable on PATH? then nothing to do.
+        var path = Environment.GetEnvironmentVariable("PATH") ?? "";
+        bool resolvable = path.Split(System.IO.Path.PathSeparator)
+            .Any(d => !string.IsNullOrEmpty(d) && System.IO.File.Exists(System.IO.Path.Combine(d, "vswhere.exe")));
+        if (resolvable) return;
+
+        // vswhere.exe ships with the VS Installer at a fixed per-machine location (independent of which VS edition).
+        var pf86 = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86);
+        var vsInstallerDir = System.IO.Path.Combine(pf86, "Microsoft Visual Studio", "Installer");
+        if (System.IO.File.Exists(System.IO.Path.Combine(vsInstallerDir, "vswhere.exe")))
+            Environment.SetEnvironmentVariable("PATH", vsInstallerDir + System.IO.Path.PathSeparator + path);
+    }
+    catch { /* best-effort: if this fails the build surfaces the original vswhere error, which is the right signal */ }
+}
+
 var versioning = Versioning.CreateFromVersionStringAsync(args[0]);
 var project = new Project
 {
@@ -51,6 +79,22 @@ var refreshShim = new ManagedAction(
 
 BuildSingleUserMsi();
 BuildMultiUserUserMsi();
+
+// #105 FALSE-SUCCESS GUARD: WixSharp's BuildMsi can FAIL one MSI (e.g. the SingleUser one, if the SfxCA didn't pack)
+// while the process still exits 0 — so a dropped installer silently reads as success. FAIL LOUDLY instead: assert
+// BOTH expected MSIs landed in output/ (the SingleUser one carries the #105 custom action and must never be missing).
+AssertBuilt($"{outputName}-{versioning.Version}-SingleUser.msi");
+AssertBuilt($"{outputName}-{versioning.Version}-MultiUser.msi");
+
+void AssertBuilt(string msiName)
+{
+    var msiPath = System.IO.Path.Combine(project.OutDir, msiName);
+    if (!System.IO.File.Exists(msiPath))
+        throw new Exception(
+            $"Installer build did NOT produce '{msiPath}'. The MSI was dropped (likely a custom-action/SfxCA pack " +
+            $"failure earlier in the log) — failing the build so this is not mistaken for success.");
+    Console.WriteLine($"OK: built {msiPath} ({new System.IO.FileInfo(msiPath).Length:N0} bytes)");
+}
 
 void BuildSingleUserMsi()
 {
