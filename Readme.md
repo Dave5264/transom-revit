@@ -1,6 +1,9 @@
 <div align="center">
 
-<img src="branding/transom-title.svg" alt="Transom" width="600">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="branding/transom-title-dark.svg">
+  <img alt="Transom" src="branding/transom-title-light.svg" width="600">
+</picture>
 
 
 **Round-trip Revit schedules through spreadsheets — with full visual fidelity and type-parameter–safe write-back.**

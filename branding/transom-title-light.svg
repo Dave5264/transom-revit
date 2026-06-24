@@ -1,11 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 690 132" role="img" aria-label="Transom">
-  <defs>
-    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#3fb950"/>
-      <stop offset="1" stop-color="#58a6ff"/>
-    </linearGradient>
-  </defs>
-  <g font-family="'SFMono-Regular','Cascadia Code',Consolas,'Liberation Mono',Menlo,monospace" font-size="18" font-weight="700" fill="url(#g)" xml:space="preserve">
+  <g font-family="'SFMono-Regular','Cascadia Code',Consolas,'Liberation Mono',Menlo,monospace" font-size="18" font-weight="700" fill="#1f2328" xml:space="preserve">
     <text x="6" y="20">████████╗██████╗  █████╗ ███╗   ██╗███████╗ ██████╗ ███╗   ███╗</text>
     <text x="6" y="38">╚══██╔══╝██╔══██╗██╔══██╗████╗  ██║██╔════╝██╔═══██╗████╗ ████║</text>
     <text x="6" y="56">   ██║   ██████╔╝███████║██╔██╗ ██║███████╗██║   ██║██╔████╔██║</text>
