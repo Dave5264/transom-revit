@@ -61,7 +61,7 @@ public class RevisionNarrativeCommand : ExternalCommand
 
         int sheets = data.Disciplines.Sum(d => d.Sheets.Count);
         int notes = data.Disciplines.Sum(d => d.Sheets.Sum(s => s.Notes.Count));
-        var details = $"Disciplines: {data.Disciplines.Count}\nSheets: {sheets}\nNotes: {notes}\nSaved: {sdlg.FileName}";
+        var details = $"Disciplines: {data.Disciplines.Count}\nSheets: {sheets}\nNotes: {notes} (from {data.SourceCloudCount} clouds)\nSaved: {sdlg.FileName}";
         if (data.Warnings.Count > 0)
             details += "\n\nWarnings:\n- " + string.Join("\n- ", data.Warnings);
 

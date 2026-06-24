@@ -131,10 +131,10 @@ public static class RevisionNarrativeDocxWriter
                 int ind = numId > 0 ? 0 : 360;
                 foreach (var note in sheet.Notes)
                 {
-                    if (string.IsNullOrEmpty(note.DetailNumber))
-                        sb.Append(InsertNotePara(note.Text, font, numId, ind, ref ctrlId)); // click-to-fill [insert]
+                    if (string.IsNullOrEmpty(note.DetailLabel))
+                        sb.Append(InsertNotePara(note.Text, font, numId, ind, ref ctrlId)); // all-blank → click-to-fill [insert]
                     else
-                        sb.Append(Para($"Detail {note.DetailNumber} - {note.Text}", false, 0, ind, font, numId));
+                        sb.Append(Para($"{(note.IsMultiDetail ? "Details" : "Detail")} {note.DetailLabel} - {note.Text}", false, 0, ind, font, numId));
                 }
                 Blank();
             }
@@ -273,7 +273,9 @@ public static class RevisionNarrativeDocxWriter
                 int n = 1;
                 foreach (var note in sheet.Notes)
                 {
-                    var label = string.IsNullOrEmpty(note.DetailNumber) ? "[insert]" : $"Detail {note.DetailNumber}";
+                    var label = string.IsNullOrEmpty(note.DetailLabel)
+                        ? "[insert]"
+                        : $"{(note.IsMultiDetail ? "Details" : "Detail")} {note.DetailLabel}";
                     Line($"{n++}. {label} - {note.Text}", indent: 360);
                 }
                 Blank();

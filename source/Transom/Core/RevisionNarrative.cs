@@ -39,7 +39,15 @@ public static class RevisionNarrative
     }
 
     // ---- output model (consumed by RevisionNarrativeDocxWriter) ----
-    public sealed class Note { public string Text = ""; public string DetailNumber = ""; public string Mark = ""; public long CloudId; }
+    public sealed class Note
+    {
+        public string Text = "";
+        public string DetailNumber = "";   // #104: group's lowest numbered detail ("" = all-blank); used as a sort key
+        public string DetailLabel = "";     // #104: display list — "" all-blank, "1" single, "1, 3, 4" / "5, [insert]" multi
+        public bool IsMultiDetail;          // #104: true => the prefix is the plural "Details"
+        public string Mark = "";
+        public long CloudId;
+    }
     public sealed class Sheet { public string Number = ""; public string Name = ""; public readonly List<Note> Notes = new(); }
     public sealed class Discipline { public string Name = ""; public readonly List<Sheet> Sheets = new(); }
 
@@ -52,6 +60,7 @@ public static class RevisionNarrative
         public List<string> AddressLines = new();
         public string ProjectNumberLine = "";
         public string IntroSentence = "";
+        public int SourceCloudCount;        // #104: distinct revision clouds that produced ≥1 note (for the count display)
         public readonly List<Discipline> Disciplines = new();
         public readonly List<string> Warnings = new();
     }
@@ -153,6 +162,7 @@ public static class RevisionNarrative
 
         if (noComment > 0) data.Warnings.Add($"{noComment} cloud(s) for this revision have no Comments text — not included. Populate the cloud's Comments field to list them.");
         if (orphan > 0) data.Warnings.Add($"{orphan} cloud(s) could not be attributed to a sheet.");
+        data.SourceCloudCount = clouds.Count - noComment - orphan;   // #104: clouds that produced notes (before collapse)
 
         // ---- order: disciplines (fixed order), sheets (natural by number), notes (detail# -> mark -> id) ----
         foreach (var discName in DisciplineOrder)
@@ -161,13 +171,8 @@ public static class RevisionNarrative
             var d = new Discipline { Name = discName };
             foreach (var sheet in sheetMap.Values.OrderBy(s => s.Number, NaturalComparer.Instance))
             {
-                var ordered = sheet.Notes
-                    .OrderBy(n => DetailSortKey(n.DetailNumber))
-                    .ThenBy(n => n.Mark, NaturalComparer.Instance)
-                    .ThenBy(n => n.CloudId)
-                    .ToList();
                 var s = new Sheet { Number = sheet.Number, Name = sheet.Name };
-                s.Notes.AddRange(ordered);
+                s.Notes.AddRange(CollapseNotes(sheet.Notes));   // #104: group same-comment notes + dedup, then order
                 d.Sheets.Add(s);
             }
             data.Disciplines.Add(d);
@@ -226,6 +231,67 @@ public static class RevisionNarrative
         return int.TryParse(detail, NumberStyles.Integer, CultureInfo.InvariantCulture, out var v)
             ? (0, v, "")
             : (1, 0, detail);
+    }
+
+    /// <summary>
+    ///     #104: collapse a sheet's per-(cloud×placement) notes into one entry per distinct comment.
+    ///       • (G) one comment across several details → a single "Details 1, 3, 4 - …" line;
+    ///       • (D) the same comment repeated on the same detail (or duplicate clouds) → that detail listed once.
+    ///     Detail numbers are de-duplicated and sorted (numeric-aware, blanks last). A comment that ALSO has a
+    ///     blank (no-detail) placement appends a trailing plain-text "[insert]" (e.g. "Detail 5, [insert]"); a
+    ///     comment with ONLY blank placements becomes an all-blank entry (DetailLabel == "") that the writer
+    ///     renders with the click-to-fill content control. Plural "Details" iff the group has 2+ numbered details
+    ///     (a trailing "[insert]" does NOT flip singular→plural — matches the spec's worked example). Groups are
+    ///     emitted ordered by lowest detail then lowest CloudId, so a re-run is byte-stable. Collapse is per sheet
+    ///     (the caller invokes it inside the per-sheet loop), so the same comment on two sheets stays under each.
+    /// </summary>
+    private static List<Note> CollapseNotes(List<Note> notes)
+    {
+        // Group by comment text, preserving first-appearance order (ordinal — normalization already unified casing,
+        // so a second case-fold would wrongly merge genuinely different notes).
+        var order = new List<string>();
+        var groups = new Dictionary<string, List<Note>>(StringComparer.Ordinal);
+        foreach (var n in notes)
+        {
+            if (!groups.TryGetValue(n.Text, out var g)) { g = new List<Note>(); groups[n.Text] = g; order.Add(n.Text); }
+            g.Add(n);
+        }
+
+        var collapsed = new List<Note>();
+        foreach (var text in order)
+        {
+            var g = groups[text];
+            var numbered = g.Select(n => n.DetailNumber)
+                            .Where(d => !string.IsNullOrWhiteSpace(d))
+                            .Distinct(StringComparer.Ordinal)        // (D): dedup identical details
+                            .OrderBy(DetailSortKey)
+                            .ToList();
+            bool hasBlank = g.Any(n => string.IsNullOrWhiteSpace(n.DetailNumber));
+
+            string label;
+            bool isMulti;
+            if (numbered.Count == 0) { label = ""; isMulti = false; }  // all-blank → writer uses the [insert] control
+            else
+            {
+                label = string.Join(", ", numbered) + (hasBlank ? ", [insert]" : "");
+                isMulti = numbered.Count >= 2;                          // plural only for 2+ numbered details
+            }
+
+            collapsed.Add(new Note
+            {
+                Text = text,
+                DetailNumber = numbered.Count > 0 ? numbered[0] : "",   // lowest detail, kept as the sort key
+                DetailLabel = label,
+                IsMultiDetail = isMulti,
+                CloudId = g.Min(n => n.CloudId),                         // lowest CloudId → stable ordering tiebreak
+                Mark = g.Select(n => n.Mark).FirstOrDefault(m => !string.IsNullOrEmpty(m)) ?? "",
+            });
+        }
+
+        return collapsed
+            .OrderBy(n => DetailSortKey(n.DetailNumber))   // lowest detail (blank groups sort last)
+            .ThenBy(n => n.CloudId)
+            .ToList();
     }
 
     /// <summary>
