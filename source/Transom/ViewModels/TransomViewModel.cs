@@ -1536,21 +1536,23 @@ Transom stages **built-in parameter edits on elements inside Revit MODEL GROUPS*
 of the same column) into a group-edits JSON in this **same folder**, and drops these instructions alongside it.
 A built-in param (Comments, Finish, Mark, …) on a GROUP member **can't be written by the API** — a direct write
 is rejected with *""Changes to groups are allowed only in group edit mode.""* So you apply it the way a person
-would: drive Revit's **""Edit Group"" mode** in the UI with the ClickHelper tools. These steps are for Claude.
+would: drive Revit's **""Edit Group"" mode** in the UI with the **Transom UI-Assist (transom-ui-assist)** tools.
 
 > Project/shared parameters on grouped elements are NOT here — Transom applies those itself (it enables
 > ""vary by group instance"" and writes them). This file is only the built-in edits, which need the UI path below.
 
-## THE KEY FACT: the API is useless for editing a group member — this is a SCREENSHOT-DRIVEN UI task
-Inside Edit Group mode the Revit API / pyRevit routes are UNAVAILABLE: you cannot select, read, write, or
-verify a member via the API while editing the group. The API's ONLY role is 3 things, all BEFORE you enter
-Edit Group or AFTER you Finish: (a) SELECT/zoom to set up the view, (b) apply/remove a RED color override as a
-visual locator, (c) the final post-Finish VERIFY (param value + group member count). EVERYTHING between —
-entering edit mode, picking the element, opening Properties, typing the value, applying, finishing — is
-**screenshot + ClickHelper clicks/keys**. **Take a screenshot after almost every click/type/scroll, READ it,
-and confirm the expected state before the next action** — a wrong-element pick, a mis-focused field, and a
-missed button are all SILENT; the screenshot is the only way you catch them. Use the **Transom UI-Assist
-(ClickHelper)** tools.
+## Two phases: API vs UI (the load-bearing rule)
+You work in two tool sets, in distinct phases:
+- the **Revit API** (the `transom` bridge / `execute_revit_code`) — for selection, view setup, the RED colour
+  locator, and verification. Use it BEFORE you enter Edit Group and AFTER you Finish.
+- the **transom-ui-assist** UI tools (`revit_*`) — for everything INSIDE Edit Group mode.
+
+**Inside Edit Group mode the Revit API is DEAD** (it times out): you cannot select, read, write, or verify a
+member via the API while editing the group. So all API work happens BEFORE entering and AFTER finishing — never
+during. Everything between (enter edit mode, pick the element, open Properties, set the value, finish) is
+**screenshot + `revit_*` clicks/keys/scrolls**. **Take a `revit_screenshot(screen:true)` after almost every
+click/type/scroll, READ it, and confirm the expected state before the next action** — a wrong-element pick, a
+mis-focused field, and a missed button are all SILENT.
 
 ## 1. Find the staging file
 In **this same folder**, find the file that parses as JSON with top-level `""tool"":""Transom""` and
@@ -1581,47 +1583,64 @@ pick one uniform value.
 > a group that HAD an excluded member, with the member count unchanged and nothing lost. (This differs from the
 > retired API definition-swap, which had to skip those cases. Do not skip them here.)
 
-## 4. Apply each built-in group edit via Edit Group mode (per member element)
-PRECONDITION: turn **Thin Lines ON** (lineweights off) so overlapping geometry is easy to pick — `key esc`
-(canvas focus), then `keys tl`; screenshot to confirm crisp single lines.
+## 4. Apply each built-in group edit (per member element)
 
-For each member to edit:
-1. **SELECT + ZOOM via API:** `uidoc.Selection.SetElementIds([id])`, `uidoc.ShowElements([id])`. Screenshot;
-   confirm it's visible (Revit highlights it cyan).
-2. **RED LOCATOR via API:** in a transaction, `view.SetElementOverrides(id, ogs)` with a RED projection-line +
-   solid surface fill (a `FillPatternElement` whose `GetFillPattern().IsSolidFill`). Commit, then deselect
-   (`SetElementIds([])`). Screenshot → confirm you can SEE the red element. (The override survives into Edit
-   Group mode and scales with zoom.)
-3. **ENTER EDIT GROUP:** select the GROUP instance via API (`SetElementIds([groupInstanceId])`) → screenshot
-   (ribbon = ""Modify | Model Groups"") → `find ""Edit Group""` and `click-id` it (the center coord is often
-   off-screen/negative — use click-id, not click-xy). The Edit Group toolbar now shows in `dialogs`
-   [add, remove, attach, finish, cancel]. **From here the API is unavailable.**
-4. **PICK THE MEMBER by its red color:** read the screenshot, click the red element's screen coord
-   (`click-xy`). OVERLAP HAZARD: a click can grab an element on top — if the screenshot shows the wrong/
-   overlapping element selected, `scroll <x> <y> <+notches>` to ZOOM IN until they separate, then click the
-   red body (or `key tab` to cycle alternates under the cursor). **Screenshot + read the Properties header /
-   status bar to CONFIRM the right element before editing** — a wrong pick is silent.
-5. **REVEAL + SET THE PARAM** (built-in instance params like Comments live in the Properties palette's
-   **Identity Data** section — `scroll` the palette down to it): click the value cell to focus → screenshot,
-   confirm the caret is in the field → `type --at=X,Y ""VALUE""` (field empty first; put text LAST — `--enter`
-   before the text breaks parsing) → then `key enter --at=X,Y` to commit. Confirm `fgIsRevit=True`. The
-   Properties **""Apply""** button enables → click it; screenshot → value shows + Apply greys out = committed.
-6. **FINISH:** `key esc` to deselect → `click-dialog ""finish""` → `dialogs` shows **0 open = committed**.
+### Phase A — API setup (use the Revit API via `execute_revit_code`; do this BEFORE entering Edit Group)
+1. **revit_tile** if Revit isn't already tiled side-by-side.
+2. **Open a view where the member is visible** — if the active view doesn't contain it, activate/open one that
+   does (a plan/elevation/section that shows it).
+3. **Select + zoom via API:** `Selection.SetElementIds([id])`, `ShowElements([id])`. `revit_screenshot(screen:true)`;
+   confirm the element is visible (Revit highlights it). **If it's not visible, adjust the view/zoom and try
+   again** before proceeding.
+4. **Thin Lines ON** (once per session — now that model geometry is on screen): `revit_keys(shortcut:""tl"", x, y)`
+   at a canvas point over the visible geometry, then `revit_screenshot(screen:true)` to confirm crisp single
+   lines (lineweights off make overlapping geometry easier to pick). Skip if already done this session.
+5. **Red locator via API:** in a transaction, `view.SetElementOverrides(id, ogs)` with a RED projection line +
+   solid surface fill. Commit, deselect (`SetElementIds([])`), `revit_screenshot(screen:true)` → confirm you
+   can SEE the red element. (The override survives into Edit Group mode and scales with zoom.)
 
-## 5. Verify (API available again)
-Per member: re-read the parameter (must equal `value`), confirm its `GroupId` (still grouped), and the group's
-**member COUNT is UNCHANGED** (= nothing lost or un-excluded). Then REMOVE the red override:
-`view.SetElementOverrides(id, OverrideGraphicSettings())` in a transaction; screenshot → red gone.
-If a write didn't take or the count changed, report it — never leave a half-applied state.
+### Phase B — UI automation, INSIDE Edit Group (the Revit API is UNAVAILABLE — use ONLY the transom-ui-assist `revit_*` tools)
+6. **Enter Edit Group:** select the GROUP instance via API (`SetElementIds([groupInstanceId])`), then
+   **revit_edit_group**. (Fallback if it reports the button wasn't found: `revit_find(text:""Edit Group"")` →
+   `revit_click_by_id`.) A screenshot / `revit_list_dialogs` shows the Edit Group toolbar
+   [add, remove, attach, finish, cancel]. **From here the API is dead.**
+7. **Pick the member by its red colour:** `revit_screenshot(screen:true)`, read it, `revit_click_xy` the red
+   element. OVERLAP: if a wrong/overlapping element is selected, `revit_scroll(x, y, +notches)` to ZOOM IN
+   until they separate, then click the red body. **Screenshot + read the Properties header / status bar to
+   CONFIRM the right element before editing** — a wrong pick is silent.
+8. **Reveal the parameter — it may be in either place:**
+   - an **instance** param → the **Properties palette** (built-ins like Comments live under *Identity Data*);
+     `revit_scroll` the palette to it.
+   - a **type** param → click **Edit Type** to open the Type Properties dialog (`revit_find` / `revit_click_by_id`),
+     `revit_scroll` to the parameter there. (Editing a type property changes the type for ALL its instances.)
+9. **Set the value — by the control's kind:**
+   - **text / number cell** → click the value cell, `revit_type(text:""VALUE"", x, y, enter:true)` (one atomic
+     click+type+commit; field empty first).
+   - **dropdown / combo** → click it to open, `revit_screenshot`, `revit_click_xy` the option.
+   - **checkbox / Yes-No / toggle** → `revit_click_xy` it to the desired state.
+   Screenshot → confirm the value shows. If a Properties **Apply** button is present, click it (value commits,
+   Apply greys out).
+10. **Close + return:** if you opened the Edit Type dialog, click **OK** to close it; dismiss any other dialog
+    (`revit_list_dialogs` → `revit_click_dialog`); click back into the live view.
+11. **Finish:** **revit_finish_group** (fallback: `revit_find(text:""Finish"")` → `revit_click_by_id`).
+    `revit_list_dialogs` shows **0 open = committed**. To ABORT without committing: **revit_cancel_group**.
 
-## 6. Report
+### Phase C — API verify & cleanup (the API is available again)
+12. Per member: re-read the parameter (must equal `value`), confirm its `GroupId` (still grouped), and the
+    group's **member COUNT is UNCHANGED** (nothing lost or un-excluded).
+13. **Remove the red override:** `view.SetElementOverrides(id, new OverrideGraphicSettings())` in a transaction;
+    `revit_screenshot(screen:true)` → red gone. If a write didn't take or the count changed, report it — never
+    leave a half-applied state.
+
+## 5. Report
 Per group type / member: applied / skipped (with reason) / conflicts (per-instance divergence → point to
 option 2b). Note this changed the group **definition**, so all instances of the type share the new value.
 
 ## Workshared close (if you ever close the model)
-NEVER click ""synchronize"" or ""save"" on a close dialog. LOOP on `dialogs`: issue ONE `click-dialog` per call,
-first match wins — ""do not save"" (Changes Not Saved) → ""keep ownership"" (Editable Elements / Close Without
-Saving). Never bare `click-dialog` (defaults to cancel/close → aborts the close). The user controls sync.
+NEVER click ""synchronize"" or ""save"" on a close dialog. LOOP on `revit_list_dialogs`: issue ONE
+`revit_click_dialog` per call, first match wins — ""do not save"" (Changes Not Saved) → ""keep ownership""
+(Editable Elements / Close Without Saving). Never bare-dismiss (it defaults to cancel/close → aborts the
+close). The user controls sync.
 ";
 
     partial void OnExchangeFolderChanged(string value)

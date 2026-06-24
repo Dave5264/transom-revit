@@ -17,8 +17,8 @@ Repo: `Dave5264/transom-revit`. Default branch: `main`. Primary dev path on the 
 | `source/Transom/Core/McpRegistration.cs` + `ClickHelperRegistration.cs` | Register the two MCP servers into the Claude client config (`~/.claude.json` `mcpServers`). Idempotent, non-clobbering, atomic, admin-free. |
 | `install/` | WixSharp installer (`Installer.cs`, `ShimRefresh.cs` custom action). |
 | `build/` | ModularPipelines build project (`dotnet run -- pack`) — **flaky, see §3; prefer the manual runbook**. |
-| `clickhelper-test/` | Test scaffolding, playbooks, campaign notes (NOT shipped). `clickhelper-test/PLAYBOOK.md` = the ClickHelper UI-automation recipes. |
-| `claude/CLAUDE.md` | The **drop-in guidance for the USER's Claude client** (different from this file). Ships with the add-in. |
+| `claude/` | Drop-in guidance shipped with the add-in: `CLAUDE.md` + `transom-connect.md` (the USER's Claude client guidance, different from this file). The ClickHelper UI-automation guidance now lives in the `transom-ui-assist` MCP server's `instructions` + the staged how-to (`ClaudeGuideMarkdown`), not a shipped playbook file. |
+| `docs/design-notes/` · `tools/` | Design rationale behind shipped fixes (import idempotency, Option-2 heading/rollback, Hub doc-rebind) and standalone dev tools (`transom_verify.py`). |
 
 ---
 
@@ -41,7 +41,7 @@ Repo: `Dave5264/transom-revit`. Default branch: `main`. Primary dev path on the 
 
 ## 3. BUILD, DEPLOY & CUT A RELEASE (the runbook)
 
-> This is the authoritative release runbook. `clickhelper-test/BUILD_PUBLISH_RUNBOOK.md` holds the deeper field log (exact byte sizes, md5s, the solved R26-solution quirk); keep the two in sync — if they ever disagree, live behavior is the source of truth.
+> This is the authoritative release runbook. If a build/publish detail here ever disagrees with observed behavior, live behavior is the source of truth.
 
 ### Hard rules
 - **Every build auto-deploys the add-in DLL** (`DeployAddin=true`) to `%AppData%\Autodesk\Revit\Addins\<ver>\` — so **Revit MUST be CLOSED** before building, or the copy fails (locked DLL). Re-confirm Revit is closed immediately before each build. Never force-kill Revit; the user closes it.

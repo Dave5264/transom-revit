@@ -88,13 +88,6 @@
             <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
             <Visible>false</Visible>
         </None>
-        <!-- UI-automation playbook for Claude-Assist to reference at runtime (window tiling, ClickHelper flows,
-             learned UI ids/quirks). Always present in the repo, so no Exists() guard needed. -->
-        <None Include="..\..\clickhelper-test\PLAYBOOK.md">
-            <Link>PLAYBOOK.md</Link>
-            <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-            <Visible>false</Visible>
-        </None>
     </ItemGroup>
 
 </Project>

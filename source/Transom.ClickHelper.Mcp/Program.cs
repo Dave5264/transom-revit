@@ -114,29 +114,46 @@ internal static class Program
     ///     through the MCP initialize result so it uses the techniques that actually work.
     /// </summary>
     private const string Instructions =
-        "These tools drive Revit's UI for commands that have NO Revit API (Edit Group, Finish, modal " +
-        "dialogs, editing a parameter value in the Properties palette). Pair them with the Transom data " +
-        "bridge (Revit API) for selection and verification.\n\n" +
-        "ALWAYS, in order:\n" +
-        "1. revit_tile FIRST — Revit must be visible and side-by-side, or clicks/keys land on the wrong " +
-        "window.\n" +
-        "2. The Revit API is DEAD while in group-edit mode (it times out). Do all selection/reads/writes " +
-        "via the API BEFORE entering edit mode and AFTER finishing — never during.\n" +
-        "3. To pinpoint a member to click: override its colour via the API, then revit_screenshot " +
-        "(screen=true to see the model viewport; the default PrintWindow shows UI chrome but a black " +
-        "drawing area), then click its highlight. NOTE: a selected group shows the override as the INVERSE " +
-        "colour — select none to confirm the true colour.\n" +
-        "4. Keyboard needs a focus click in the SAME step: revit_keys takes a canvas x,y (for view " +
-        "shortcuts like 'tl'); revit_type takes the value cell's x,y and types into it (set enter=true to " +
-        "commit). A separate click then type loses focus to a permission prompt.\n" +
-        "5. The Properties palette value cells are NOT exposed to UI Automation — revit_type (click+type) " +
-        "is the only way to set a parameter value. Use revit_scroll to bring the parameter into view first.\n" +
-        "6. Editing a member inside Edit Group edits the group DEFINITION, so it propagates to ALL " +
-        "instances of that group.\n\n" +
-        "Group-parameter-edit workflow: API selects the group -> revit_edit_group -> click the member " +
-        "(revit_click_xy on its highlight) -> revit_scroll to the parameter -> revit_type (enter=true) -> " +
-        "revit_finish_group -> verify with the API. If a modal blocks you, revit_list_dialogs + " +
-        "revit_click_dialog.";
+        "These tools drive Revit's UI for actions with NO Revit API — Edit Group mode, modal dialogs, and " +
+        "the Properties palette. Pair them with the Revit API (the Transom 'transom' bridge / " +
+        "execute_revit_code) for selection and verification.\n\n" +
+        "ALWAYS FIRST: revit_tile, so Revit is visible side-by-side. Clicks land by screen coordinate and " +
+        "keystrokes go to the foreground window, so an occluded Revit can't be driven.\n\n" +
+        "LOAD-BEARING RULE: inside Edit Group mode the Revit API is DEAD (it times out). Do ALL selection / " +
+        "reads / writes / verification via the API BEFORE entering and AFTER finishing — never during. " +
+        "Inside the group, only these revit_* tools work.\n\n" +
+        "SCREENSHOT DISCIPLINE: take revit_screenshot after almost every click/type/scroll, READ it, and " +
+        "confirm the expected state before the next action — wrong-element picks, mis-focused fields, and " +
+        "missed buttons are all SILENT. The default (PrintWindow) shows the UI chrome but a BLACK viewport; " +
+        "pass screen=true to see the model viewport (brings Revit forward).\n\n" +
+        "COORDINATES: revit_click_xy / revit_keys / revit_type use ABSOLUTE SCREEN pixels. Do not hardcode " +
+        "positions — the Hub and dialogs open at non-deterministic spots and stale coords miss SILENTLY. " +
+        "Get live coords from revit_find (centerX/centerY); prefer revit_click_by_id (AutomationId) when a " +
+        "control is invokable.\n\n" +
+        "LOCATING A MEMBER: override its colour via the API, then revit_screenshot(screen=true) and click " +
+        "the highlight. A SELECTED group shows the override as the INVERSE colour — deselect to confirm the " +
+        "true colour.\n\n" +
+        "KEYBOARD + TYPING (atomic focus): revit_keys takes a canvas x,y — it clicks there for focus, then " +
+        "sends the shortcut (e.g. 'tl' = Thin Lines) in one step. revit_type takes the value-cell x,y — it " +
+        "clicks to focus and types in one step (enter=true commits). A separate click-then-type loses focus " +
+        "to a permission prompt. Properties value cells are NOT exposed to UI Automation, so revit_type is " +
+        "the only way to set them; revit_scroll the parameter into view first.\n\n" +
+        "DIALOGS are SEPARATE top-level windows the main-window tools can't see: revit_list_dialogs to read " +
+        "title/text/buttons, revit_click_dialog to click one (omit the button to safe-dismiss).\n\n" +
+        "GROUP EDITS CHANGE THE DEFINITION: a built-in edited inside Edit Group is set UNIFORMLY for every " +
+        "instance of that group type. Per-instance divergent built-ins aren't possible while grouped (use " +
+        "an instance shared parameter / import option 2b instead).\n\n" +
+        "TOOLS: revit_status, revit_tile, revit_find, revit_screenshot, revit_click_by_id, revit_click_xy, " +
+        "revit_keys, revit_type, revit_scroll, revit_edit_group, revit_finish_group, revit_cancel_group, " +
+        "revit_list_dialogs, revit_click_dialog.\n\n" +
+        "FILE DIALOGS: never use key combos to clear/replace text. Save As -> accept the default filename " +
+        "(revit_click_dialog with 'save'), rename on disk after. Open -> revit_find the file row, click it, " +
+        "then click Open. To set any field: get it empty first, then type once.\n\n" +
+        "GROUP-EDIT WORKFLOW (full step-by-step ships in the staged 'Transom - Apply staged edits with " +
+        "Claude.md'): API selects the group -> revit_edit_group -> pick the member by its red colour " +
+        "(revit_click_xy) -> reveal the param (revit_scroll; Properties palette OR Edit Type) -> set it " +
+        "(revit_type enter=true, or operate the dropdown/checkbox) -> revit_finish_group -> verify with " +
+        "the API.";
 
     private static JsonObject HandleToolsList()
     {
