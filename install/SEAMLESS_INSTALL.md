@@ -23,7 +23,7 @@ placed and registered automatically.** This doc lists exactly what to change.
 
 ## Root cause: the shim is designed-for but never built or bundled
 
-The bundled-MCP design (`BUNDLED_MCP_PLAN.md` F3/F4, `MCP_CONFIG_MERGE.md`) is
+The bundled-MCP design (`docs/BUNDLED_MCP_PLAN.md` F3/F4, `MCP_CONFIG_MERGE.md`) is
 correct and complete *on paper*. The gap is that **none of it is wired into the
 build/installer**:
 

@@ -8,7 +8,7 @@ namespace Transom.Core;
 /// <summary>
 ///     Reads a <see cref="ViewSchedule"/> into a <see cref="ScheduleTable"/>:
 ///     a display pass (GetCellText + styles + merges + widths) and the spike-proven
-///     anchor pass (Approach A: rolled-back UniqueId injection) — see SPIKE_RESULTS.md.
+///     anchor pass (Approach A: rolled-back UniqueId injection) — see docs/SPIKE_RESULTS.md.
 /// </summary>
 public sealed class ScheduleReader
 {

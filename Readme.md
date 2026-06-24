@@ -77,7 +77,7 @@ exactly where it goes.
 > instance Transom resolves without AI, yellow = grouped geometry-driving built-in (Claude-Assist only),
 > grey = not settable. v1.3.1 bundled the MCP shim and auto-registers it on first launch, so the Claude bridge
 > connects with no manual setup. Requirements are locked in
-> [`SPEC.md`](SPEC.md); the build approach is in [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md).
+> [`SPEC.md`](docs/SPEC.md); the build approach is in [`IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md).
 
 ### Using Claude-Assist
 
@@ -129,8 +129,8 @@ combined, percentage and subtotal fields — and Revit's row order — come out 
 *anchor pass* stamps each element row's `UniqueId` into a hidden, sentinel-headed column, which drives a
 safe, durable round-trip on import. Round-trip is enabled only where each row maps cleanly to one writable
 element; material-takeoff, embedded, linked-element and non-itemized schedules export display-only. See
-[`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) and the two design audits ([`AUDIT.md`](AUDIT.md),
-[`AUDIT2.md`](AUDIT2.md)).
+[`IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md) and the two design audits ([`AUDIT.md`](docs/AUDIT.md),
+[`AUDIT2.md`](docs/AUDIT2.md)).
 
 ## Targets
 
@@ -163,6 +163,5 @@ all-versions build run through the `build/` ModularPipelines project (`cd build;
 | `source/Transom/` | the add-in (commands, views, view-models, core logic) |
 | `build/`, `install/` | ModularPipelines build + WiX installer |
 | `branding/` | ribbon icon + generator |
-| `SPEC.md`, `BRIEF.md`, `IMPLEMENTATION_PLAN.md` | locked requirements, context, coding plan |
-| `AUDIT.md`, `AUDIT2.md` | independent viability audits |
-| `mockup.html` | dialog visual mockup |
+| `docs/` | planning + design docs: `SPEC.md`, `BRIEF.md`, `IMPLEMENTATION_PLAN.md`, the `AUDIT*.md` viability audits, `mockup.html`, plus `design-notes/` |
+| `tools/` | standalone dev tools (`transom_verify.py`) |

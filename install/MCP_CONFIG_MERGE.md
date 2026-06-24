@@ -1,6 +1,6 @@
 # Transom — MCP config merge (admin-free shim registration)
 
-Design doc for **F4** of `BUNDLED_MCP_PLAN.md`. Covers how the bundled
+Design doc for **F4** of `docs/BUNDLED_MCP_PLAN.md`. Covers how the bundled
 `Transom.McpShim.exe` (installed per-user by `install/BundledMcp.wxs` into
 `%LocalAppData%\Transom\mcp\`) gets registered with the user's MCP client(s)
 **without administrator rights**, idempotently, without clobbering other servers.
@@ -169,7 +169,7 @@ code, but is not required.)
 
 ## 4. Why this is admin-free (maps to the three constraints)
 
-`BUNDLED_MCP_PLAN.md` defines three load-bearing constraints. Each step here
+`docs/BUNDLED_MCP_PLAN.md` defines three load-bearing constraints. Each step here
 honors them:
 
 1. **Per-user install only.** `BundledMcp.wxs` puts the shim under

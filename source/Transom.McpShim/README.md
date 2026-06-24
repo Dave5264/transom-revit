@@ -4,7 +4,7 @@ A tiny, self-contained **stdio MCP server** that bridges an MCP client (Claude
 Desktop / Claude Code) to the **Transom** Revit add-in's loopback HTTP bridge.
 
 This is **feature F3** of the bundled-MCP milestone — see
-`../../BUNDLED_MCP_PLAN.md`. It has **no Revit references**; it only speaks
+`../../docs/BUNDLED_MCP_PLAN.md`. It has **no Revit references**; it only speaks
 Model Context Protocol on stdin/stdout and HTTP to `127.0.0.1`.
 
 ## What it is

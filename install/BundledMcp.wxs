@@ -11,7 +11,7 @@
   if the build ever moves to native WiX. Either way the authoring below is plain
   WiX3 so it is portable.
 
-  ADMIN-FREE CONTRACT (BUNDLED_MCP_PLAN.md, constraint #1 — per-user install only):
+  ADMIN-FREE CONTRACT (docs/BUNDLED_MCP_PLAN.md, constraint #1 — per-user install only):
     * Everything lands under LocalAppDataFolder (%LocalAppData%\Transom\mcp\).
     * NO ProgramFilesFolder / ProgramFiles64Folder.
     * NO HKLM — the per-component keypath is written to HKCU only.
@@ -39,7 +39,7 @@
     </DirectoryRef>
 
     <!--
-      The published, self-contained, single-file shim (BUNDLED_MCP_PLAN.md F3 /
+      The published, self-contained, single-file shim (docs/BUNDLED_MCP_PLAN.md F3 /
       constraint #3). It bundles its own .NET runtime, so there is never an
       "install .NET" step. Built by:
         dotnet publish source/Transom.McpShim/Transom.McpShim.csproj `
