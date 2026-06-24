@@ -1,7 +1,7 @@
 # Transom — Revit bridge (drop-in guidance for Claude)
 
 > **Where this goes.** Drop this file in as `CLAUDE.md` (Claude Code: project root
-> or `~/.claude/CLAUDE.md`; Cowork: the workspace's instructions file). It is
+> or `~/.claude/CLAUDE.md`). It is
 > loaded automatically, so the *first* time someone asks you to do anything with
 > their Revit model you already know the tools exist and how to connect cleanly —
 > no setup turn needed.
@@ -20,9 +20,9 @@ When a Revit task starts (or the user asks "are you connected?"), **call
   to that open document. Proceed. Mention the document name so the user knows which
   model you're acting on.
 - ❌ The `transom` tools aren't available at all → the MCP server isn't loaded in
-  this session. Tell the user to **(1)** click **"Register Claude Bridge"** in the
-  Transom ribbon (one-time, registers the server), then **(2)** restart Claude
-  Code / Cowork so it launches the shim. New MCP servers are only picked up at
+  this session. Tell the user to **(1)** click **"Set up Claude"** in the
+  Transom ribbon (one-time, registers the servers), then **(2)** restart Claude
+  Code so it launches the shim. New MCP servers are only picked up at
   startup.
 - ❌ `status` errors or times out → the bridge isn't reachable. Most likely one of:
   - the **bridge is toggled off** → in Revit, click the Transom **bridge toggle**

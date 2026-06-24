@@ -25,12 +25,12 @@ The add-in bundles a local loopback-only MCP bridge (`127.0.0.1`) plus a self-co
 rights, no separate install, nothing leaves your machine. To let a Claude client (Claude Code)
 read and write the live model:
 
-1. Click **"Register Claude Bridge"** in the Transom ribbon (one-time — it registers the `transom` MCP server).
-2. Restart your Claude client so it launches the shim and picks up the new server.
+1. Click **"Set up Claude"** in the Transom ribbon (one-time — it registers Transom's MCP servers).
+2. Restart Claude Code so it launches the shim and picks up the new server.
 
-Then drop the guidance file from [`claude/`](claude/) (`CLAUDE.md`) where your client auto-loads instructions
-so Claude already knows the tools and the safe-write workflow. See [`claude/README.md`](claude/README.md) for
-exactly where each file goes.
+Then drop the guidance file from [`claude/`](claude/) (`CLAUDE.md`) into your project root (or `~/.claude/CLAUDE.md`)
+so Claude Code already knows the tools and the safe-write workflow. See [`claude/README.md`](claude/README.md) for
+exactly where it goes.
 
 > **Status:** v1.4.8 released (Revit 2025/2026/2027) — **Claude-Assist gains full Revit API access.** A new
 > `execute_revit_code` bridge tool lets a connected Claude client run arbitrary Revit API code in the live model
@@ -80,12 +80,14 @@ hands the edit to **Claude-Assist**, which drives the Revit UI like a person wou
 2. On a grouped built-in cell, **Apply** prompts a resolution dialog — pick **"Claude-Assist"**.
 3. Transom writes a small **staging `.json`** (plus a step-by-step `.md`) to a folder you choose — it does **not**
    change the model itself.
-4. Hand that folder to **Cowork** (the Claude client with the `transom-ui-assist` UI-automation tools). Cowork
-   opens "Edit Group" mode, sets the parameter via the Properties palette, finishes, and verifies the result.
+4. The **same Claude Code session** that's already connected to the bridge drives the rest: pointed at that folder,
+   it reads the staging files, opens "Edit Group" mode, sets the parameter via the Properties palette, finishes the
+   group, and verifies the result against the model. You stay in one client the whole time — there's no second app
+   to hand anything to.
 
 Editing a built-in this way sets it **uniformly for every instance of that group type** (that's how Revit
 groups work). If you need **different** values per instance, use the new-**instance**-parameter option (2b) in
-the resolution dialog instead. Notes: Claude-Assist drives the live UI, so run it on a **throwaway/non-production
+the resolution dialog instead. Notes: Claude-Assist drives the live UI, so run it on a **throwaway / non-production
 model first**, and if the model is **workshared, never Synchronize with Central mid-run** (you control sync).
 
 ## Install
