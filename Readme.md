@@ -1,9 +1,13 @@
 <div align="center">
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="branding/transom-title-dark.svg">
-  <img alt="Transom" src="branding/transom-title-light.svg" width="600">
-</picture>
+<table align="center"><tr><td><pre>
+████████╗██████╗  █████╗ ███╗   ██╗███████╗ ██████╗ ███╗   ███╗
+╚══██╔══╝██╔══██╗██╔══██╗████╗  ██║██╔════╝██╔═══██╗████╗ ████║
+   ██║   ██████╔╝███████║██╔██╗ ██║███████╗██║   ██║██╔████╔██║
+   ██║   ██╔══██╗██╔══██║██║╚██╗██║╚════██║██║   ██║██║╚██╔╝██║
+   ██║   ██║  ██║██║  ██║██║ ╚████║███████║╚██████╔╝██║ ╚═╝ ██║
+   ╚═╝   ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═══╝╚══════╝ ╚═════╝ ╚═╝     ╚═╝
+</pre></td></tr></table>
 
 
 **Round-trip Revit schedules through spreadsheets — with full visual fidelity and type-parameter–safe write-back.**
