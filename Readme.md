@@ -15,9 +15,10 @@ Double-click the `.msi`, then start Revit. Supports **Revit 2025, 2026 & 2027**.
 
 Transom is an Autodesk Revit add-in (C#) that exports schedules to `.xlsx` / `.csv` / `.xls` exactly as Revit
 displays them — merged headers, grouping, subtotals, fonts, colors, hidden columns — and imports edited values
-back into the model, **including type parameters**, safely and inside a single transaction. An optional
-Claude-assisted QA layer can reconcile exports and pre-flight imports against the live model over a local MCP
-bridge, but the add-in is fully standalone without it.
+back into the model, **including type parameters**, safely and inside a single transaction. Optionally, a
+connected **Claude** client can act on the live model over a local MCP bridge — review a round-trip, apply
+staged edits, and run any Revit API operation or follow-up you ask for (via an in-process `execute_revit_code`
+tool) — while the add-in stays **fully standalone** without it.
 
 ### Claude MCP bridge
 
@@ -72,9 +73,11 @@ exactly where it goes.
 
 ### Using Claude-Assist
 
-Most edits apply directly. But a **built-in** parameter (Comments, Finish, …) on an element **inside a Revit
-model group** can't be written automatically — Revit only allows it in "Edit Group" mode. For those, Transom
-hands the edit to **Claude-Assist**, which drives the Revit UI like a person would:
+A connected Claude client can do far more than round-trip QA — through the bridge's `execute_revit_code` tool it
+has the **full Revit API**: read and write the live model, create sheets/views, run bulk edits, and carry out
+follow-up actions you ask for. The one thing the API genuinely **can't** do is edit a **built-in** parameter
+(Comments, Finish, …) on an element **inside a Revit model group** — Revit only allows that in "Edit Group"
+mode. For that case, Transom hands the edit to **Claude-Assist**, which drives the Revit UI like a person would:
 
 1. **Export** the schedule, edit the cells in the spreadsheet, then **Import** it back and click **Preview**.
 2. On a grouped built-in cell, **Apply** prompts a resolution dialog — pick **"Claude-Assist"**.
