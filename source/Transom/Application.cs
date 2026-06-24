@@ -42,33 +42,32 @@ public class Application : ExternalApplication
             .SetLargeImage("/Transom;component/Resources/Icons/Help32.png")
             .SetToolTip("Transom help & support — how to use it, report an issue, and documentation.");
 
-        // Claude Assist — its own ribbon group. The three action buttons grey out when the Claude app isn't
-        // running (Revit re-checks availability on UI context changes) and say so in their tooltip. The Settings
-        // button stays enabled so you can configure Claude mode / bridge port before Claude is up.
+        // Claude Assist — its own ribbon group. #107: two buttons — "Set up Claude" (one-click registration of
+        // BOTH MCP servers) and the runtime "Claude Bridge" toggle — plus Settings. The action buttons grey out
+        // when the Claude app isn't running (Revit re-checks availability on UI context changes); Settings stays
+        // enabled so you can configure Claude mode / bridge port before Claude is up.
         var claudePanel = Application.CreatePanel("Claude Assist", "Transom");
 
         var claudeAvail = typeof(ClaudeAvailability).FullName;
+
+        // #107: ONE "Set up Claude" button replaces the separate "Register with Claude" + "Claude UI Assist"
+        // buttons — it registers BOTH the data bridge (transom) AND UI-Assist (transom-ui-assist) in one click
+        // and shows the restart notice once. (Old RegisterBridgeCommand / UiAssistSetupCommand are no longer
+        // on the ribbon; SetupClaudeCommand calls the same registration paths.)
+        var setupBtn = claudePanel.AddPushButton<SetupClaudeCommand>("Set up\nClaude");
+        setupBtn.SetImage("/Transom;component/Resources/Icons/Register16.png")
+            .SetLargeImage("/Transom;component/Resources/Icons/Register32.png")
+            .SetToolTip("Set up Claude (one-time, per-user, no admin): registers Transom's bundled MCP servers with " +
+                        "Claude Desktop / Claude Code — the data bridge (read schedules, write parameters incl. group " +
+                        "members) AND UI-Assist (let Claude drive Revit UI commands with no API, e.g. Edit Group). " +
+                        "Run once after install, or after changing the bridge port. Restart Claude afterward.  Claude must be running to use this.");
+        setupBtn.AvailabilityClassName = claudeAvail;
 
         var bridgeBtn = claudePanel.AddPushButton<BridgeToggleCommand>("Claude\nBridge");
         bridgeBtn.SetImage("/Transom;component/Resources/Icons/Bridge16.png")
             .SetLargeImage("/Transom;component/Resources/Icons/Bridge32.png")
             .SetToolTip("Start/stop the admin-free Claude-assist bridge (loopback HTTP on 127.0.0.1) so Claude can read schedules and write parameters back — including group members.  Claude must be running to use this.");
         bridgeBtn.AvailabilityClassName = claudeAvail;
-
-        var registerBtn = claudePanel.AddPushButton<RegisterBridgeCommand>("Register\nwith Claude");
-        registerBtn.SetImage("/Transom;component/Resources/Icons/Register16.png")
-            .SetLargeImage("/Transom;component/Resources/Icons/Register32.png")
-            .SetToolTip("Register Transom's bundled MCP bridge with Claude Desktop / Claude Code (per-user, no admin). Run once after install, or after changing the bridge port.  Claude must be running to use this.");
-        registerBtn.AvailabilityClassName = claudeAvail;
-
-        // Optional Claude UI-Assist (separate, on-demand feature; never auto-runs so Transom stays
-        // standalone for non-Claude users). One-time set up that installs the bundled UI engine + MCP
-        // server and registers them with Claude, enabling clicks for Revit commands that have no API.
-        var uiAssistBtn = claudePanel.AddPushButton<UiAssistSetupCommand>("Claude\nUI Assist");
-        uiAssistBtn.SetImage("/Transom;component/Resources/Icons/UiAssist16.png")
-            .SetLargeImage("/Transom;component/Resources/Icons/UiAssist32.png")
-            .SetToolTip("Set up Claude UI-Assist (one-time): lets Claude click Revit UI commands that have no API — Edit Group, Finish, dialogs, and Properties-cell edits — by driving the UI out-of-process. Installs the helper and registers it with Claude (per-user, no admin). Restart Claude afterward.  Claude must be running to use this.");
-        uiAssistBtn.AvailabilityClassName = claudeAvail;
 
         claudePanel.AddPushButton<SettingsCommand>("Settings")
             .SetImage("/Transom;component/Resources/Icons/Settings16.png")
