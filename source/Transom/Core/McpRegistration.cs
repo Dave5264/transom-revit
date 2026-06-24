@@ -133,6 +133,8 @@ public static class McpRegistration
 
         var desired = new JsonObject
         {
+            // Explicit stdio transport so Claude Code unambiguously loads the server (the documented shape).
+            ["type"] = "stdio",
             ["command"] = shim,
             ["args"] = new JsonArray("--port", port.ToString()),
         };

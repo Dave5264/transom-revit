@@ -145,6 +145,8 @@ public static class ClickHelperRegistration
         // command = the MCP server exe; it locates the engine via --exe (an absolute installed path).
         var desired = new JsonObject
         {
+            // Explicit stdio transport so Claude Code unambiguously loads the server (the documented shape).
+            ["type"] = "stdio",
             ["command"] = McpServerPath,
             ["args"] = new JsonArray("--exe", EnginePath),
         };
