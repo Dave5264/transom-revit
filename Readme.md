@@ -92,8 +92,18 @@ The quickest way is the **[per-user installer](https://github.com/Dave5264/trans
 2. Double-click it. It installs into `%AppData%\Autodesk\Revit\Addins\` for the current user only.
 3. Launch Revit — Transom is on the ribbon. To remove it later: *Apps & features → Transom*.
 
-A machine-wide `MultiUser.msi` (all users, requires admin) is built alongside it. Prefer to build from
-source instead? See [Building](#building).
+**Always use the SingleUser installer above** — the one-click download link on this page points to it
+deliberately. Transom is designed to install per-user with **no admin rights**, and Claude-Assist's
+install-time setup only runs in the per-user installer.
+
+A machine-wide **MultiUser** installer is also built from this codebase, but it is **intentionally not
+offered as a download link here** so no one installs it by mistake. It exists only for **IT / firm-wide
+deployment** (an administrator installing Transom once for every user on a shared or imaged machine). It
+**requires admin rights** and, because a per-machine install runs as `SYSTEM` and can't write each user's
+`%LocalAppData%`, the Claude-Assist MCP shim is placed on Revit's **first launch** instead of at install
+time (slightly less seamless, but it still works). If you genuinely need the machine-wide installer, build
+it from source (see [Building](#building)) or ask — it's kept ready in the repo, just not surfaced as a
+one-click download.
 
 ## How it works (architecture in one paragraph)
 

@@ -96,6 +96,7 @@ Repo: `Dave5264/transom-revit`. Default branch: `main`. Primary dev path on the 
 ### Installer behavior to know
 - **SingleUser (per-user) MSI** is the one users install — admin-free. Its custom action (`install/ShimRefresh.cs`) copies the shim trio into `%LocalAppData%\Transom\mcp\` **at install time** (deferred + impersonated → writes the installing user's profile). The add-in's first-launch `EnsureBundledShimAndAutoRegister` (`Application.cs` OnStartup) is the self-heal fallback.
 - **MultiUser (per-machine) MSI** runs as SYSTEM → can't populate each user's `%LocalAppData%`; relies on the first-launch fallback. The custom action is SingleUser-only.
+- **Distribution policy:** SingleUser is the product. The MultiUser target is kept **fully buildable** in the codebase (`BuildMultiUserUserMsi()` in `install/Installer.cs` — do NOT remove it) but is **intentionally not surfaced as a one-click download** on the README landing page, so a self-serve user can't grab it by mistake (it requires admin and gives the less-seamless first-launch shim path). MultiUser exists only for **IT / firm-wide machine deployment** — an admin installing once for all users on a shared/imaged machine. The README's prominent download link must always point at `…-SingleUser.msi`. Whether to also attach the MultiUser `.msi` to a GitHub release is a separate choice (build it on demand from source); if attached, the README still shouldn't link it directly.
 
 ---
 
