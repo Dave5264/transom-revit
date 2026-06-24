@@ -7,7 +7,9 @@ namespace Transom.McpShim;
 
 /// <summary>
 /// Minimal Model Context Protocol (MCP) server over stdio (JSON-RPC 2.0,
-/// Content-Length framed). It forwards each <c>tools/call</c> to the Transom
+/// NEWLINE-DELIMITED). Per the MCP stdio transport spec: each message is a single
+/// line of JSON terminated by '\n' (and contains no embedded newlines), and stdout
+/// carries ONLY valid MCP messages. It forwards each <c>tools/call</c> to the Transom
 /// loopback HTTP bridge running inside Revit:
 ///   POST http://127.0.0.1:&lt;port&gt;/call  body {"tool":name,"args":args}
 /// and returns the bridge's JSON as a single text content item.
@@ -16,7 +18,10 @@ namespace Transom.McpShim;
 /// </summary>
 internal static class Program
 {
-    private const string ProtocolVersion = "2024-11-05";
+    /// <summary>Newest MCP protocol version this server knows — used only when the client's
+    /// initialize request omits protocolVersion. Otherwise the server ECHOES the client's
+    /// requested version back (it is version-agnostic at the JSON-RPC level).</summary>
+    private const string FallbackProtocolVersion = "2025-06-18";
     private const string ServerName = "transom";
     private const string ServerVersion = "1.0.0";
     private const int DefaultPort = 48810;
@@ -29,9 +34,14 @@ internal static class Program
         _port = ResolvePort(args);
         Log($"Transom MCP shim starting. Bridge target: http://127.0.0.1:{_port}/");
 
-        // Raw byte streams so we control Content-Length framing precisely.
-        using var stdin = Console.OpenStandardInput();
-        using var stdout = Console.OpenStandardOutput();
+        // MCP stdio transport is NEWLINE-DELIMITED JSON. Read one '\n'-terminated line per message;
+        // write each response as a single line + '\n'. UTF-8 both ways; stdout is protocol-only.
+        using var stdin = new StreamReader(Console.OpenStandardInput(), new UTF8Encoding(false));
+        using var stdout = new StreamWriter(Console.OpenStandardOutput(), new UTF8Encoding(false))
+        {
+            AutoFlush = false,
+            NewLine = "\n",
+        };
 
         try
         {
@@ -47,26 +57,21 @@ internal static class Program
         return 0;
     }
 
-    /// <summary>Read framed JSON-RPC messages from stdin until EOF.</summary>
-    private static void RunLoop(Stream stdin, Stream stdout)
+    /// <summary>Read newline-delimited JSON-RPC messages from stdin until EOF; reply one line each.</summary>
+    private static void RunLoop(TextReader stdin, TextWriter stdout)
     {
-        while (true)
+        string? line;
+        while ((line = stdin.ReadLine()) is not null)
         {
-            string? body = ReadMessage(stdin);
-            if (body is null)
+            if (line.Length == 0)
             {
-                return; // EOF
-            }
-
-            if (body.Length == 0)
-            {
-                continue;
+                continue; // tolerate blank lines between messages
             }
 
             JsonNode? response;
             try
             {
-                response = HandleMessage(body);
+                response = HandleMessage(line);
             }
             catch (Exception ex)
             {
@@ -84,93 +89,12 @@ internal static class Program
 
     // ----------------------------------------------------------------- framing
 
-    /// <summary>
-    /// Read one Content-Length framed message. Returns null at EOF.
-    /// MCP stdio framing: ASCII headers, CRLF separated, blank line, then the
-    /// UTF-8 JSON body of exactly Content-Length bytes.
-    /// </summary>
-    private static string? ReadMessage(Stream stdin)
+    /// <summary>Write one MCP message as a single line of JSON + '\n', then flush. JsonNode.ToJsonString
+    /// emits single-line JSON (no embedded newlines), satisfying the stdio framing requirement.</summary>
+    private static void WriteMessage(TextWriter stdout, JsonNode message)
     {
-        int contentLength = -1;
-
-        while (true)
-        {
-            string? line = ReadHeaderLine(stdin);
-            if (line is null)
-            {
-                return null; // EOF mid-stream / before any header
-            }
-
-            if (line.Length == 0)
-            {
-                break; // end of headers
-            }
-
-            int colon = line.IndexOf(':');
-            if (colon > 0)
-            {
-                string name = line[..colon].Trim();
-                string value = line[(colon + 1)..].Trim();
-                if (name.Equals("Content-Length", StringComparison.OrdinalIgnoreCase)
-                    && int.TryParse(value, out int len))
-                {
-                    contentLength = len;
-                }
-            }
-        }
-
-        if (contentLength < 0)
-        {
-            Log("Message missing Content-Length header; skipping.");
-            return string.Empty;
-        }
-
-        var buffer = new byte[contentLength];
-        int read = 0;
-        while (read < contentLength)
-        {
-            int n = stdin.Read(buffer, read, contentLength - read);
-            if (n <= 0)
-            {
-                return null; // EOF before full body
-            }
-            read += n;
-        }
-
-        return Encoding.UTF8.GetString(buffer, 0, contentLength);
-    }
-
-    /// <summary>Read a single CRLF/LF-terminated ASCII header line. Null at EOF.</summary>
-    private static string? ReadHeaderLine(Stream stdin)
-    {
-        var sb = new StringBuilder();
-        int b;
-        while ((b = stdin.ReadByte()) != -1)
-        {
-            if (b == '\n')
-            {
-                int len = sb.Length;
-                if (len > 0 && sb[len - 1] == '\r')
-                {
-                    sb.Length = len - 1;
-                }
-                return sb.ToString();
-            }
-            sb.Append((char)b);
-        }
-
-        // EOF: return any partial content as a final line, else null.
-        return sb.Length > 0 ? sb.ToString() : null;
-    }
-
-    private static void WriteMessage(Stream stdout, JsonNode message)
-    {
-        string json = message.ToJsonString();
-        byte[] payload = Encoding.UTF8.GetBytes(json);
-        byte[] header = Encoding.ASCII.GetBytes($"Content-Length: {payload.Length}\r\n\r\n");
-
-        stdout.Write(header, 0, header.Length);
-        stdout.Write(payload, 0, payload.Length);
+        stdout.Write(message.ToJsonString());
+        stdout.Write('\n');
         stdout.Flush();
     }
 
@@ -211,7 +135,7 @@ internal static class Program
         switch (method)
         {
             case "initialize":
-                return Result(id, HandleInitialize());
+                return Result(id, HandleInitialize(obj["params"] as JsonObject));
 
             case "notifications/initialized":
             case "initialized":
@@ -236,19 +160,29 @@ internal static class Program
         }
     }
 
-    private static JsonObject HandleInitialize() => new()
+    private static JsonObject HandleInitialize(JsonObject? prms)
     {
-        ["protocolVersion"] = ProtocolVersion,
-        ["capabilities"] = new JsonObject
+        // MCP spec: if the server supports the client's requested protocol version it MUST reply with the
+        // SAME version. This server is version-agnostic at the JSON-RPC level, so ECHO whatever the client
+        // sent; fall back to our newest-known only when the client omits the field.
+        string version = prms?["protocolVersion"]?.GetValue<string>() is { Length: > 0 } v
+            ? v
+            : FallbackProtocolVersion;
+
+        return new JsonObject
         {
-            ["tools"] = new JsonObject(),
-        },
-        ["serverInfo"] = new JsonObject
-        {
-            ["name"] = ServerName,
-            ["version"] = ServerVersion,
-        },
-    };
+            ["protocolVersion"] = version,
+            ["capabilities"] = new JsonObject
+            {
+                ["tools"] = new JsonObject(),
+            },
+            ["serverInfo"] = new JsonObject
+            {
+                ["name"] = ServerName,
+                ["version"] = ServerVersion,
+            },
+        };
+    }
 
     private static JsonObject HandleToolsList()
     {

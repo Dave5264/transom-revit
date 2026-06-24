@@ -7,8 +7,9 @@ namespace Transom.ClickHelper.Mcp;
 
 /// <summary>
 /// Transom Click Helper MCP — a minimal Model Context Protocol server over stdio (JSON-RPC 2.0,
-/// Content-Length framed). It exposes Revit UI-clicking tools to Claude and fulfils each one by
-/// running the Transom.ClickHelper engine exe, which performs UI Automation against the live Revit
+/// NEWLINE-DELIMITED per the MCP stdio transport: one line of JSON per message, no embedded newlines,
+/// stdout carries only valid MCP messages). It exposes Revit UI-clicking tools to Claude and fulfils each
+/// one by running the Transom.ClickHelper engine exe, which performs UI Automation against the live Revit
 /// window from its own process.
 ///
 /// Framing mirrors Transom.McpShim so this server plugs into the same host. stdout is the protocol
@@ -16,7 +17,9 @@ namespace Transom.ClickHelper.Mcp;
 /// </summary>
 internal static class Program
 {
-    private const string ProtocolVersion = "2024-11-05";
+    /// <summary>Newest MCP protocol version this server knows — used only when the client's initialize
+    /// omits protocolVersion; otherwise the server ECHOES the client's requested version.</summary>
+    private const string FallbackProtocolVersion = "2025-06-18";
     private const string ServerName = "transom-ui-assist";
     private const string ServerVersion = "1.0.0";
 
@@ -27,8 +30,13 @@ internal static class Program
         _exePath = ResolveExePath(args);
         Log($"Click Helper MCP starting. Helper exe: {(_exePath.Length == 0 ? "<not found>" : _exePath)}");
 
-        using var stdin = Console.OpenStandardInput();
-        using var stdout = Console.OpenStandardOutput();
+        // MCP stdio transport is newline-delimited JSON: one '\n'-terminated line per message.
+        using var stdin = new StreamReader(Console.OpenStandardInput(), new UTF8Encoding(false));
+        using var stdout = new StreamWriter(Console.OpenStandardOutput(), new UTF8Encoding(false))
+        {
+            AutoFlush = false,
+            NewLine = "\n",
+        };
 
         try { RunLoop(stdin, stdout); }
         catch (Exception ex) { Log($"Fatal: {ex}"); return 1; }
@@ -37,16 +45,15 @@ internal static class Program
         return 0;
     }
 
-    private static void RunLoop(Stream stdin, Stream stdout)
+    private static void RunLoop(TextReader stdin, TextWriter stdout)
     {
-        while (true)
+        string? line;
+        while ((line = stdin.ReadLine()) is not null)
         {
-            string? body = ReadMessage(stdin);
-            if (body is null) return;           // EOF
-            if (body.Length == 0) continue;
+            if (line.Length == 0) continue;     // tolerate blank lines
 
             JsonNode? response;
-            try { response = HandleMessage(body); }
+            try { response = HandleMessage(line); }
             catch (Exception ex) { Log($"Error handling message: {ex.Message}"); response = null; }
 
             if (response is not null) WriteMessage(stdout, response);
@@ -71,7 +78,7 @@ internal static class Program
 
         switch (method)
         {
-            case "initialize": return Result(id, HandleInitialize());
+            case "initialize": return Result(id, HandleInitialize(obj["params"] as JsonObject));
             case "notifications/initialized":
             case "initialized": return null;
             case "tools/list": return Result(id, HandleToolsList());
@@ -83,15 +90,24 @@ internal static class Program
         }
     }
 
-    private static JsonObject HandleInitialize() => new()
+    private static JsonObject HandleInitialize(JsonObject? prms)
     {
-        ["protocolVersion"] = ProtocolVersion,
-        ["capabilities"] = new JsonObject { ["tools"] = new JsonObject() },
-        ["serverInfo"] = new JsonObject { ["name"] = ServerName, ["version"] = ServerVersion },
-        // Operating manual handed to the model (distilled from the field-tested learning log). These
-        // rules are load-bearing — ignoring them is why earlier attempts failed.
-        ["instructions"] = Instructions,
-    };
+        // MCP spec: echo the client's requested protocolVersion (this server is version-agnostic at the
+        // JSON-RPC level); fall back to our newest-known only when the client omits the field.
+        string version = prms?["protocolVersion"]?.GetValue<string>() is { Length: > 0 } v
+            ? v
+            : FallbackProtocolVersion;
+
+        return new JsonObject
+        {
+            ["protocolVersion"] = version,
+            ["capabilities"] = new JsonObject { ["tools"] = new JsonObject() },
+            ["serverInfo"] = new JsonObject { ["name"] = ServerName, ["version"] = ServerVersion },
+            // Operating manual handed to the model (distilled from the field-tested learning log). These
+            // rules are load-bearing — ignoring them is why earlier attempts failed.
+            ["instructions"] = Instructions,
+        };
+    }
 
     /// <summary>
     ///     Condensed, field-tested guidance for driving Revit's UI via these tools. Surfaced to the model
@@ -532,61 +548,12 @@ internal static class Program
 
     // ----------------------------------------------------------------- framing
 
-    private static string? ReadMessage(Stream stdin)
+    /// <summary>Write one MCP message as a single line of JSON + '\n', then flush. ToJsonString emits
+    /// single-line JSON (no embedded newlines), satisfying the stdio framing requirement.</summary>
+    private static void WriteMessage(TextWriter stdout, JsonNode message)
     {
-        int contentLength = -1;
-        while (true)
-        {
-            string? line = ReadHeaderLine(stdin);
-            if (line is null) return null;
-            if (line.Length == 0) break;
-
-            int colon = line.IndexOf(':');
-            if (colon > 0)
-            {
-                string nameH = line[..colon].Trim();
-                string value = line[(colon + 1)..].Trim();
-                if (nameH.Equals("Content-Length", StringComparison.OrdinalIgnoreCase) && int.TryParse(value, out int len))
-                    contentLength = len;
-            }
-        }
-        if (contentLength < 0) { Log("Message missing Content-Length; skipping."); return string.Empty; }
-
-        var buffer = new byte[contentLength];
-        int read = 0;
-        while (read < contentLength)
-        {
-            int n = stdin.Read(buffer, read, contentLength - read);
-            if (n <= 0) return null;
-            read += n;
-        }
-        return Encoding.UTF8.GetString(buffer, 0, contentLength);
-    }
-
-    private static string? ReadHeaderLine(Stream stdin)
-    {
-        var sb = new StringBuilder();
-        int b;
-        while ((b = stdin.ReadByte()) != -1)
-        {
-            if (b == '\n')
-            {
-                int len = sb.Length;
-                if (len > 0 && sb[len - 1] == '\r') sb.Length = len - 1;
-                return sb.ToString();
-            }
-            sb.Append((char)b);
-        }
-        return sb.Length > 0 ? sb.ToString() : null;
-    }
-
-    private static void WriteMessage(Stream stdout, JsonNode message)
-    {
-        string json = message.ToJsonString();
-        byte[] payload = Encoding.UTF8.GetBytes(json);
-        byte[] header = Encoding.ASCII.GetBytes($"Content-Length: {payload.Length}\r\n\r\n");
-        stdout.Write(header, 0, header.Length);
-        stdout.Write(payload, 0, payload.Length);
+        stdout.Write(message.ToJsonString());
+        stdout.Write('\n');
         stdout.Flush();
     }
 
