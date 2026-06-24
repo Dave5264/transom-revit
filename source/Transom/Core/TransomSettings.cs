@@ -7,10 +7,9 @@ namespace Transom.Core;
 /// <summary>Persisted add-in settings (bridge port + Claude exchange folder), stored under %AppData%\Transom.</summary>
 public sealed class TransomSettings
 {
-    public int BridgePort { get; set; } = 48884;
-
     /// <summary>Port for Transom's own in-process Claude-assist bridge (loopback TcpListener). High port,
-    /// user-configurable; kept distinct from <see cref="BridgePort"/> (the external community bridge probe).</summary>
+    /// user-configurable. This is the ONLY bridge port — the retired external-pyRevit probe port (48884) was
+    /// removed (G1): Transom never listened on it, so probing it gave false offline/false positive readings.</summary>
     public int BridgeSelfHostPort { get; set; } = 48810;
 
     public string ExchangeFolder { get; set; } = "";

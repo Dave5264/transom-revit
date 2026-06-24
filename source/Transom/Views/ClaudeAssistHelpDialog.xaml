@@ -49,16 +49,17 @@
                 <TextBlock TextWrapping="Wrap" Foreground="{DynamicResource Muted}" Margin="0,0,0,8">
                     Claude reviews an export or a pending import against the live model and flags issues — drift,
                     mismatched values, risky edits — <Run Text="before" FontStyle="Italic" /> you commit. It only reads
-                    the model (a read-only MCP such as Autodesk's Revit MCP Technical Preview), so no write bridge is needed.
+                    the model through Transom's bundled bridge, so nothing is written.
                 </TextBlock>
                 <TextBlock TextWrapping="Wrap" Foreground="{DynamicResource Muted}" Margin="0,0,0,4">
                     1 · Set <Run Text="Claude mode" FontWeight="SemiBold" /> to “Verify (read-only)”, and set a Claude exchange folder.
+                    (One-time: <Run Text="Set up Claude" FontWeight="SemiBold" /> on the ribbon + restart Claude Code, then turn <Run Text="Claude Bridge" FontWeight="SemiBold" /> ON.)
                 </TextBlock>
                 <TextBlock TextWrapping="Wrap" Foreground="{DynamicResource Muted}" Margin="0,0,0,4">
                     2 · Export or Preview as usual — Transom stages the workbook + a run-log to the exchange folder.
                 </TextBlock>
                 <TextBlock TextWrapping="Wrap" Foreground="{DynamicResource Muted}" Margin="0,0,0,4">
-                    3 · In your Claude session (with the read-only Revit MCP), ask:
+                    3 · In Claude Code, ask:
                 </TextBlock>
                 <Border Background="{DynamicResource CodeBg}" BorderBrush="{DynamicResource Line}" BorderThickness="1" CornerRadius="6" Padding="10,8" Margin="0,0,0,4">
                     <TextBlock FontFamily="Consolas" FontSize="12" TextWrapping="Wrap" Foreground="{DynamicResource Text}"
@@ -76,32 +77,36 @@
                     Claude applies those for you over a local MCP write bridge.
                 </TextBlock>
                 <TextBlock TextWrapping="Wrap" Foreground="{DynamicResource Muted}" Margin="0,0,0,4">
-                    1 · Set <Run Text="Claude mode" FontWeight="SemiBold" /> to “Assist (write)” and start the write MCP
-                    server (community Revit MCP via pyRevit Routes, port 48884). Bridge status should read “available”.
+                    1 · One-time: click <Run Text="Set up Claude" FontWeight="SemiBold" /> on the ribbon (registers
+                    Transom's bundled MCP servers with Claude Code — no admin), then <Run Text="restart Claude Code" FontWeight="SemiBold" /> so it loads them.
                 </TextBlock>
                 <TextBlock TextWrapping="Wrap" Foreground="{DynamicResource Muted}" Margin="0,0,0,4">
-                    2 · Preview → <Run Text="Apply selected" FontWeight="SemiBold" />. If edits target group members, the group dialog appears.
+                    2 · Turn <Run Text="Claude Bridge" FontWeight="SemiBold" /> ON (ribbon toggle). It listens on
+                    127.0.0.1:48810 (the default; change it in Settings) — the bridge status should read “available”.
                 </TextBlock>
                 <TextBlock TextWrapping="Wrap" Foreground="{DynamicResource Muted}" Margin="0,0,0,4">
-                    3 · Choose “Let Claude open the groups” and pick where to save the artifact
-                    (<Run Text="transom_group_edits.json" FontStyle="Italic" />). Everything not in a group applies right away.
+                    3 · Import → <Run Text="Preview" FontWeight="SemiBold" /> → <Run Text="Apply selected" FontWeight="SemiBold" />.
+                    If edits target group members, the group dialog appears — pick <Run Text="Claude-Assist" FontWeight="SemiBold" />
+                    and choose where to save the artifact (<Run Text="transom_group_edits.json" FontStyle="Italic" />).
+                    Everything not in a group applies right away.
                 </TextBlock>
                 <TextBlock TextWrapping="Wrap" Foreground="{DynamicResource Muted}" Margin="0,0,0,4">
-                    4 · In your Claude session (with the write MCP), tell Claude:
+                    4 · In Claude Code, drag the staged <Run Text="transom_group_edits.json" FontStyle="Italic" /> into the chat and say:
                 </TextBlock>
                 <Border Background="{DynamicResource CodeBg}" BorderBrush="{DynamicResource Line}" BorderThickness="1" CornerRadius="6" Padding="10,8" Margin="0,0,0,4">
                     <TextBlock FontFamily="Consolas" FontSize="12" TextWrapping="Wrap" Foreground="{DynamicResource Text}"
-                               Text="Apply the staged Transom group edits at &lt;path to the .json file&gt;." />
+                               Text="Apply these staged Transom group edits." />
                 </Border>
                 <TextBlock TextWrapping="Wrap" Foreground="{DynamicResource Muted}" Margin="0,0,0,12">
-                    Claude reads the file and applies each edit over the bridge — ungrouping the affected instances,
-                    writing the parameter, and restoring grouping as needed.
+                    Claude reads the file and, for each grouped built-in, drives Revit's “Edit Group” mode (via the
+                    UI-Assist server) to set the value and verify it — the group's members stay intact. Ungrouped
+                    edits and project/shared params it writes directly over the bridge.
                 </TextBlock>
 
                 <Border Background="{DynamicResource InfoBg}" BorderBrush="{DynamicResource AccentLine}" BorderThickness="1" CornerRadius="6" Padding="10">
                     <TextBlock TextWrapping="Wrap" Foreground="{DynamicResource Accent}" FontSize="12">
-                        <Run Text="The two read paths differ:" FontWeight="SemiBold" /> Verify uses a read-only MCP
-                        (no bridge, safe review); Assist uses the write bridge to actually change the model.
+                        <Run Text="The two read paths differ:" FontWeight="SemiBold" /> Verify reads the model to review
+                        (no writes); Assist turns on the bridge so Claude can actually change the model.
                     </TextBlock>
                 </Border>
 

@@ -41,13 +41,14 @@ public static class BridgeTools
 
             return tool switch
             {
-                "status"         => Status(doc),
-                "list_schedules" => ListSchedules(doc),
-                "read_schedule"  => ReadSchedule(doc, args),
-                "set_parameter"  => SetParameter(doc, args),
-                "set_parameters" => SetParameters(doc, args),
-                ""               => Err("missing 'tool'"),
-                _                => Err($"unknown tool '{tool}'"),
+                "status"             => Status(doc),
+                "list_schedules"     => ListSchedules(doc),
+                "read_schedule"      => ReadSchedule(doc, args),
+                "set_parameter"      => SetParameter(doc, args),
+                "set_parameters"     => SetParameters(doc, args),
+                "execute_revit_code" => ExecuteRevitCode(app, args),
+                ""                   => Err("missing 'tool'"),
+                _                    => Err($"unknown tool '{tool}'"),
             };
         }
         catch (Exception ex)
@@ -223,6 +224,31 @@ public static class BridgeTools
         }
 
         return Json(new Dictionary<string, object?> { ["ok"] = allOk, ["results"] = results });
+    }
+
+    // --- execute_revit_code (G2/G3) ----------------------------------------
+
+    /// <summary>
+    ///     Runs an arbitrary Revit API C# snippet in-process on the API thread (full API reach). See
+    ///     <see cref="RevitCodeExecutor"/> for the transaction/timeout/audit policy and the SECURITY note: the
+    ///     loopback + per-session token + Origin/Host gate (in BridgeServer) are the ONLY boundary for this tool.
+    /// </summary>
+    private static string ExecuteRevitCode(UIApplication app, JsonElement args)
+    {
+        if (args.ValueKind != JsonValueKind.Object
+            || !args.TryGetProperty("code", out var codeEl)
+            || codeEl.ValueKind != JsonValueKind.String)
+            return Err("missing 'code' (a C# snippet string)");
+
+        string code = codeEl.GetString() ?? "";
+        bool readOnly = args.TryGetProperty("readOnly", out var roEl)
+                        && (roEl.ValueKind == JsonValueKind.True
+                            || (roEl.ValueKind == JsonValueKind.String && bool.TryParse(roEl.GetString(), out var b) && b));
+
+        // Audit every executed snippet to the bridge's stderr log (the host captures it).
+        var result = RevitCodeExecutor.Execute(app, code, readOnly,
+            msg => Console.Error.WriteLine("[transom-bridge] " + msg));
+        return Json(result);
     }
 
     // --- the core write (one edit, inside a caller-managed transaction) -----

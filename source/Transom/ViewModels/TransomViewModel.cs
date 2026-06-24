@@ -232,7 +232,9 @@ public sealed partial class TransomViewModel : ObservableObject
     [ObservableProperty] private bool _claudeAvailable;
     [ObservableProperty] private string _claudeMode = "Off"; // Off | Verify (read-only) | Assist (write)
     [ObservableProperty] private bool _canFinalize;
-    [ObservableProperty] private int _bridgePort = 48884;
+    // G1: the bridge port the UI binds/probes is Transom's OWN self-host bridge (BridgeSelfHostPort, 48810) —
+    // NOT the retired external-pyRevit probe (48884), which Transom never listened on.
+    [ObservableProperty] private int _bridgePort = 48810;
     [ObservableProperty] private string _exchangeFolder = "";
     [ObservableProperty] private string _bridgeStatus = "Checking bridge…";
     [ObservableProperty] private bool _encouragingMessages = true;
@@ -281,7 +283,7 @@ public sealed partial class TransomViewModel : ObservableObject
         ProposedChange.SelectionChanged += OnAnyChangeSelectionChanged;
 
         _settings = TransomSettings.Load();
-        BridgePort = _settings.BridgePort;
+        BridgePort = _settings.BridgeSelfHostPort;   // G1: bind the UI to the self-host bridge port (48810)
         ExchangeFolder = _settings.ExchangeFolder;
         EncouragingMessages = _settings.EncouragingMessages;
         _ = RefreshBridgeAsync();
@@ -1504,7 +1506,7 @@ public sealed partial class TransomViewModel : ObservableObject
 
     partial void OnBridgePortChanged(int value)
     {
-        _settings.BridgePort = value;
+        _settings.BridgeSelfHostPort = value;   // G1: persist to the self-host bridge port
         _settings.Save();
         _ = RefreshBridgeAsync();
     }

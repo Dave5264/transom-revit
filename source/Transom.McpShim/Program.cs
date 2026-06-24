@@ -273,6 +273,27 @@ internal static class Program
                     ["required"] = new JsonArray { "edits" },
                     ["additionalProperties"] = false,
                 }),
+
+            Tool(
+                "execute_revit_code",
+                "Run an arbitrary Revit API C# snippet in the live model for full API reach beyond the fixed tools "
+                + "(e.g. print sets, multi-document via app.Documents, custom queries/edits). Runs in-process on the "
+                + "Revit API thread. Globals available to the snippet: Document doc (active), UIApplication uiapp, "
+                + "Application app, and Print(value) to log output back to you. By default the snippet runs inside a "
+                + "transaction that COMMITS on success and ROLLS BACK on any exception; pass readOnly:true to run with "
+                + "no transaction (reads only). Returns the snippet's return value + the captured log. Usings for "
+                + "System, System.Linq, System.Collections.Generic, Autodesk.Revit.DB and .UI are pre-imported.",
+                new JsonObject
+                {
+                    ["type"] = "object",
+                    ["properties"] = new JsonObject
+                    {
+                        ["code"] = Prop("string", "The C# snippet to run (e.g. \"return new FilteredElementCollector(doc).OfClass(typeof(Wall)).GetElementCount();\")."),
+                        ["readOnly"] = Prop("boolean", "If true, run with NO transaction (reads only); default false wraps the snippet in a commit-on-success / rollback-on-error transaction."),
+                    },
+                    ["required"] = new JsonArray { "code" },
+                    ["additionalProperties"] = false,
+                }),
         };
 
         return new JsonObject { ["tools"] = tools };
