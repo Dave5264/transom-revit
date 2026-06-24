@@ -6,7 +6,7 @@
 
 [![Latest release](https://img.shields.io/github/v/release/Dave5264/transom-revit?label=latest%20release&color=2ea44f&logo=github)](https://github.com/Dave5264/transom-revit/releases/latest)
 
-### ⬇ [Download the installer](https://github.com/Dave5264/transom-revit/releases/download/v1.4.7/Transom-1.4.7-SingleUser.msi)
+### ⬇ [Download the installer](https://github.com/Dave5264/transom-revit/releases/download/v1.4.8/Transom-1.4.8-SingleUser.msi)
 
 **One click, no admin rights** — installs into your per-user Revit add-ins folder.
 Double-click the `.msi`, then start Revit. Supports **Revit 2025, 2026 & 2027**.
@@ -22,7 +22,7 @@ bridge, but the add-in is fully standalone without it.
 ### Claude MCP bridge
 
 The add-in bundles a local loopback-only MCP bridge (`127.0.0.1`) plus a self-contained shim — no admin
-rights, no separate install, nothing leaves your machine. To let a Claude client (Claude Code / Cowork)
+rights, no separate install, nothing leaves your machine. To let a Claude client (Claude Code)
 read and write the live model:
 
 1. Click **"Register Claude Bridge"** in the Transom ribbon (one-time — it registers the `transom` MCP server).
@@ -32,15 +32,19 @@ Then drop the guidance file from [`claude/`](claude/) (`CLAUDE.md`) where your c
 so Claude already knows the tools and the safe-write workflow. See [`claude/README.md`](claude/README.md) for
 exactly where each file goes.
 
-> **Status:** v1.4.7 released (Revit 2025/2026/2027) — **Claude-Assist now actually connects.** The bundled MCP shim
-> framing was corrected (newline-delimited JSON-RPC over stdio, plus a `protocolVersion` echo on initialize) so a
-> Claude client (Claude Code / Cowork) completes the handshake and stays connected — in v1.4.6 the bridge installed
-> but the connection never succeeded. The three Claude ribbon buttons are also consolidated into one **"Set up
-> Claude"**. Built on v1.4.6's **seamless setup**: the per-user installer places the MCP shim into `%LocalAppData%`
+> **Status:** v1.4.8 released (Revit 2025/2026/2027) — **Claude-Assist gains full Revit API access.** A new
+> `execute_revit_code` bridge tool lets a connected Claude client run arbitrary Revit API code in the live model
+> (compiled in-process via Roslyn), advertised in the MCP shim's tool list alongside the schedule tools. The bridge
+> status probe was also corrected (it now binds the right loopback port and asserts on the live status body), and
+> the in-app help points at the Claude Code path. Built on v1.4.7, where **Claude-Assist first actually connected**:
+> the bundled MCP shim framing was corrected (newline-delimited JSON-RPC over stdio, plus a `protocolVersion` echo on
+> initialize) so a Claude client (Claude Code) completes the handshake and stays connected — in v1.4.6 the bridge
+> installed but the connection never succeeded. The three Claude ribbon buttons are also consolidated into one **"Set
+> up Claude"**. Built on v1.4.6's **seamless setup**: the per-user installer places the MCP shim into `%LocalAppData%`
 > at **install time**, so the bridge has the current shim without needing to open Revit first; and the Claude-Assist
 > guidance directs the **manual "Edit Group" mode** path (drive the Revit UI to edit a grouped built-in) instead of
 > an API group-rebuild, with richer staging files (doc path + GUID, old→new values, the new-parameter name) so
-> Cowork can apply and verify reliably. Built on v1.4.5
+> Claude Code can apply and verify reliably. Built on v1.4.5
 > (grouped-import correctness + option-2 UX): when a column edit touches members of a model group, the chosen
 > resolution now applies to the column's **ungrouped**
 > instances too: Skip skips them (they no longer write anyway), Claude-Assist stages them with the grouped ones,
