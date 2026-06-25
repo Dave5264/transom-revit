@@ -1,6 +1,9 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
+using System.Reflection;
+using System.Runtime.Loader;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -33,6 +36,44 @@ namespace Transom.Core;
 public static class RevitCodeExecutor
 {
     private static readonly TimeSpan MaxRun = TimeSpan.FromSeconds(8);
+
+    // The load context that loaded Transom.dll. With EnableDynamicLoading this is Transom's OWN isolated
+    // AssemblyLoadContext, which resolves our pinned Microsoft.CodeAnalysis 4.12 from the add-in folder (via
+    // Transom.deps.json). Roslyn's CSharpScript does reflection-based assembly loading at compile/run time that
+    // is NOT pinned to this context; left alone it can fall through to the default context, where another add-in
+    // (e.g. pyRevit) may already have an OLDER Microsoft.CodeAnalysis loaded. A request for 4.12 then can't be
+    // satisfied by the loaded 4.10 -> FileLoadException (0x80131621) — which is why only execute_revit_code
+    // breaks while every other bridge tool works. Run() pins resolution back to this context.
+    private static readonly AssemblyLoadContext? OwnContext =
+        AssemblyLoadContext.GetLoadContext(typeof(RevitCodeExecutor).Assembly);
+
+    private static readonly string OwnDir =
+        Path.GetDirectoryName(typeof(RevitCodeExecutor).Assembly.Location) ?? AppContext.BaseDirectory;
+
+    private static int _resolverHooked;
+
+    /// <summary>
+    ///     Belt-and-suspenders for the load-context pinning in <see cref="Run"/>: attaches (once) a resolver to
+    ///     Transom's own load context that satisfies ANY <c>Microsoft.CodeAnalysis*</c> request from Transom's OWN
+    ///     folder — so even a transitive Roslyn dependency not listed in deps.json loads our copy instead of
+    ///     falling through to another add-in's. Scoped to our context only; never touches the default context or
+    ///     other add-ins, and returns null for non-Roslyn names so normal resolution is unaffected.
+    /// </summary>
+    private static void EnsureRoslynResolver()
+    {
+        if (OwnContext == null) return;
+        if (Interlocked.Exchange(ref _resolverHooked, 1) == 1) return; // hook exactly once
+
+        OwnContext.Resolving += (ctx, name) =>
+        {
+            if (name.Name is null ||
+                !name.Name.StartsWith("Microsoft.CodeAnalysis", StringComparison.OrdinalIgnoreCase))
+                return null; // not Roslyn — let the runtime resolve it normally
+
+            var path = Path.Combine(OwnDir, name.Name + ".dll");
+            return File.Exists(path) ? ctx.LoadFromAssemblyPath(path) : null;
+        };
+    }
 
     /// <summary>Globals exposed to the snippet: the active doc, the UIApplication, the Application (for
     /// multi-doc via <c>app.Documents</c>), and a <c>Print(...)</c> sink whose output is returned to Claude.</summary>
@@ -101,10 +142,23 @@ public static class RevitCodeExecutor
     {
         try
         {
+            // Make sure Transom's own load context resolves the whole Microsoft.CodeAnalysis* family from our
+            // own folder before we touch Roslyn (see EnsureRoslynResolver / OwnContext).
+            EnsureRoslynResolver();
+
             // Roslyn scripting is async; we're on the Revit API thread and MUST stay on it (transactions are
             // thread-affine), so block here. The CancellationToken enforces the time cap cooperatively.
-            var state = CSharpScript.RunAsync(code, options, globals, typeof(Globals), token)
-                .GetAwaiter().GetResult();
+            //
+            // EnterContextualReflection pins Roslyn's context-free reflection loads (Assembly.Load by name, etc.)
+            // to Transom's OWN load context for the duration of the run, so they bind our local
+            // Microsoft.CodeAnalysis 4.12 instead of falling back to the default context — where another add-in's
+            // older copy would yield a FileLoadException (0x80131621). No-op if we're not in an isolated context.
+            ScriptState<object> state;
+            using (OwnContext?.EnterContextualReflection())
+            {
+                state = CSharpScript.RunAsync(code, options, globals, typeof(Globals), token)
+                    .GetAwaiter().GetResult();
+            }
 
             return new Dictionary<string, object?>
             {
