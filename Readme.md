@@ -14,7 +14,7 @@
 
 [![Latest release](https://img.shields.io/github/v/release/Dave5264/transom-revit?label=latest%20release&color=2ea44f&logo=github)](https://github.com/Dave5264/transom-revit/releases/latest)
 
-### ⬇ [Download the installer](https://github.com/Dave5264/transom-revit/releases/download/v1.4.8/Transom-1.4.8-SingleUser.msi)
+### ⬇ [Download the installer](https://github.com/Dave5264/transom-revit/releases/download/v1.4.9/Transom-1.4.9-SingleUser.msi)
 
 **One click, no admin rights** — installs into your per-user Revit add-ins folder.
 Double-click the `.msi`, then start Revit. Supports **Revit 2025, 2026 & 2027**.
@@ -41,7 +41,11 @@ Then drop the guidance file from [`claude/`](claude/) (`CLAUDE.md`) into your pr
 so Claude Code already knows the tools and the safe-write workflow. See [`claude/README.md`](claude/README.md) for
 exactly where it goes.
 
-> **Status:** v1.4.8 released (Revit 2025/2026/2027) — **Claude-Assist gains full Revit API access.** A new
+> **Status:** v1.4.9 released (Revit 2025/2026/2027) — **`execute_revit_code` now works alongside other add-ins that
+> load Roslyn.** When another add-in (e.g. pyRevit) had a different `Microsoft.CodeAnalysis` loaded in the Revit
+> process, the in-process script tool could fail with a `FileLoadException`; Transom now pins Roslyn's assembly
+> resolution to its own load context so it always binds its bundled 4.12. Built on v1.4.8, which **gave Claude-Assist
+> full Revit API access** — a new
 > `execute_revit_code` bridge tool lets a connected Claude client run arbitrary Revit API code in the live model
 > (compiled in-process via Roslyn), advertised in the MCP shim's tool list alongside the schedule tools. The bridge
 > status probe was also corrected (it now binds the right loopback port and asserts on the live status body), and
