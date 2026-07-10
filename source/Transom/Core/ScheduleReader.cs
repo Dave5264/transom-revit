@@ -906,19 +906,66 @@ public sealed class ScheduleReader
         catch { return false; }
     }
 
-    /// <summary>Itemized schedules: anchor each row to its element via a rolled-back UID stamp.</summary>
+    /// <summary>Itemized schedules: anchor each row to its element — by a unique visible key column when one
+    /// exists (pure reads, no transaction), else via the rolled-back UID stamp.</summary>
     private void ReadInstanceAnchors(ViewSchedule vs, ScheduleTable table, System.Collections.Generic.IList<Element> els, string?[] anchors)
     {
+        if (TryAnchorByUniqueKeyColumn(table, els, anchors)) return;
         var validUids = new HashSet<string>(els.Select(e => e.UniqueId));
         ReadAnchorColumn(vs, table, els, anchors, validUids, (int)BuiltInParameter.ALL_MODEL_INSTANCE_COMMENTS);
     }
 
     /// <summary>
+    ///     No-stamp anchor path: a visible string column whose value is non-empty and DISTINCT across every
+    ///     element in the schedule (Sheet Number on a sheet index — uniqueness Revit enforces — or a unique
+    ///     Mark) identifies each rendered row by value match alone: pure reads, no transaction, no rollback to
+    ///     trust. Both sides must form a perfect 1:1 — every element's value found on exactly one row — or the
+    ///     column is rejected and the caller falls back to the stamp; a header/summary row that coincidentally
+    ///     repeats a value breaks the 1:1 and rejects the column, so a false anchor can't slip through.
+    /// </summary>
+    private bool TryAnchorByUniqueKeyColumn(ScheduleTable table, System.Collections.Generic.IList<Element> els, string?[] anchors)
+    {
+        if (els.Count == 0) return false;
+        foreach (var col in table.Columns)
+        {
+            // Real single-parameter visible columns only: hidden/synthetic (§17) columns aren't rendered rows'
+            // cells at this point, and combined columns have no single parameter to read.
+            if (col.Hidden || col.CombinedParts != null || col.ParameterId == -1 || col.Col < 0) continue;
+
+            var byValue = new Dictionary<string, string>(StringComparer.Ordinal); // value -> element uid
+            bool ok = true;
+            foreach (var e in els)
+            {
+                var p = GetParamOn(e, col.ParameterId);
+                var v = p != null && p.StorageType == StorageType.String ? p.AsString() : null;
+                if (string.IsNullOrEmpty(v) || byValue.ContainsKey(v!)) { ok = false; break; }
+                byValue[v!] = e.UniqueId;
+            }
+            if (!ok) continue;
+
+            var rowFor = new Dictionary<string, int>(StringComparer.Ordinal); // value -> rendered row
+            for (int r = 0; r < table.RowCount && ok; r++)
+            {
+                var text = col.Col < table.Cells[r].Length ? table.Cells[r][col.Col].Text : "";
+                if (string.IsNullOrEmpty(text) || !byValue.ContainsKey(text)) continue; // header/blank/summary row
+                if (rowFor.ContainsKey(text)) ok = false;   // value on two rows -> not a key, reject the column
+                else rowFor[text] = r;
+            }
+            if (!ok || rowFor.Count != byValue.Count) continue; // not a perfect 1:1 -> try the next column
+
+            foreach (var kv in rowFor) anchors[kv.Value] = byValue[kv.Key];
+            return true;
+        }
+        return false;
+    }
+
+    /// <summary>
     ///     Stamps each host's UniqueId into a carrier text parameter (rolled back), renders it, and reads the
     ///     per-row UID. The carrier is Comments / Type Comments when available; otherwise any writable string
-    ///     parameter that ISN'T a sort/group field (so stamping it can't reorder rows) — hijacking a visible
-    ///     column or appending a schedulable spare. This lets annotation/device families (which lack a Comments
-    ///     parameter) round-trip too.
+    ///     parameter that ISN'T a sort/group field (so stamping it can't reorder rows) and isn't an identity
+    ///     param (<see cref="IdentityCarrierBlocklist"/>) — preferring an appended non-visible spare over a
+    ///     visible column. This lets annotation/device families (which lack a Comments parameter) round-trip
+    ///     too. The stamp is verified gone after the rollback (<see cref="VerifyAnchorRollback"/>).
     /// </summary>
     private void ReadAnchorColumn(ViewSchedule vs, ScheduleTable table,
         System.Collections.Generic.IList<Element> hosts, string?[] anchors, HashSet<string> validUids, int preferredBuiltIn)
@@ -931,6 +978,7 @@ public sealed class ScheduleReader
         if (carrier == null) return; // no usable carrier -> schedule stays display-only
         int cpid = carrier.Value;
 
+        var stamped = new List<(string uid, string? original)>();   // what the stamp touched + each pre-stamp value
         var tx = new Transaction(_doc, "Transom: read row anchors (rolled back)");
         tx.Start();
 
@@ -965,7 +1013,10 @@ public sealed class ScheduleReader
                     if (h == null) continue;
                     var p = GetParamOn(h, cpid);
                     if (p != null && !p.IsReadOnly && p.StorageType == StorageType.String)
+                    {
+                        stamped.Add((uid, p.AsString()));   // pre-stamp value, for post-rollback verification
                         p.Set(uid);
+                    }
                 }
                 catch { /* stale handle or rejected group-member edit — row stays unanchored */ }
             }
@@ -996,12 +1047,78 @@ public sealed class ScheduleReader
             tx.RollBack();
             if (UiApp != null && dlg != null) UiApp.DialogBoxShowing -= dlg;
         }
+
+        VerifyAnchorRollback(cpid, stamped);
     }
 
     /// <summary>
+    ///     Post-rollback verification of the UID stamp — the spike's manual "all stamped params restored" check,
+    ///     enforced in code on every export. If any carrier parameter still holds its element's UniqueId after
+    ///     the rollback (a rollback that didn't take: never observed, but the failure mode is user data silently
+    ///     keeping GUIDs), restore the captured pre-stamp values in a repair transaction and tell the user what
+    ///     happened. Silent in normal operation.
+    /// </summary>
+    private void VerifyAnchorRollback(int cpid, List<(string uid, string? original)> stamped)
+    {
+        var stuck = new List<(string uid, string? original)>();
+        foreach (var (uid, original) in stamped)
+        {
+            try
+            {
+                var h = _doc.GetElement(uid);
+                var p = h == null ? null : GetParamOn(h, cpid);
+                if (p != null && p.AsString() == uid && (original ?? "") != uid) stuck.Add((uid, original));
+            }
+            catch { /* element handle gone with the rollback — nothing kept the stamp */ }
+        }
+        if (stuck.Count == 0) return;
+
+        int restored = 0;
+        try
+        {
+            var fix = new Transaction(_doc, "Transom: restore anchor carrier values");
+            fix.Start();
+            foreach (var (uid, original) in stuck)
+            {
+                try
+                {
+                    var p = GetParamOn(_doc.GetElement(uid), cpid);
+                    if (p != null && !p.IsReadOnly) { p.Set(original ?? ""); restored++; }
+                }
+                catch { /* counted by the dialog below */ }
+            }
+            fix.Commit();
+        }
+        catch { /* repair transaction itself failed — the dialog below still tells the user */ }
+
+        Autodesk.Revit.UI.TaskDialog.Show("Transom",
+            $"The export's row-anchor pass did not roll back cleanly: {stuck.Count} element(s) kept a temporary "
+            + $"ID in a text parameter. Transom restored {restored} of them.\n\n"
+            + (restored == stuck.Count
+                ? "Your data is intact, but please report this so the cause can be found."
+                : "Some values could NOT be restored — close the model WITHOUT saving or synchronizing, then reopen it."));
+    }
+
+    /// <summary>Identity parameters that must NEVER carry the rolled-back UID stamp: mid-pass (or on any
+    /// rollback failure) the carrier visibly holds a GUID on EVERY scheduled element, and losing a name/number
+    /// is model corruption, not junk. The 2026-06-01 sheet-index scare was exactly this — sheets have no
+    /// Comments, so the picker hijacked Sheet Name and stamped every sheet in the project (rolled back, but a
+    /// then-unsuppressed dialog froze the stamped state on screen).</summary>
+    private static readonly HashSet<int> IdentityCarrierBlocklist = new()
+    {
+        (int)BuiltInParameter.SHEET_NAME, (int)BuiltInParameter.SHEET_NUMBER,
+        (int)BuiltInParameter.VIEW_NAME,
+        (int)BuiltInParameter.ROOM_NAME, (int)BuiltInParameter.ROOM_NUMBER,
+        (int)BuiltInParameter.LEVEL_NAME,
+        (int)BuiltInParameter.DATUM_TEXT,
+    };
+
+    /// <summary>
     ///     Picks the parameter to carry the rolled-back UID anchor: the preferred built-in (Comments / Type
-    ///     Comments) when writable + present, else any writable string parameter that isn't a sort/group field,
-    ///     preferring one already visible (hijack its column) over a schedulable spare to append.
+    ///     Comments) when writable + present, else any writable string parameter that isn't a sort/group field
+    ///     or an identity param (<see cref="IdentityCarrierBlocklist"/>). A non-visible schedulable spare is
+    ///     preferred over hijacking a visible column: the appended field vanishes with the rollback, so the
+    ///     stamp never flashes GUIDs in a column the user is looking at.
     /// </summary>
     private int? PickAnchorParam(ScheduleDefinition def, Element sample, int preferredBuiltIn)
     {
@@ -1017,11 +1134,11 @@ public sealed class ScheduleReader
         {
             if (p.StorageType != StorageType.String || p.IsReadOnly) continue;
             int pid = (int)p.Id.Value;
-            if (sortGroup.Contains(pid)) continue;
+            if (sortGroup.Contains(pid) || IdentityCarrierBlocklist.Contains(pid)) continue;
             if (VisibleColumnOf(def, pid) >= 0) visibleCand ??= pid;
             else if (SchedulableFieldFor(def, pid) != null) addableCand ??= pid;
         }
-        return visibleCand ?? addableCand;
+        return addableCand ?? visibleCand;
     }
 
     private static HashSet<int> SortGroupParamIds(ScheduleDefinition def)
