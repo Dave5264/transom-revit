@@ -288,10 +288,31 @@ public static class RevisionNarrative
             });
         }
 
-        return collapsed
+        return MergeSameDetail(collapsed
             .OrderBy(n => DetailSortKey(n.DetailNumber))   // lowest detail (blank groups sort last)
             .ThenBy(n => n.CloudId)
-            .ToList();
+            .ToList());
+    }
+
+    /// <summary>
+    ///     Second collapse pass (inverse of the comment-grouping above): DIFFERENT comments that share the
+    ///     same detail list merge into ONE entry whose text is the comments joined as sentences, so a view
+    ///     clouded several times renders "Detail 8 - A. B. C." instead of repeating "Detail 8 -" per item.
+    ///     Only identical labels merge ("Details 1, 3" and "Detail 1" stay separate items); all-blank
+    ///     ([insert]) entries never merge — each is a distinct unknown location the user fills in by hand.
+    ///     Input arrives ordered (detail → CloudId), so join order and output order stay byte-stable.
+    /// </summary>
+    private static List<Note> MergeSameDetail(List<Note> ordered)
+    {
+        var merged = new List<Note>();
+        var byLabel = new Dictionary<string, Note>(StringComparer.Ordinal);
+        foreach (var n in ordered)
+        {
+            if (string.IsNullOrEmpty(n.DetailLabel)) { merged.Add(n); continue; }
+            if (byLabel.TryGetValue(n.DetailLabel, out var host)) host.Text = host.Text + " " + n.Text;
+            else { byLabel[n.DetailLabel] = n; merged.Add(n); }
+        }
+        return merged;
     }
 
     /// <summary>
