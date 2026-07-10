@@ -69,6 +69,13 @@ public class Application : ExternalApplication
             .SetToolTip("Start/stop the admin-free Claude-assist bridge (loopback HTTP on 127.0.0.1) so Claude can read schedules and write parameters back — including group members.  Claude must be running to use this.");
         bridgeBtn.AvailabilityClassName = claudeAvail;
 
+        // Read-only status check — deliberately ALWAYS enabled (unlike the two action buttons): when Claude
+        // isn't running or setup is half-done, this is exactly the button that tells you what's missing.
+        claudePanel.AddPushButton<BridgeStatusCommand>("Bridge\nStatus")
+            .SetImage("/Transom;component/Resources/Icons/Bridge16.png")
+            .SetLargeImage("/Transom;component/Resources/Icons/Bridge32.png")
+            .SetToolTip("Check every layer Claude-assist depends on — bridge on/off + port, session token, deployed MCP shim, and Claude registration — and see what (if anything) still needs doing. Read-only; always available.");
+
         claudePanel.AddPushButton<SettingsCommand>("Settings")
             .SetImage("/Transom;component/Resources/Icons/Settings16.png")
             .SetLargeImage("/Transom;component/Resources/Icons/Settings32.png")

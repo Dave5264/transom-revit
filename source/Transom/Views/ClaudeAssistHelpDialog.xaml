@@ -48,8 +48,8 @@
                 <TextBlock Text="Verify (read-only)" FontSize="14" FontWeight="SemiBold" Foreground="{DynamicResource Accent}" Margin="0,0,0,4" />
                 <TextBlock TextWrapping="Wrap" Foreground="{DynamicResource Muted}" Margin="0,0,0,8">
                     Claude reviews an export or a pending import against the live model and flags issues — drift,
-                    mismatched values, risky edits — <Run Text="before" FontStyle="Italic" /> you commit. It only reads
-                    the model through Transom's bundled bridge, so nothing is written.
+                    mismatched values, risky edits — <Run Text="before" FontStyle="Italic" /> you commit. A review
+                    reads the model through Transom's bundled bridge and changes nothing; you decide what to apply.
                 </TextBlock>
                 <TextBlock TextWrapping="Wrap" Foreground="{DynamicResource Muted}" Margin="0,0,0,4">
                     1 · Set <Run Text="Claude mode" FontWeight="SemiBold" /> to “Verify (read-only)”, and set a Claude exchange folder.
@@ -82,7 +82,8 @@
                 </TextBlock>
                 <TextBlock TextWrapping="Wrap" Foreground="{DynamicResource Muted}" Margin="0,0,0,4">
                     2 · Turn <Run Text="Claude Bridge" FontWeight="SemiBold" /> ON (ribbon toggle). It listens on
-                    127.0.0.1:48810 (the default; change it in Settings) — the bridge status should read “available”.
+                    127.0.0.1:48810 (the default; change it in Settings) — check it any time with
+                    <Run Text="Bridge Status" FontWeight="SemiBold" /> on the ribbon.
                 </TextBlock>
                 <TextBlock TextWrapping="Wrap" Foreground="{DynamicResource Muted}" Margin="0,0,0,4">
                     3 · Import → <Run Text="Preview" FontWeight="SemiBold" /> → <Run Text="Apply selected" FontWeight="SemiBold" />.
@@ -105,8 +106,11 @@
 
                 <Border Background="{DynamicResource InfoBg}" BorderBrush="{DynamicResource AccentLine}" BorderThickness="1" CornerRadius="6" Padding="10">
                     <TextBlock TextWrapping="Wrap" Foreground="{DynamicResource Accent}" FontSize="12">
-                        <Run Text="The two read paths differ:" FontWeight="SemiBold" /> Verify reads the model to review
-                        (no writes); Assist turns on the bridge so Claude can actually change the model.
+                        <Run Text="Both modes use the same bridge" FontWeight="SemiBold" /> — the ribbon toggle is what
+                        turns it on and off, never the mode. The mode changes what Transom stages and what you ask
+                        Claude to do: Verify = review and report only; Assist = also apply the staged group edits.
+                        While the bridge is ON, Claude can write to the model in either mode — so in Verify, keep
+                        your prompts to review-only asks.
                     </TextBlock>
                 </Border>
 

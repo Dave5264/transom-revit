@@ -29,6 +29,9 @@ public class BridgeToggleCommand : ExternalCommand
     private static BridgeEventHandler? _handler;
     private static Autodesk.Revit.UI.ExternalEvent? _event;
 
+    /// <summary>Live listener state, read by the Bridge Status ribbon button (never mutates).</summary>
+    internal static bool IsBridgeRunning => _server is { IsRunning: true };
+
     public override void Execute()
     {
         // If it's already running, this invocation stops it.
