@@ -133,7 +133,7 @@ public sealed class ExcelReader
     public ImportWorkbook Read(string path, ISet<string>? selectedSheetTabs)
     {
         using var fs = File.OpenRead(path);
-        IWorkbook wb = WorkbookFactory.Create(fs);
+        using IWorkbook wb = WorkbookFactory.Create(fs);
 
         var metaSheet = wb.GetSheet("cowork_meta")
                         ?? throw new System.InvalidOperationException(
@@ -315,7 +315,7 @@ public sealed class ExcelReader
     public IReadOnlyList<(string scheduleName, string sheetTab, string uid)> ReadSheetNames(string path)
     {
         using var fs = File.OpenRead(path);
-        IWorkbook wb = WorkbookFactory.Create(fs);
+        using IWorkbook wb = WorkbookFactory.Create(fs);
 
         var metaSheet = wb.GetSheet("cowork_meta")
                         ?? throw new System.InvalidOperationException("Not a Transom workbook (no cowork_meta sheet).");

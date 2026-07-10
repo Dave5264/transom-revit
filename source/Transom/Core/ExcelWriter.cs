@@ -36,7 +36,7 @@ public sealed class ExcelWriter
         if (ext == ".csv") { WriteCsvMany(tables, path); return; }
 
         bool xls = ext == ".xls";
-        IWorkbook wb = xls ? new HSSFWorkbook() : new XSSFWorkbook();
+        using IWorkbook wb = xls ? new HSSFWorkbook() : new XSSFWorkbook();
         var used = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var pairs = new List<(ScheduleTable t, string name)>();
 

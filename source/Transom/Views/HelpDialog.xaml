@@ -180,6 +180,27 @@
                     The bridge is <Run Text="admin-free" FontWeight="SemiBold" />: it listens only on 127.0.0.1 (loopback) on a high port and requires a per-session token, so other apps and web pages can’t drive it. Use <Run Text="Register with Claude" FontWeight="SemiBold" /> on the ribbon once (registers the bundled connector — no admin), then toggle <Run Text="Claude Bridge" FontWeight="SemiBold" /> on while you work. See “How Claude works” on the Settings tab.
                 </TextBlock>
 
+                <!-- REVISION NARRATIVE -->
+                <TextBlock Style="{StaticResource H}" Text="Revision Narrative (Word)" />
+                <TextBlock Style="{StaticResource P}">
+                    The <Run Text="Revision Narrative" FontWeight="SemiBold" /> button (Revision panel) turns a revision's clouds into a firm-letterhead <Run Text=".docx" FontWeight="SemiBold" /> — reading each cloud's <Run Text="Comments" FontWeight="SemiBold" />, grouping by discipline and sheet, and numbering the items per sheet. It's stand-alone and read-only: it never changes the model and needs no Claude connection.
+                </TextBlock>
+                <TextBlock Style="{StaticResource P}">
+                    <Run Text="1." FontWeight="SemiBold" /> Put your notes in each revision cloud's <Run Text="Comments" FontWeight="SemiBold" /> field (clouds with blank Comments are listed as a warning, not dropped). Click <Run Text="Revision Narrative" FontWeight="SemiBold" />.
+                </TextBlock>
+                <TextBlock Style="{StaticResource P}">
+                    <Run Text="2." FontWeight="SemiBold" /> Pick the revision (defaults to the most recent).
+                </TextBlock>
+                <TextBlock Style="{StaticResource P}">
+                    <Run Text="3." FontWeight="SemiBold" /> <Run Text="Confirm the project information" FontWeight="SemiBold" /> — a dialog shows the project name, building, address, project number, issue date and the plan set being revised (title + date), all read from the model. Correct anything that's off; your edits flow straight into the document. Nothing is written until you continue.
+                </TextBlock>
+                <TextBlock Style="{StaticResource P}">
+                    <Run Text="4." FontWeight="SemiBold" /> Optionally pick a previous narrative to <Run Text="reuse its header/footer, page setup and fonts" FontWeight="SemiBold" /> (only the body is replaced) — or Cancel that prompt for a plain document. Then choose where to save.
+                </TextBlock>
+                <TextBlock Style="{StaticResource P}">
+                    • <Run Text="Multiple clouds on one view" FontWeight="SemiBold" /> combine into a single numbered item (e.g. “Detail 8 – note A. note B.”); one note spanning several details reads “Details 1, 3, 4 – …”. A cloud with no discernible detail number gets a click-to-fill <Run Text="[insert]" FontStyle="Italic" /> placeholder. Comment text is tidied to sentence case while sheet callouts and acronyms are preserved.
+                </TextBlock>
+
                 <!-- RIBBON REFERENCE -->
                 <TextBlock Style="{StaticResource H}" Text="Ribbon buttons" />
                 <TextBlock Style="{StaticResource P}">

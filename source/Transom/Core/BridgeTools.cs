@@ -20,7 +20,7 @@ namespace Transom.Core;
 ///     Revit group member are written DIRECTLY (they may legally vary per group instance) — this is the
 ///     "blue" cell the deterministic importer refuses.
 /// </summary>
-public static class BridgeTools
+public static partial class BridgeTools
 {
     private static readonly JsonSerializerOptions JsonOpts = new() { WriteIndented = false };
 
@@ -48,7 +48,8 @@ public static class BridgeTools
                 "set_parameters"     => SetParameters(doc, args),
                 "execute_revit_code" => ExecuteRevitCode(app, args),
                 ""                   => Err("missing 'tool'"),
-                _                    => Err($"unknown tool '{tool}'"),
+                // Everything else falls through to the extended handlers (BridgeToolsDispatch).
+                _                    => DispatchParity(app, doc, tool, args) ?? Err($"unknown tool '{tool}'"),
             };
         }
         catch (Exception ex)
@@ -172,7 +173,9 @@ public static class BridgeTools
         try
         {
             var result = ApplyEdit(doc, edit);
-            if (result.TryGetValue("ok", out var ok) && ok is true) tx.Commit();
+            bool ok = result.TryGetValue("ok", out var okv) && okv is true;
+            if (ok && Abandoned()) { tx.RollBack(); return Err("request timed out before commit — rolled back (not applied)"); }
+            if (ok) tx.Commit();
             else tx.RollBack();
             return Json(result);
         }
@@ -213,7 +216,13 @@ public static class BridgeTools
                 if (!(r.TryGetValue("ok", out var ok) && ok is true)) allOk = false;
             }
 
-            // All-or-nothing: any failed/unverified edit rolls back the whole batch.
+            // All-or-nothing: any failed/unverified edit rolls back the whole batch. A batch that outran its
+            // waiter's timeout also rolls back rather than committing behind the client's back.
+            if (allOk && Abandoned())
+            {
+                tx.RollBack();
+                return Err("request timed out before commit — rolled back (not applied)");
+            }
             if (allOk) tx.Commit();
             else tx.RollBack();
         }

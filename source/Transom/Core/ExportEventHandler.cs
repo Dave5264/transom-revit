@@ -87,6 +87,12 @@ public sealed class ExportEventHandler : IExternalEventHandler
                 ReportStatus($"Exported {okCount} schedule(s) ({elems} element rows) to {OutputPath}" + failNote);
             }
         }
+        catch (IOException)
+        {
+            // The target .xlsx is almost certainly open in Excel (write share violation). Tell the user how to fix it.
+            ReportStatus($"Export failed — “{Path.GetFileName(OutputPath)}” is open in Excel (or locked). "
+                + "Close it and export again.");
+        }
         catch (Exception ex)
         {
             ReportStatus("Export failed: " + ex.Message);

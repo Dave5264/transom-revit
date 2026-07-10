@@ -7,6 +7,8 @@ using Autodesk.Revit.UI;
 using Microsoft.Win32;
 using Nice3point.Revit.Toolkit.External;
 using Transom.Core;
+using WpfGrid = System.Windows.Controls.Grid;
+using WpfTextBox = System.Windows.Controls.TextBox;
 
 namespace Transom.Commands;
 
@@ -34,6 +36,12 @@ public class RevisionNarrativeCommand : ExternalCommand
         var chosen = revIds.Count == 1 ? revIds[0] : PickRevision(doc, revIds);
         if (chosen == null) return; // cancelled
 
+        // Build first (read-only, cheap) so the confirm step can show the computed header values.
+        var data = RevisionNarrative.Build(doc, chosen, new RevisionNarrative.Options());
+
+        // Confirm/adjust the project information before any file is written. Cancel aborts cleanly.
+        if (!ConfirmProjectInfo(data)) return;
+
         // Optional: start from a previous narrative / letterhead .docx. Its header, footer, page setup, styles
         // and fonts are reused exactly; only the body is replaced. Cancel = produce a plain document.
         string? templatePath = null;
@@ -56,8 +64,20 @@ public class RevisionNarrativeCommand : ExternalCommand
         };
         if (sdlg.ShowDialog() != true) return;
 
-        var data = RevisionNarrative.Build(doc, chosen, new RevisionNarrative.Options());
-        RevisionNarrativeDocxWriter.Write(data, sdlg.FileName, templatePath);
+        try
+        {
+            RevisionNarrativeDocxWriter.Write(data, sdlg.FileName, templatePath);
+        }
+        catch (System.IO.IOException)
+        {
+            // Almost always the output (or template) .docx is open in Word — give a clear, actionable message
+            // instead of a raw exception dialog.
+            Transom.Views.ReportDialog.Show("Transom — Revision Narrative",
+                "Couldn't write the Word file.",
+                $"“{System.IO.Path.GetFileName(sdlg.FileName)}” may be open in Word (or the template is). "
+                + "Close it and run the Revision Narrative again.", isError: true);
+            return;
+        }
 
         int sheets = data.Disciplines.Sum(d => d.Sheets.Count);
         int notes = data.Disciplines.Sum(d => d.Sheets.Sum(s => s.Notes.Count));
@@ -101,4 +121,77 @@ public class RevisionNarrativeCommand : ExternalCommand
     }
 
     private static string Trim(string? s) => string.IsNullOrWhiteSpace(s) ? "" : s.Trim();
+
+    /// <summary>
+    ///     Confirm step before any file is written: shows the header values the narrative computed from the
+    ///     model (project name, building, addendum label, dates, the referenced plan set) and lets the user
+    ///     correct them. Edits go back into <paramref name="data"/>; the intro sentence is recomposed when the
+    ///     referenced title/date changed. Returns false on Cancel. Code-only WPF, same style as PickRevision.
+    /// </summary>
+    private static bool ConfirmProjectInfo(RevisionNarrative.Data data)
+    {
+        var grid = new WpfGrid { Margin = new Thickness(12, 8, 12, 4) };
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+
+        WpfTextBox AddRow(string label, string value)
+        {
+            int r = grid.RowDefinitions.Count;
+            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            var lbl = new TextBlock { Text = label, Margin = new Thickness(0, 6, 10, 0), VerticalAlignment = VerticalAlignment.Center };
+            WpfGrid.SetRow(lbl, r); WpfGrid.SetColumn(lbl, 0);
+            var box = new WpfTextBox { Text = value, MinWidth = 380, Margin = new Thickness(0, 4, 0, 0), VerticalAlignment = VerticalAlignment.Center };
+            WpfGrid.SetRow(box, r); WpfGrid.SetColumn(box, 1);
+            grid.Children.Add(lbl); grid.Children.Add(box);
+            return box;
+        }
+
+        var addendum = AddRow("Narrative title:", data.AddendumLabel);
+        var issueDate = AddRow("Issue date:", data.IssueDate);
+        var building = AddRow("Building name:", data.BuildingName);
+        var project = AddRow("Project name:", data.ProjectName);
+        var address = AddRow("Address:", string.Join(", ", data.AddressLines));
+        var projNo = AddRow("Project number line:", data.ProjectNumberLine);
+        var refTitle = AddRow("Revising the set titled:", data.RefTitle);
+        var refDate = AddRow("That set's date:", data.RefDate);
+
+        var ok = new Button { Content = "Looks right — continue", IsDefault = true, MinWidth = 150, Margin = new Thickness(0, 12, 8, 12) };
+        var cancel = new Button { Content = "Cancel", IsCancel = true, MinWidth = 90, Margin = new Thickness(0, 12, 12, 12) };
+        var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
+        buttons.Children.Add(ok); buttons.Children.Add(cancel);
+
+        var panel = new StackPanel();
+        panel.Children.Add(new TextBlock
+        {
+            Text = "Confirm the project information for this narrative (read from the model — edit anything that's off):",
+            Margin = new Thickness(12, 12, 12, 0), TextWrapping = TextWrapping.Wrap, MaxWidth = 520,
+        });
+        panel.Children.Add(grid);
+        panel.Children.Add(buttons);
+
+        var win = new Window
+        {
+            Title = "Transom — Revision Narrative",
+            Content = panel,
+            SizeToContent = SizeToContent.WidthAndHeight,
+            WindowStartupLocation = WindowStartupLocation.CenterScreen,
+            ResizeMode = ResizeMode.NoResize,
+        };
+        ok.Click += (_, _) => { win.DialogResult = true; };
+        if (win.ShowDialog() != true) return false;
+
+        data.AddendumLabel = addendum.Text.Trim();
+        data.IssueDate = issueDate.Text.Trim();
+        data.BuildingName = building.Text.Trim();
+        data.ProjectName = project.Text.Trim();
+        data.ProjectNumberLine = projNo.Text.Trim();
+        data.AddressLines = address.Text.Split(',').Select(a => a.Trim()).Where(a => a.Length > 0).ToList();
+        if (refTitle.Text.Trim() != data.RefTitle || refDate.Text.Trim() != data.RefDate)
+        {
+            data.RefTitle = refTitle.Text.Trim();
+            data.RefDate = refDate.Text.Trim();
+            data.IntroSentence = RevisionNarrative.ComposeIntro(data.RefTitle, data.RefDate);
+        }
+        return true;
+    }
 }

@@ -155,6 +155,15 @@ public sealed class BridgeServer
             int contentLength = 0;
             if (headers.TryGetValue("content-length", out var clRaw)) int.TryParse(clRaw, out contentLength);
             bool hasContentLength = headers.ContainsKey("content-length");
+            // Cap the declared body size BEFORE allocating (the read below runs before the token check, so an
+            // unauthenticated local caller could otherwise force a multi-GB allocation → OOM crash of Revit).
+            // Real tool calls are tiny; 8 MB is comfortably above any legitimate set_parameters batch or snippet.
+            const int maxBody = 8 * 1024 * 1024;
+            if (contentLength > maxBody)
+            {
+                WriteResponse(stream, 413, "Payload Too Large", "{\"ok\":false,\"error\":\"request body too large\"}");
+                return;
+            }
             string body = contentLength > 0 ? ReadBody(stream, contentLength) : "";
             var dispatch = _dispatch;
 

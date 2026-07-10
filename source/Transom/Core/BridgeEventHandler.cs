@@ -68,6 +68,9 @@ public sealed class BridgeEventHandler : IExternalEventHandler
         if (my < 0) return; // no active waiter — ignore a leftover Raise
 
         string result;
+        // Let long write tools detect that this request's waiter has already timed out, so they roll back
+        // instead of committing behind the client's back (a commit after "not applied" → double-apply on retry).
+        BridgeTools.RequestAbandoned = () => _inFlight != my;
         try
         {
             result = BridgeTools.Handle(app, _pendingRequest);
@@ -75,6 +78,10 @@ public sealed class BridgeEventHandler : IExternalEventHandler
         catch (Exception ex)
         {
             result = "{\"ok\":false,\"error\":" + JsonString(ex.Message) + "}";
+        }
+        finally
+        {
+            BridgeTools.RequestAbandoned = null;
         }
 
         // Publish only if this is still the in-flight ticket; clearing it collapses a duplicate Raise.

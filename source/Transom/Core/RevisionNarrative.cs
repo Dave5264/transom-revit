@@ -60,6 +60,8 @@ public static class RevisionNarrative
         public List<string> AddressLines = new();
         public string ProjectNumberLine = "";
         public string IntroSentence = "";
+        public string RefTitle = "";       // the issue being revised (exposed so a confirm UI can edit it...)
+        public string RefDate = "";        // ...then recompose IntroSentence via ComposeIntro.
         public int SourceCloudCount;        // #104: distinct revision clouds that produced ≥1 note (for the count display)
         public readonly List<Discipline> Disciplines = new();
         public readonly List<string> Warnings = new();
@@ -106,11 +108,9 @@ public static class RevisionNarrative
         // The boilerplate references the ISSUE BEING REVISED — the previous (non-blank) revision in the
         // sequence, or, for the first revision, the original submission (Project Status + Project Issue Date).
         var (refTitleRaw, refDateRaw) = ReferencedIssue(doc, revisionId);
-        var refTitle = TitleCaseSmart(string.IsNullOrWhiteSpace(opts.PlanSetTitle) ? refTitleRaw : opts.PlanSetTitle);
-        var refDate = string.IsNullOrWhiteSpace(opts.PlanSetDate) ? refDateRaw : opts.PlanSetDate;
-        data.IntroSentence =
-            $"The drawings for the above-referenced project titled {refTitle}, dated {refDate} " +
-            "are revised by, but not limited to, the following items:";
+        data.RefTitle = TitleCaseSmart(string.IsNullOrWhiteSpace(opts.PlanSetTitle) ? refTitleRaw : opts.PlanSetTitle);
+        data.RefDate = string.IsNullOrWhiteSpace(opts.PlanSetDate) ? refDateRaw : opts.PlanSetDate;
+        data.IntroSentence = ComposeIntro(data.RefTitle, data.RefDate);
 
         // ---- collect clouds for this revision ----
         var clouds = new FilteredElementCollector(doc)
@@ -179,6 +179,12 @@ public static class RevisionNarrative
         }
         return data;
     }
+
+    /// <summary>The boilerplate intro sentence, composed from the referenced issue — public so the confirm
+    /// dialog can recompose it after the user edits <see cref="Data.RefTitle"/> / <see cref="Data.RefDate"/>.</summary>
+    public static string ComposeIntro(string refTitle, string refDate) =>
+        $"The drawings for the above-referenced project titled {refTitle}, dated {refDate} " +
+        "are revised by, but not limited to, the following items:";
 
     private static string DisciplineFor(string sheetNumber)
     {
