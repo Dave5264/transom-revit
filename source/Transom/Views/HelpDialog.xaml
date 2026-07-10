@@ -179,6 +179,9 @@
                 <TextBlock Style="{StaticResource P}">
                     The bridge is <Run Text="admin-free" FontWeight="SemiBold" />: it listens only on 127.0.0.1 (loopback) on a high port and requires a per-session token, so other apps and web pages can’t drive it. Use <Run Text="Register with Claude" FontWeight="SemiBold" /> on the ribbon once (registers the bundled connector — no admin), then toggle <Run Text="Claude Bridge" FontWeight="SemiBold" /> on while you work. See “How Claude works” on the Settings tab.
                 </TextBlock>
+                <TextBlock Style="{StaticResource P}">
+                    • <Run Text="Beyond schedules" FontWeight="SemiBold" /> — with the bridge on, Claude can also read and drive the model directly: render a view to an image, read the current selection, query and filter elements, read/set parameters, run clash checks, tag, create views/sheets/levels, export PDF/DWG/IFC, and more (ask Claude what it can do in Revit). These run through the same loopback bridge and token, so the same on/off toggle governs them.
+                </TextBlock>
 
                 <!-- REVISION NARRATIVE -->
                 <TextBlock Style="{StaticResource H}" Text="Revision Narrative (Word)" />
