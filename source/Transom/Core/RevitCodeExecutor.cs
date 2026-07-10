@@ -1,16 +1,11 @@
 using System;
 using System.Collections.Generic;
-using System.IO;
 using System.Linq;
 using System.Reflection;
-using System.Runtime.Loader;
 using System.Text;
 using System.Threading;
-using System.Threading.Tasks;
 using Autodesk.Revit.DB;
 using Autodesk.Revit.UI;
-using Microsoft.CodeAnalysis.CSharp.Scripting;
-using Microsoft.CodeAnalysis.Scripting;
 
 namespace Transom.Core;
 
@@ -18,6 +13,11 @@ namespace Transom.Core;
 ///     G2/G3 — the bridge's <c>execute_revit_code</c> tool: compile + run an arbitrary Revit API C# snippet
 ///     IN-PROCESS on the Revit API thread (so transactions and API calls are valid in context), giving Claude
 ///     full API reach (print sets, multi-doc via <c>app.Documents</c>, improvise) beyond the fixed tool set.
+///
+///     ISOLATION — load-bearing: this class must stay free of ANY Microsoft.CodeAnalysis using/typeref. All
+///     Roslyn work happens in Transom.Scripting.dll inside a dedicated AssemblyLoadContext (see
+///     <see cref="ScriptIsolation"/>), reached via reflection only. A single Roslyn typeref here would resolve
+///     in Revit's shared default context and re-open the pyRevit version clash (FileLoadException 0x80131621).
 ///
 ///     SECURITY — load-bearing: arbitrary code execution removes the per-tool verify/rollback guarantees, so the
 ///     ONLY boundary is the bridge's transport gate — the loopback bind (127.0.0.1, never 0.0.0.0), the
@@ -36,44 +36,6 @@ namespace Transom.Core;
 public static class RevitCodeExecutor
 {
     private static readonly TimeSpan MaxRun = TimeSpan.FromSeconds(8);
-
-    // The load context that loaded Transom.dll. With EnableDynamicLoading this is Transom's OWN isolated
-    // AssemblyLoadContext, which resolves our pinned Microsoft.CodeAnalysis 4.12 from the add-in folder (via
-    // Transom.deps.json). Roslyn's CSharpScript does reflection-based assembly loading at compile/run time that
-    // is NOT pinned to this context; left alone it can fall through to the default context, where another add-in
-    // (e.g. pyRevit) may already have an OLDER Microsoft.CodeAnalysis loaded. A request for 4.12 then can't be
-    // satisfied by the loaded 4.10 -> FileLoadException (0x80131621) — which is why only execute_revit_code
-    // breaks while every other bridge tool works. Run() pins resolution back to this context.
-    private static readonly AssemblyLoadContext? OwnContext =
-        AssemblyLoadContext.GetLoadContext(typeof(RevitCodeExecutor).Assembly);
-
-    private static readonly string OwnDir =
-        Path.GetDirectoryName(typeof(RevitCodeExecutor).Assembly.Location) ?? AppContext.BaseDirectory;
-
-    private static int _resolverHooked;
-
-    /// <summary>
-    ///     Belt-and-suspenders for the load-context pinning in <see cref="Run"/>: attaches (once) a resolver to
-    ///     Transom's own load context that satisfies ANY <c>Microsoft.CodeAnalysis*</c> request from Transom's OWN
-    ///     folder — so even a transitive Roslyn dependency not listed in deps.json loads our copy instead of
-    ///     falling through to another add-in's. Scoped to our context only; never touches the default context or
-    ///     other add-ins, and returns null for non-Roslyn names so normal resolution is unaffected.
-    /// </summary>
-    private static void EnsureRoslynResolver()
-    {
-        if (OwnContext == null) return;
-        if (Interlocked.Exchange(ref _resolverHooked, 1) == 1) return; // hook exactly once
-
-        OwnContext.Resolving += (ctx, name) =>
-        {
-            if (name.Name is null ||
-                !name.Name.StartsWith("Microsoft.CodeAnalysis", StringComparison.OrdinalIgnoreCase))
-                return null; // not Roslyn — let the runtime resolve it normally
-
-            var path = Path.Combine(OwnDir, name.Name + ".dll");
-            return File.Exists(path) ? ctx.LoadFromAssemblyPath(path) : null;
-        };
-    }
 
     /// <summary>Globals exposed to the snippet: the active doc, the UIApplication, the Application (for
     /// multi-doc via <c>app.Documents</c>), and a <c>Print(...)</c> sink whose output is returned to Claude.</summary>
@@ -104,27 +66,18 @@ public static class RevitCodeExecutor
         try { logSnippet($"execute_revit_code (readOnly={readOnly}): {Truncate(code, 4000)}"); } catch { /* never fail on logging */ }
 
         var globals = new Globals { doc = doc, uiapp = uiapp, app = uiapp.Application };
-        var options = ScriptOptions.Default
-            .WithReferences(
-                typeof(Document).Assembly,        // RevitAPI
-                typeof(UIApplication).Assembly,   // RevitAPIUI
-                typeof(Enumerable).Assembly,      // System.Linq
-                typeof(object).Assembly)          // System.Private.CoreLib
-            .WithImports(
-                "System", "System.Linq", "System.Collections.Generic",
-                "Autodesk.Revit.DB", "Autodesk.Revit.UI", "Autodesk.Revit.ApplicationServices");
 
         using var cts = new CancellationTokenSource(MaxRun);
 
         if (readOnly)
-            return Run(code, globals, options, cts.Token, readOnly: true);
+            return Run(code, globals, cts.Token, readOnly: true);
 
         // WRITE path: wrap in a transaction; commit on success, roll back on any failure/exception.
         using var tx = new Transaction(doc, "Transom: execute_revit_code");
         try
         {
             tx.Start();
-            var result = Run(code, globals, options, cts.Token, readOnly: false);
+            var result = Run(code, globals, cts.Token, readOnly: false);
             bool ok = result.TryGetValue("ok", out var okv) && okv is true;
             if (ok && tx.GetStatus() == TransactionStatus.Started) tx.Commit();
             else if (tx.GetStatus() == TransactionStatus.Started) tx.RollBack();
@@ -137,54 +90,71 @@ public static class RevitCodeExecutor
         }
     }
 
-    private static Dictionary<string, object?> Run(string code, Globals globals, ScriptOptions options,
-        CancellationToken token, bool readOnly)
+    private static Dictionary<string, object?> Run(string code, Globals globals, CancellationToken token, bool readOnly)
     {
         try
         {
-            // Make sure Transom's own load context resolves the whole Microsoft.CodeAnalysis* family from our
-            // own folder before we touch Roslyn (see EnsureRoslynResolver / OwnContext).
-            EnsureRoslynResolver();
+            // Reflection-only call into the isolated script host (see class doc — no Roslyn typerefs here).
+            var host = ScriptIsolation.ScriptHostAssembly.GetType("Transom.Scripting.ScriptHost")
+                       ?? throw new InvalidOperationException("Transom.Scripting.ScriptHost type not found");
+            var run = host.GetMethod("Run", BindingFlags.Public | BindingFlags.Static)
+                      ?? throw new InvalidOperationException("ScriptHost.Run method not found");
 
-            // Roslyn scripting is async; we're on the Revit API thread and MUST stay on it (transactions are
-            // thread-affine), so block here. The CancellationToken enforces the time cap cooperatively.
-            //
-            // EnterContextualReflection pins Roslyn's context-free reflection loads (Assembly.Load by name, etc.)
-            // to Transom's OWN load context for the duration of the run, so they bind our local
-            // Microsoft.CodeAnalysis 4.12 instead of falling back to the default context — where another add-in's
-            // older copy would yield a FileLoadException (0x80131621). No-op if we're not in an isolated context.
-            ScriptState<object> state;
-            using (OwnContext?.EnterContextualReflection())
+            var references = new[]
             {
-                state = CSharpScript.RunAsync(code, options, globals, typeof(Globals), token)
-                    .GetAwaiter().GetResult();
+                typeof(Document).Assembly,      // RevitAPI
+                typeof(UIApplication).Assembly, // RevitAPIUI
+                typeof(Enumerable).Assembly,    // System.Linq
+                typeof(object).Assembly,        // System.Private.CoreLib
+                typeof(Globals).Assembly,       // Transom (the snippet's globals type)
+            };
+            var imports = new[]
+            {
+                "System", "System.Linq", "System.Collections.Generic",
+                "Autodesk.Revit.DB", "Autodesk.Revit.UI", "Autodesk.Revit.ApplicationServices",
+            };
+
+            // ScriptHost never throws across the boundary; it reports through this status envelope.
+            var outcome = (Dictionary<string, object?>)run.Invoke(
+                null, new object?[] { code, globals, references, imports, token })!;
+
+            switch (outcome["status"] as string)
+            {
+                case "ok":
+                    return new Dictionary<string, object?>
+                    {
+                        ["ok"] = true,
+                        ["readOnly"] = readOnly,
+                        ["result"] = Describe(outcome.GetValueOrDefault("value")),
+                        ["log"] = globals.LogText,
+                    };
+                case "compile":
+                    return new Dictionary<string, object?>
+                    {
+                        ["ok"] = false,
+                        ["error"] = "compile error: " + outcome.GetValueOrDefault("error"),
+                        ["log"] = globals.LogText,
+                    };
+                case "cancelled":
+                    return new Dictionary<string, object?>
+                    {
+                        ["ok"] = false,
+                        ["error"] = $"execution timed out (> {MaxRun.TotalSeconds:0}s) and was cancelled" + (readOnly ? "" : " (transaction rolled back)"),
+                        ["log"] = globals.LogText,
+                    };
+                default:
+                    return new Dictionary<string, object?>
+                    {
+                        ["ok"] = false,
+                        ["error"] = (outcome.GetValueOrDefault("error") as string ?? "unknown script error") + (readOnly ? "" : " (transaction rolled back)"),
+                        ["stack"] = outcome.GetValueOrDefault("stack") as string ?? "",
+                        ["log"] = globals.LogText,
+                    };
             }
-
-            return new Dictionary<string, object?>
-            {
-                ["ok"] = true,
-                ["readOnly"] = readOnly,
-                ["result"] = Describe(state.ReturnValue),
-                ["log"] = globals.LogText,
-            };
         }
-        catch (CompilationErrorException ce)
+        catch (TargetInvocationException tie) when (tie.InnerException != null)
         {
-            return new Dictionary<string, object?>
-            {
-                ["ok"] = false,
-                ["error"] = "compile error: " + string.Join("; ", ce.Diagnostics.Select(d => d.ToString())),
-                ["log"] = globals.LogText,
-            };
-        }
-        catch (OperationCanceledException)
-        {
-            return new Dictionary<string, object?>
-            {
-                ["ok"] = false,
-                ["error"] = $"execution timed out (> {MaxRun.TotalSeconds:0}s) and was cancelled" + (readOnly ? "" : " (transaction rolled back)"),
-                ["log"] = globals.LogText,
-            };
+            return Failure(tie.InnerException, globals.LogText, readOnly ? "" : " (transaction rolled back)");
         }
         catch (Exception ex)
         {

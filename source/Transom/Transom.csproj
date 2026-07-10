@@ -30,10 +30,13 @@
         <!-- MVVM -->
         <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2"/>
 
-        <!-- Roslyn C# scripting — powers the bridge's execute_revit_code tool (G2/G3): runs an arbitrary Revit
-             API snippet in-process on the API thread for full API reach. netstandard2.0, so it works across
-             net8.0 (R25/R26) and net10.0 (R27). -->
-        <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Scripting" Version="4.12.0"/>
+        <!-- Roslyn C# scripting (execute_revit_code) lives in Transom.Scripting.dll, loaded into a DEDICATED
+             AssemblyLoadContext at run time (Core/ScriptIsolation.cs) so Microsoft.CodeAnalysis* never binds in
+             Revit's shared default context — where another add-in (pyRevit ships Roslyn 4.10) can already hold
+             an older copy and win the bind (FileLoadException 0x80131621). This ProjectReference gives build
+             ordering and flows the Roslyn DLL closure into the output folder; Transom source must never use a
+             Microsoft.CodeAnalysis OR Transom.Scripting type directly — reflection into ScriptHost only. -->
+        <ProjectReference Include="..\Transom.Scripting\Transom.Scripting.csproj"/>
 
         <!-- Development Dependencies -->
         <PackageReference Include="JetBrains.Annotations" Version="2025.2.4" PrivateAssets="all"/>
