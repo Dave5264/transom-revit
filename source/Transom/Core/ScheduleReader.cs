@@ -917,11 +917,15 @@ public sealed class ScheduleReader
 
     /// <summary>
     ///     No-stamp anchor path: a visible string column whose value is non-empty and DISTINCT across every
-    ///     element in the schedule (Sheet Number on a sheet index — uniqueness Revit enforces — or a unique
-    ///     Mark) identifies each rendered row by value match alone: pure reads, no transaction, no rollback to
-    ///     trust. Both sides must form a perfect 1:1 — every element's value found on exactly one row — or the
-    ///     column is rejected and the caller falls back to the stamp; a header/summary row that coincidentally
-    ///     repeats a value breaks the 1:1 and rejects the column, so a false anchor can't slip through.
+    ///     element in the schedule (typically Sheet Number on a sheet index, or a unique Mark) identifies each
+    ///     rendered row by value match alone: pure reads, no transaction, no rollback to trust. Distinctness is
+    ///     VERIFIED against the schedule's elements, never assumed — since Revit 2024, sheet numbers are only
+    ///     unique per SHEET COLLECTION, so a multi-collection sheet list can legitimately repeat a number; that
+    ///     rejects the column here and falls back to the stamp. (Duplicates outside the schedule are irrelevant:
+    ///     matching is between this schedule's elements and its own rendered rows.) Both sides must form a
+    ///     perfect 1:1 — every element's value found on exactly one row — or the column is rejected; a header/
+    ///     summary row that coincidentally repeats a value breaks the 1:1 too, so a false anchor can't slip
+    ///     through.
     /// </summary>
     private bool TryAnchorByUniqueKeyColumn(ScheduleTable table, System.Collections.Generic.IList<Element> els, string?[] anchors)
     {
