@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <!-- The ONLY project allowed to reference Roslyn. Transom.dll loads this assembly into a dedicated
+             AssemblyLoadContext (Core/ScriptIsolation.cs) and calls ScriptHost.Run via reflection, so no
+             Microsoft.CodeAnalysis* bind ever happens in Revit's shared default load context — where another
+             add-in (e.g. pyRevit, which ships Microsoft.CodeAnalysis 4.10) may already hold an older version
+             and win the bind (FileLoadException 0x80131621, load-order dependent). Keep this project free of
+             RevitAPI / Transom references: anything referenced here would be re-loaded into the isolated
+             context and break type identity across the boundary. -->
+        <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
+        <!-- Mirror Transom's Revit-per-config names so csproj-direct builds of Transom resolve this
+             ProjectReference under the same configuration. -->
+        <Configurations>Debug;Release;Debug.R25;Debug.R26;Debug.R27;Release.R25;Release.R26;Release.R27</Configurations>
+        <Optimize Condition="$(Configuration.StartsWith('Release'))">true</Optimize>
+        <Nullable>enable</Nullable>
+        <LangVersion>latest</LangVersion>
+        <!-- Emits Transom.Scripting.deps.json describing the Roslyn dependency closure, which
+             ScriptIsolation's AssemblyDependencyResolver uses when present (prefix matching is the fallback). -->
+        <EnableDynamicLoading>true</EnableDynamicLoading>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <!-- netstandard2.0 assets work across net8.0 (R25/R26) and net10.0 (R27). -->
+        <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Scripting" Version="4.12.0"/>
+    </ItemGroup>
+
+</Project>
