@@ -1,3 +1,5 @@
+using System;
+using System.Collections.Generic;
 using System.Text.Json;
 using Autodesk.Revit.DB;
 using Autodesk.Revit.UI;
@@ -13,7 +15,28 @@ namespace Transom.Core;
 /// </summary>
 public static partial class BridgeTools
 {
-    internal static string? DispatchParity(UIApplication app, Document doc, string tool, JsonElement args) => tool switch
+    /// <summary>
+    ///     Parity tools gated off until they pass a live review (see docs/parity-tool-status.md for the
+    ///     failure each one showed in the 2026-07-10 test pass). The shim also stops advertising these
+    ///     (ParityTools.Disabled — keep the two lists in sync); this bridge-side check is defense in depth
+    ///     for stale shims and direct HTTP callers.
+    /// </summary>
+    private static readonly HashSet<string> DisabledParityTools = new(StringComparer.Ordinal)
+    {
+        "check_clashes", "load_family", "place_family", "list_families",
+        "export_document", "export_ifc", "save_document",
+    };
+
+    internal static string? DispatchParity(UIApplication app, Document doc, string tool, JsonElement args)
+    {
+        if (DisabledParityTools.Contains(tool))
+            return Err($"The '{tool}' tool is temporarily disabled pending review "
+                       + "(see docs/parity-tool-status.md in the Transom repo). "
+                       + "For custom needs, execute_revit_code can usually do the same job.");
+        return DispatchParityCore(app, doc, tool, args);
+    }
+
+    private static string? DispatchParityCore(UIApplication app, Document doc, string tool, JsonElement args) => tool switch
     {
         // --- views / sheets / annotation (BridgeToolsViews) ---
         "get_revit_view"            => GetRevitView(app, doc, args),

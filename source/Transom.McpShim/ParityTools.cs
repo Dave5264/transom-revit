@@ -15,7 +15,18 @@ namespace Transom.McpShim;
 /// </summary>
 internal static class ParityTools
 {
-    /// <summary>Append every parity tool definition to the tools/list array.</summary>
+    /// <summary>
+    ///     Parity tools NOT advertised until they pass a live review (see docs/parity-tool-status.md).
+    ///     Keep in sync with BridgeTools.DisabledParityTools — the bridge refuses these too, so a stale
+    ///     shim that still advertises one gets a polite error instead of a broken run.
+    /// </summary>
+    private static readonly HashSet<string> Disabled = new(StringComparer.Ordinal)
+    {
+        "check_clashes", "load_family", "place_family", "list_families",
+        "export_document", "export_ifc", "save_document",
+    };
+
+    /// <summary>Append every enabled parity tool definition to the tools/list array.</summary>
     public static void AddTo(JsonArray tools)
     {
         // ------------------------------------------------------ status / model info
@@ -704,17 +715,25 @@ internal static class ParityTools
                     ["set_b_categories"] = StringArray("Second element set to check set_a against, e.g. [\"ducts\", \"pipes\"] (optional)."),
                     ["max_clashes"] = Prop("integer", "Maximum clashes to return (defaults to 200)."),
                 })));
+
+        // Tool() returns null for names on the Disabled list; JsonArray stores those as JSON
+        // nulls, so strip them before the array goes out in tools/list.
+        for (int i = tools.Count - 1; i >= 0; i--)
+            if (tools[i] is null) tools.RemoveAt(i);
     }
 
     // -------------------------------------------------------- schema helpers
     // Private copies of Program.cs's helper shapes (Program's are private to it).
 
-    private static JsonObject Tool(string name, string description, JsonObject inputSchema) => new()
-    {
-        ["name"] = name,
-        ["description"] = description,
-        ["inputSchema"] = inputSchema,
-    };
+    private static JsonObject? Tool(string name, string description, JsonObject inputSchema) =>
+        Disabled.Contains(name)
+            ? null // gated pending review; JsonArray.Add(null) stores a JSON null we strip below
+            : new JsonObject
+            {
+                ["name"] = name,
+                ["description"] = description,
+                ["inputSchema"] = inputSchema,
+            };
 
     private static JsonObject NoArgsSchema() => new()
     {
