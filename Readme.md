@@ -14,7 +14,7 @@
 
 [![Latest release](https://img.shields.io/github/v/release/Dave5264/transom-revit?label=latest%20release&color=2ea44f&logo=github)](https://github.com/Dave5264/transom-revit/releases/latest)
 
-### ⬇ [Download the installer](https://github.com/Dave5264/transom-revit/releases/download/v1.4.9/Transom-1.4.9-SingleUser.msi)
+### ⬇ [Download the installer](https://github.com/Dave5264/transom-revit/releases/download/v1.6.1/Transom-1.6.1-SingleUser.msi)
 
 **One click, no admin rights** — installs into your per-user Revit add-ins folder.
 Double-click the `.msi`, then start Revit. Supports **Revit 2025, 2026 & 2027**.
@@ -41,7 +41,15 @@ Then drop the guidance file from [`claude/`](claude/) (`CLAUDE.md`) into your pr
 so Claude Code already knows the tools and the safe-write workflow. See [`claude/README.md`](claude/README.md) for
 exactly where it goes.
 
-> **Status:** v1.4.9 released (Revit 2025/2026/2027) — **`execute_revit_code` now works alongside other add-ins that
+> **Status:** v1.6.1 released (Revit 2025/2026/2027) — **live-reviewed bridge toolset + Bridge Status.** The
+> extended bridge tools that passed a live review are advertised to Claude clients; seven not-yet-reviewed
+> parity tools are gated off until they pass (see `docs/parity-tool-status.md`), and a new **Bridge Status** ribbon
+> button shows the bridge's port, shim registration, and connection state at a glance (the How-Claude-works help text
+> was also corrected). Built on v1.6.0, which added the **extended bridge tools** (element/selection/view
+> workflows a Claude client can drive directly), a **revision confirm step** before revision-modifying operations
+> (with combined per-detail comments in the revision narrative), anchor-pass hardening (identity params are never
+> stamped; no-stamp key-column path with verified rollback), and reliability fixes. Built on v1.5.0, where
+> **`execute_revit_code` works alongside other add-ins that
 > load Roslyn.** When another add-in (e.g. pyRevit) had a different `Microsoft.CodeAnalysis` loaded in the Revit
 > process, the in-process script tool could fail with a `FileLoadException`; Transom now pins Roslyn's assembly
 > resolution to its own load context so it always binds its bundled 4.12. Built on v1.4.8, which **gave Claude-Assist
