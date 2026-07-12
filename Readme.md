@@ -14,7 +14,7 @@
 
 [![Latest release](https://img.shields.io/github/v/release/Dave5264/transom-revit?label=latest%20release&color=2ea44f&logo=github)](https://github.com/Dave5264/transom-revit/releases/latest)
 
-### ⬇ [Download the installer](https://github.com/Dave5264/transom-revit/releases/download/v1.6.1/Transom-1.6.1-SingleUser.msi)
+### ⬇ [Download the installer](https://github.com/Dave5264/transom-revit/releases/download/v1.7.0/Transom-1.7.0-SingleUser.msi)
 
 **One click, no admin rights** — installs into your per-user Revit add-ins folder.
 Double-click the `.msi`, then start Revit. Supports **Revit 2025, 2026 & 2027**.
@@ -34,18 +34,23 @@ The add-in bundles a local loopback-only MCP bridge (`127.0.0.1`) plus a self-co
 rights, no separate install, nothing leaves your machine. To let a Claude client (Claude Code)
 read and write the live model:
 
-1. Click **"Set up Claude"** in the Transom ribbon (one-time — it registers Transom's MCP servers).
+1. Turn **Claude Assist** on in Transom Settings (Schedule Hub → Settings tab) — the first time, it
+   registers Transom's MCP servers and starts the bridge; a status panel shows every layer at a glance.
 2. Restart Claude Code so it launches the shim and picks up the new server.
 
 Then drop the guidance file from [`claude/`](claude/) (`CLAUDE.md`) into your project root (or `~/.claude/CLAUDE.md`)
 so Claude Code already knows the tools and the safe-write workflow. See [`claude/README.md`](claude/README.md) for
 exactly where it goes.
 
-> **Status:** v1.6.1 released (Revit 2025/2026/2027) — **live-reviewed bridge toolset + Bridge Status.** The
-> extended bridge tools that passed a live review are advertised to Claude clients; seven not-yet-reviewed
-> parity tools are gated off until they pass (see `docs/parity-tool-status.md`), and a new **Bridge Status** ribbon
-> button shows the bridge's port, shim registration, and connection state at a glance (the How-Claude-works help text
-> was also corrected). Built on v1.6.0, which added the **extended bridge tools** (element/selection/view
+> **Status:** v1.7.0 released (Revit 2025/2026/2027) — **Claude in one switch.** The three Claude ribbon buttons
+> ("Set up Claude", "Claude Bridge", "Bridge Status") and the Off/Verify/Assist mode dropdown are consolidated into a
+> single persisted **Claude Assist** toggle on the Settings tab: the first ON runs the one-time setup (shim + both
+> MCP registrations) and starts the bridge, the bridge **auto-starts with Revit** while the toggle is on, changing
+> the bridge port re-registers and restarts it automatically, and an always-visible **status checklist** in Settings
+> (bridge + port, session token, shim, both registrations, Claude app detected) replaces the old Bridge Status
+> dialog. Built on v1.6.1, which advertised the **live-reviewed bridge toolset** — the extended tools that
+> passed a live review, with seven not-yet-reviewed parity tools gated off until they pass (see
+> `docs/parity-tool-status.md`). Built on v1.6.0, which added the **extended bridge tools** (element/selection/view
 > workflows a Claude client can drive directly), a **revision confirm step** before revision-modifying operations
 > (with combined per-detail comments in the revision narrative), anchor-pass hardening (identity params are never
 > stamped; no-stamp key-column path with verified rollback), and reliability fixes. Built on v1.5.0, where

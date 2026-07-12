@@ -55,6 +55,16 @@ public sealed partial class TransomView
 
     private void Close_Click(object sender, System.Windows.RoutedEventArgs e) => Close();
 
+    /// <summary>The Settings status panel re-checks its layers whenever the tab is brought up, so it's
+    /// current without the user clicking Refresh (checks are cheap file/process reads).</summary>
+    private void Tabs_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
+    {
+        if (!ReferenceEquals(e.OriginalSource, Tabs)) return; // ignore bubbled child selections (DataGrid, ComboBox)
+        if (Tabs.SelectedItem is System.Windows.Controls.TabItem ti && ti.Header as string == "Settings"
+            && DataContext is TransomViewModel vm)
+            vm.RefreshClaudeStatusCommand.Execute(null);
+    }
+
     // ----- Inline confirm-strip value box (DataGrid RowDetails) -----
     // The DataGrid swallows the FIRST left-click for row selection, so a text box inside RowDetails only took focus on
     // a second click / drag. Force it to focus (and select its contents) on the first click, so a single click puts

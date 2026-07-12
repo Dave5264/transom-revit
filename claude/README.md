@@ -13,5 +13,6 @@ Code connect cleanly on the first turn.
   `status`, confirm which model you're attached to, and list the schedules (or get
   the specific fix if the bridge isn't reachable).
 
-To use the bridge, click **"Set up Claude"** in the Transom ribbon, then restart
-Claude Code so it picks up the new MCP server.
+To use the bridge, turn **Claude Assist on** in Transom Settings (Schedule Hub →
+Settings tab — the first ON registers everything), then restart Claude Code so it
+picks up the new MCP server.

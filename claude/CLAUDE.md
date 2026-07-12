@@ -20,16 +20,17 @@ When a Revit task starts (or the user asks "are you connected?"), **call
   to that open document. Proceed. Mention the document name so the user knows which
   model you're acting on.
 - ❌ The `transom` tools aren't available at all → the MCP server isn't loaded in
-  this session. Tell the user to **(1)** click **"Set up Claude"** in the
-  Transom ribbon (one-time, registers the servers), then **(2)** restart Claude
-  Code so it launches the shim. New MCP servers are only picked up at
-  startup.
+  this session. Tell the user to **(1)** turn **Claude Assist on** in Transom
+  Settings (Schedule Hub → Settings tab; the first ON registers the servers),
+  then **(2)** restart Claude Code so it launches the shim. New MCP servers are
+  only picked up at startup.
 - ❌ `status` errors or times out → the bridge isn't reachable. Most likely one of:
-  - the **bridge is toggled off** → in Revit, click the Transom **bridge toggle**
-    so it reads "on / listening on 127.0.0.1:48810";
+  - **Claude Assist is off** → in Revit, open Transom Settings and turn the
+    **Claude Assist** toggle on (its status panel should show "Bridge listening
+    127.0.0.1:48810");
   - **no document is open** → open the model you want to work on;
-  - the **port was changed** → it must match the `--port` the server was registered
-    with (re-run Register after changing `TransomSettings.BridgeSelfHostPort`).
+  - the **port was changed** → changing it in Settings re-registers and restarts
+    the bridge, but Claude Code must be restarted to pick up the new `--port`.
 
 Don't guess your way past a failed `status` — surface the specific remediation above.
 

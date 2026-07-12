@@ -27,7 +27,7 @@ Repo: `Dave5264/transom-revit`. Default branch: `main`. Primary dev path on the 
 1. A Claude client (**Claude Code** is the supported target; Cowork is out of scope — its VM can't reach a host stdio shim) launches the registered **stdio MCP servers** from `~/.claude.json`.
 2. `Transom.McpShim.exe` (server name `transom`) speaks **MCP stdio** to the client and makes a loopback **HTTP** call to the in-Revit bridge for each tool call.
 3. `Transom.ClickHelper.Mcp.exe` (server name `transom-ui-assist`) exposes UI-automation tools; used for grouped built-ins that the API can't edit in place.
-4. The in-Revit bridge runs only when **Revit is open** and the **Claude Bridge** ribbon toggle is **ON** (listening on `127.0.0.1:48810`, auth via a per-session token in `%LocalAppData%\Transom\bridge.token`).
+4. The in-Revit bridge runs only when **Revit is open** and **Claude Assist** is **on** in Settings (auto-starts with Revit while enabled; listening on `127.0.0.1:48810`, auth via a per-session token in `%LocalAppData%\Transom\bridge.token`).
 
 **MCP wire facts (load-bearing — a past bug here made Assist non-functional):**
 - **stdio transport is NEWLINE-DELIMITED JSON-RPC** — one message per `\n`-terminated line, **no embedded newlines**, stdout carries **only** valid MCP messages, diagnostics go to **stderr**. (NOT LSP `Content-Length` framing — that was the bug fixed in v1.4.7.)
@@ -109,5 +109,5 @@ Repo: `Dave5264/transom-revit`. Default branch: `main`. Primary dev path on the 
 ---
 
 ## 5. Claude-Assist client support
-- The supported client is **Claude Code** (it reads the `~/.claude.json` registration `Set up Claude` writes, runs locally with filesystem access, and reaches the loopback bridge).
+- The supported client is **Claude Code** (it reads the `~/.claude.json` registration the Claude Assist toggle writes, runs locally with filesystem access, and reaches the loopback bridge).
 - **Claude Cowork is not supported**: it runs Claude Code inside a local VM that can't spawn/reach a host-side stdio shim, so the registration the add-in writes doesn't reach it. Don't document or wire a Cowork path without solving that bridge first.

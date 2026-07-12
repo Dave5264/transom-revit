@@ -87,7 +87,7 @@ The server locates the engine automatically (sibling → `TRANSOM_CLICKHELPER_EX
 
 ## Register with Claude
 
-Normally the **"Claude UI Assist"** ribbon button does this. The manual equivalent merges one entry
+Normally turning **Claude Assist** on in Transom Settings does this. The manual equivalent merges one entry
 into `%AppData%\Claude\claude_desktop_config.json` and `%UserProfile%\.claude.json`:
 
 ```jsonc

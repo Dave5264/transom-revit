@@ -229,14 +229,35 @@ public sealed partial class TransomViewModel : ObservableObject
     [ObservableProperty] private bool _hasFrozen;       // any greyed (un-writable) rows in the preview
     [ObservableProperty] private bool _hasAffected;     // any schedule with at least one proposed change
 
-    [ObservableProperty] private bool _claudeAvailable;
-    [ObservableProperty] private string _claudeMode = "Off"; // Off | Verify (read-only) | Assist (write)
+    // Claude Assist is ONE persisted on/off switch (replaces the old unpersisted Off/Verify/Assist mode).
+    // ON = exports stage to the exchange folder, run-logs are written, grouped built-ins may route to the
+    // staged Claude path, and the loopback bridge runs (auto-started with Revit while the flag is set).
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(ClaudeAssistHint))]
+    private bool _isClaudeAssistEnabled;
+    /// <summary>True while the toggle's setup/start/stop work is in flight — the switch is disabled so a
+    /// double-click can't race the registration or the listener.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(ClaudeToggleEnabled))]
+    private bool _claudeToggleBusy;
+    public bool ClaudeToggleEnabled => !ClaudeToggleBusy;
+    /// <summary>Shown once after a toggle-on that newly registered something: the user must restart Claude.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasRestartNotice))]
+    private string _restartNotice = "";
+    public bool HasRestartNotice => !string.IsNullOrEmpty(RestartNotice);
+    /// <summary>True before first setup (nothing registered, no shim) — the status panel shows one line.</summary>
+    [ObservableProperty] private bool _claudeNotSetUp;
+    [ObservableProperty] private string _claudeStatusFooter = "";
+    public ObservableCollection<ClaudeStatusRow> ClaudeStatusRows { get; } = new();
+    public string ClaudeAssistHint => IsClaudeAssistEnabled
+        ? "Claude can read schedules and write parameters over the local bridge."
+        : "First time on runs one-time setup (per-user, no admin).";
     [ObservableProperty] private bool _canFinalize;
     // G1: the bridge port the UI binds/probes is Transom's OWN self-host bridge (BridgeSelfHostPort, 48810) —
     // NOT the retired external-pyRevit probe (48884), which Transom never listened on.
     [ObservableProperty] private int _bridgePort = 48810;
     [ObservableProperty] private string _exchangeFolder = "";
-    [ObservableProperty] private string _bridgeStatus = "Checking bridge…";
     [ObservableProperty] private bool _encouragingMessages = true;
 
     public TransomViewModel(
@@ -283,10 +304,13 @@ public sealed partial class TransomViewModel : ObservableObject
         ProposedChange.SelectionChanged += OnAnyChangeSelectionChanged;
 
         _settings = TransomSettings.Load();
-        BridgePort = _settings.BridgeSelfHostPort;   // G1: bind the UI to the self-host bridge port (48810)
+        _bridgePort = _settings.BridgeSelfHostPort;  // backing field: don't re-register/restart during construction
         ExchangeFolder = _settings.ExchangeFolder;
         EncouragingMessages = _settings.EncouragingMessages;
-        _ = RefreshBridgeAsync();
+        // Backing field: reflect the persisted flag without running the toggle's setup/start logic (the
+        // bridge is auto-started by Application.OnStartup when the flag is on).
+        _isClaudeAssistEnabled = _settings.ClaudeAssistEnabled;
+        _ = RefreshClaudeStatusAsync();
 
         _copyResetTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1.4) };
         _copyResetTimer.Tick += (_, _) => { Copied = false; CopiedImport = false; CopiedLog = false; _copyResetTimer.Stop(); };
@@ -339,7 +363,6 @@ public sealed partial class TransomViewModel : ObservableObject
 
     public bool HasActive => ActiveSchedule != null;
     public ObservableCollection<string> Projects { get; } = new();
-    public string[] ClaudeModes { get; } = { "Off", "Verify (read-only)", "Assist (write)" };
     public ObservableCollection<ScheduleEntry> FilteredSchedules { get; } = new();
     public ObservableCollection<ProposedChange> Changes { get; } = new();
     public ObservableCollection<SkippedItem> Skipped { get; } = new();
@@ -454,13 +477,13 @@ public sealed partial class TransomViewModel : ObservableObject
         };
         if (dlg.ShowDialog() != true) return;
 
-        bool stage = ClaudeMode != "Off" && !string.IsNullOrWhiteSpace(ExchangeFolder);
+        bool stage = IsClaudeAssistEnabled && !string.IsNullOrWhiteSpace(ExchangeFolder);
         _exportHandler.ScheduleIds = ids;
         _exportHandler.OutputPath = dlg.FileName;
         _exportHandler.DocTitle = SelectedProject;
         _exportHandler.Stage = stage;
         _exportHandler.ExchangeFolder = ExchangeFolder;
-        _exportHandler.ClaudeAssistEnabled = ClaudeMode.StartsWith("Assist");
+        _exportHandler.ClaudeAssistEnabled = IsClaudeAssistEnabled;
         _finalDestination = dlg.FileName;
         CanFinalize = false;
         Status = stage ? $"Staging {ids.Count} schedule(s)…" : $"Exporting {ids.Count} schedule(s)…";
@@ -582,7 +605,7 @@ public sealed partial class TransomViewModel : ObservableObject
         _importHandler.RequestedMode = ImportEventHandler.Mode.Preview;
         _importHandler.WorkbookPath = WorkbookPath;
         _importHandler.DocTitle = SelectedProject;
-        _importHandler.WriteRunLog = ClaudeMode != "Off";
+        _importHandler.WriteRunLog = IsClaudeAssistEnabled;
         _importHandler.ExchangeFolder = ExchangeFolder;
         _importHandler.ProduceReport = ProduceReport;
         _importHandler.SelectedSheetTabs = _selectedSheetTabs;   // §16: scope the analysis to the picked tabs
@@ -704,7 +727,7 @@ public sealed partial class TransomViewModel : ObservableObject
         foreach (var c in selected) c.Resolution = null;
 
         var notes = new List<string>();
-        bool assist = ClaudeMode.StartsWith("Assist");
+        bool assist = IsClaudeAssistEnabled;
 
         var directChanges = selected.Where(c => c.GroupMode == GroupMode.None).ToList();
         var groupChanges = selected.Where(c => c.GroupMode is GroupMode.ProjectVary or GroupMode.BuiltinDance).ToList();
@@ -942,7 +965,7 @@ public sealed partial class TransomViewModel : ObservableObject
     }
 
     /// <summary>Best-effort install + register of the Click Helper MCP so Claude has the UI tools for the
-    /// Claude-assist / group-dance paths. (For the data side, the Claude Bridge must also be ON via the ribbon.)</summary>
+    /// Claude-assist / group-dance paths. (The data bridge runs whenever Claude Assist is on in Settings.)</summary>
     private static string EnsureClickHelper()
     {
         try
@@ -950,10 +973,10 @@ public sealed partial class TransomViewModel : ObservableObject
             Core.ClickHelperRegistration.EnsureInstalled();
             var res = Core.ClickHelperRegistration.Register();
             return res.Updated > 0
-                ? "ClickHelper registered with Claude (restart Claude, ensure the Claude Bridge is ON)"
-                : "ClickHelper already set up (ensure the Claude Bridge is ON)";
+                ? "ClickHelper registered with Claude (restart Claude to load it)"
+                : "ClickHelper already set up";
         }
-        catch { return "ClickHelper setup skipped (couldn't register — set it up via the ribbon)"; }
+        catch { return "ClickHelper setup skipped (couldn't register — toggle Claude Assist off and on in Settings to retry)"; }
     }
 
     /// <summary>Total element writes represented by a set of changes (bulk changes count each instance).</summary>
@@ -1464,19 +1487,81 @@ public sealed partial class TransomViewModel : ObservableObject
 
     // --- Claude-assist ---
 
-    [RelayCommand]
-    private async Task RefreshBridge() => await RefreshBridgeAsync();
-
-    private async Task RefreshBridgeAsync()
+    partial void OnIsClaudeAssistEnabledChanged(bool value)
     {
-        BridgeStatus = "Checking bridge…";
-        var ok = await BridgeProbe.IsAvailableAsync(BridgePort);
+        _settings.ClaudeAssistEnabled = value;
+        _settings.Save();
+        if (value)
+        {
+            _ = EnableClaudeAssistAsync();
+        }
+        else
+        {
+            RestartNotice = "";
+            BridgeRuntime.Stop();
+            _ = RefreshClaudeStatusAsync();
+        }
+    }
+
+    /// <summary>
+    ///     Toggle-ON path: ensure setup (idempotent — shim + both Claude registrations), start the bridge,
+    ///     and surface the one-time restart-Claude notice when something was newly registered. Registration is
+    ///     file IO, so it runs off the UI thread; the switch is disabled meanwhile (ClaudeToggleBusy).
+    /// </summary>
+    private async Task EnableClaudeAssistAsync()
+    {
+        ClaudeToggleBusy = true;
+        try
+        {
+            // "On = it works": staging silently requires an exchange folder, so default an empty one.
+            if (string.IsNullOrWhiteSpace(ExchangeFolder))
+                ExchangeFolder = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "Transom Exchange");
+
+            var setup = await Task.Run(() => ClaudeSetup.EnsureAll(_settings));
+            var startError = setup.ComponentsMissing ? null : await Task.Run(() => BridgeRuntime.Start(BridgePort));
+
+            _ui.Invoke(() =>
+            {
+                if (setup.Failed || startError != null)
+                {
+                    Views.ReportDialog.Show("Transom — Claude Assist",
+                        setup.ComponentsMissing
+                            ? "Couldn't install the bundled Claude components from the add-in folder " +
+                              "(Transom.McpShim.exe / Transom.ClickHelper.exe / Transom.ClickHelper.Mcp.exe). " +
+                              "Reinstall Transom, or report this."
+                            : startError ?? "Setup finished with issues — see details.",
+                        setup.Details + (startError is null ? "" : "\n\n--- bridge ---\n" + startError),
+                        isError: true);
+                }
+                RestartNotice = setup.NeedsClaudeRestart
+                    ? "Setup complete — restart your Claude client (Claude Code / Claude Desktop) to load Transom's tools; it connects automatically after that."
+                    : "";
+            });
+        }
+        finally
+        {
+            _ui.Invoke(() => ClaudeToggleBusy = false);
+            await RefreshClaudeStatusAsync();
+        }
+    }
+
+    [RelayCommand]
+    private async Task RefreshClaudeStatus() => await RefreshClaudeStatusAsync();
+
+    private async Task RefreshClaudeStatusAsync()
+    {
+        var status = await Task.Run(() => ClaudeStatus.Capture(BridgePort));
         _ui.Invoke(() =>
         {
-            ClaudeAvailable = ok;
-            BridgeStatus = ok
-                ? $"Write bridge: available (port {BridgePort}) — Assist enabled"
-                : $"Write bridge: offline (port {BridgePort}) — Verify (read-only) still works";
+            ClaudeNotSetUp = !status.IsSetUp && !IsClaudeAssistEnabled;
+            ClaudeStatusRows.Clear();
+            if (!ClaudeNotSetUp)
+                foreach (var row in status.Rows()) ClaudeStatusRows.Add(row);
+            ClaudeStatusFooter = ClaudeNotSetUp
+                ? ""
+                : (string.IsNullOrEmpty(SelectedProject) ? "" : $"Active model: {SelectedProject}   ·   ") +
+                  $"Transom {AppInfo.Version}";
         });
     }
 
@@ -1508,7 +1593,23 @@ public sealed partial class TransomViewModel : ObservableObject
     {
         _settings.BridgeSelfHostPort = value;   // G1: persist to the self-host bridge port
         _settings.Save();
-        _ = RefreshBridgeAsync();
+        // The port is baked into the Claude registration AND the live listener, so with Claude Assist on a
+        // port change must re-register + restart the bridge (the old flow relied on the user re-clicking
+        // "Set up Claude"). The XAML binds this with UpdateSourceTrigger=LostFocus so it fires once per edit,
+        // not per keystroke.
+        if (IsClaudeAssistEnabled)
+        {
+            _ = Task.Run(() =>
+            {
+                ClaudeSetup.EnsureAll(_settings);
+                BridgeRuntime.Stop();
+                BridgeRuntime.Start(value);
+            }).ContinueWith(_ => RefreshClaudeStatusAsync());
+        }
+        else
+        {
+            _ = RefreshClaudeStatusAsync();
+        }
     }
 
     partial void OnEncouragingMessagesChanged(bool value)

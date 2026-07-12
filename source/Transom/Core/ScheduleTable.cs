@@ -134,7 +134,7 @@ public sealed class ScheduleTable
     public bool RoundTrippable = true;
 
     /// <summary>Whether Claude-assist is enabled at export time. Drives built-in grouped cells: yellow (enabled)
-    /// vs a distinct grey (disabled). Set by the export caller from the current Claude mode.</summary>
+    /// vs a distinct grey (disabled). Set by the export caller from the Claude Assist setting.</summary>
     public bool ClaudeAssistEnabled;
 
     /// <summary>

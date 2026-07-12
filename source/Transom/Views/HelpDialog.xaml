@@ -172,15 +172,15 @@
                 </TextBlock>
 
                 <!-- CLAUDE / MCP -->
-                <TextBlock Style="{StaticResource H}" Text="Claude QA (optional)" />
+                <TextBlock Style="{StaticResource H}" Text="Claude Assist (optional)" />
                 <TextBlock Style="{StaticResource P}">
-                    Transom works fully on its own. With Claude connected over a local MCP bridge you get two extra modes (Settings tab): <Run Text="Verify (read-only)" FontWeight="SemiBold" /> has Claude review an export/import against the live model; <Run Text="Assist (write)" FontWeight="SemiBold" /> lets Claude apply the edits a normal import can’t — chiefly instance parameters on group members.
+                    Transom works fully on its own. Turn <Run Text="Claude Assist" FontWeight="SemiBold" /> on (Settings tab) and a connected Claude client can review an export/import against the live model, and apply the edits a normal import can’t — chiefly instance parameters on group members.
                 </TextBlock>
                 <TextBlock Style="{StaticResource P}">
-                    The bridge is <Run Text="admin-free" FontWeight="SemiBold" />: it listens only on 127.0.0.1 (loopback) on a high port and requires a per-session token, so other apps and web pages can’t drive it. Use <Run Text="Register with Claude" FontWeight="SemiBold" /> on the ribbon once (registers the bundled connector — no admin), then toggle <Run Text="Claude Bridge" FontWeight="SemiBold" /> on while you work. See “How Claude works” on the Settings tab.
+                    The bridge is <Run Text="admin-free" FontWeight="SemiBold" />: it listens only on 127.0.0.1 (loopback) on a high port and requires a per-session token, so other apps and web pages can’t drive it. The first time you turn Claude Assist on, Transom registers its bundled connectors with Claude Desktop / Claude Code (restart Claude once afterward); the status panel next to the switch shows every layer at a glance. See “How Claude works” on the Settings tab.
                 </TextBlock>
                 <TextBlock Style="{StaticResource P}">
-                    • <Run Text="Beyond schedules" FontWeight="SemiBold" /> — with the bridge on, Claude can also read and drive the model directly: render a view to an image, read the current selection, query and filter elements, read/set parameters, run clash checks, tag, create views/sheets/levels, export PDF/DWG/IFC, and more (ask Claude what it can do in Revit). These run through the same loopback bridge and token, so the same on/off toggle governs them.
+                    • <Run Text="Beyond schedules" FontWeight="SemiBold" /> — with Claude Assist on, Claude can also read and drive the model directly: render a view to an image, read the current selection, query and filter elements, read/set parameters, run clash checks, tag, create views/sheets/levels, export PDF/DWG/IFC, and more (ask Claude what it can do in Revit). These run through the same loopback bridge and token, so the same Settings switch governs them.
                 </TextBlock>
 
                 <!-- REVISION NARRATIVE -->
@@ -207,11 +207,11 @@
                 <!-- RIBBON REFERENCE -->
                 <TextBlock Style="{StaticResource H}" Text="Ribbon buttons" />
                 <TextBlock Style="{StaticResource P}">
-                    • <Run Text="Transom" FontWeight="SemiBold" /> — open the Export / Import dialog.
+                    • <Run Text="Schedule Hub" FontWeight="SemiBold" /> — open the Export / Import dialog.
                     &#x0a;• <Run Text="Check for Updates" FontWeight="SemiBold" /> — install the latest release in place (per-user, no admin).
                     &#x0a;• <Run Text="Help" FontWeight="SemiBold" /> — this window.
-                    &#x0a;• <Run Text="Claude Bridge" FontWeight="SemiBold" /> — start/stop the local Claude-assist bridge.
-                    &#x0a;• <Run Text="Register with Claude" FontWeight="SemiBold" /> — register the bundled MCP connector with Claude Desktop / Claude Code.
+                    &#x0a;• <Run Text="Settings" FontWeight="SemiBold" /> — the Settings tab: Claude Assist on/off + status, exchange folder, bridge port, preferences.
+                    &#x0a;• <Run Text="Revision Narrative" FontWeight="SemiBold" /> — generate a revision narrative (.docx) from a revision's clouds.
                 </TextBlock>
 
                 <!-- TROUBLESHOOTING -->
@@ -229,7 +229,7 @@
                     • <Run Text="Old export behaves oddly after an update" FontWeight="SemiBold" /> — re-export; capabilities are recorded in the file at export time.
                 </TextBlock>
                 <TextBlock Style="{StaticResource P}">
-                    • <Run Text="Claude can’t reach the bridge" FontWeight="SemiBold" /> — confirm Revit is open with a document, the Claude Bridge toggle is on, you’ve run Register with Claude, and you restarted Claude afterwards.
+                    • <Run Text="Claude can’t reach the bridge" FontWeight="SemiBold" /> — confirm Revit is open with a document, then check the status panel on the Settings tab: every row should be ✓. If registration was just added, restart Claude so it loads the connectors.
                 </TextBlock>
 
                 <Border Background="{DynamicResource InfoBg}" BorderBrush="{DynamicResource AccentLine}" BorderThickness="1" CornerRadius="6" Padding="10" Margin="0,16,0,0">

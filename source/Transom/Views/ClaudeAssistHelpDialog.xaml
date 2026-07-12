@@ -37,23 +37,23 @@
             </Button.Template>
         </Button>
 
-        <TextBlock DockPanel.Dock="Top" Text="Claude QA — Verify &amp; Assist" FontSize="17" FontWeight="SemiBold" Foreground="{DynamicResource Text}" />
+        <TextBlock DockPanel.Dock="Top" Text="Claude Assist — how it works" FontSize="17" FontWeight="SemiBold" Foreground="{DynamicResource Text}" />
         <TextBlock DockPanel.Dock="Top" Margin="0,4,0,12" Foreground="{DynamicResource Muted}" TextWrapping="Wrap"
-                   Text="Transom can bring Claude in to QA your round-trip over a local MCP connection — two modes, set by &quot;Claude mode&quot; in Settings. Transom never messages Claude itself; it stages files and you ask Claude to act on them." />
+                   Text="One switch in Settings brings Claude in over a local MCP connection. The first time you turn it on, Transom registers its tools with your Claude client (restart Claude once afterward). Transom never messages Claude itself; it stages files and you ask Claude to act on them." />
 
         <ScrollViewer VerticalScrollBarVisibility="Auto">
             <StackPanel>
 
-                <!-- ===== VERIFY ===== -->
-                <TextBlock Text="Verify (read-only)" FontSize="14" FontWeight="SemiBold" Foreground="{DynamicResource Accent}" Margin="0,0,0,4" />
+                <!-- ===== REVIEW ===== -->
+                <TextBlock Text="Review a round-trip (read-only asks)" FontSize="14" FontWeight="SemiBold" Foreground="{DynamicResource Accent}" Margin="0,0,0,4" />
                 <TextBlock TextWrapping="Wrap" Foreground="{DynamicResource Muted}" Margin="0,0,0,8">
                     Claude reviews an export or a pending import against the live model and flags issues — drift,
                     mismatched values, risky edits — <Run Text="before" FontStyle="Italic" /> you commit. A review
                     reads the model through Transom's bundled bridge and changes nothing; you decide what to apply.
                 </TextBlock>
                 <TextBlock TextWrapping="Wrap" Foreground="{DynamicResource Muted}" Margin="0,0,0,4">
-                    1 · Set <Run Text="Claude mode" FontWeight="SemiBold" /> to “Verify (read-only)”, and set a Claude exchange folder.
-                    (One-time: <Run Text="Set up Claude" FontWeight="SemiBold" /> on the ribbon + restart Claude Code, then turn <Run Text="Claude Bridge" FontWeight="SemiBold" /> ON.)
+                    1 · Turn <Run Text="Claude Assist" FontWeight="SemiBold" /> on (Settings tab). The status panel
+                    below the switch shows every layer is in place.
                 </TextBlock>
                 <TextBlock TextWrapping="Wrap" Foreground="{DynamicResource Muted}" Margin="0,0,0,4">
                     2 · Export or Preview as usual — Transom stages the workbook + a run-log to the exchange folder.
@@ -69,30 +69,22 @@
                     4 · Claude reports discrepancies. Nothing is written — you decide what to apply.
                 </TextBlock>
 
-                <!-- ===== ASSIST ===== -->
-                <TextBlock Text="Assist (write)" FontSize="14" FontWeight="SemiBold" Foreground="{DynamicResource Accent}" Margin="0,0,0,4" />
+                <!-- ===== APPLY ===== -->
+                <TextBlock Text="Apply staged group edits" FontSize="14" FontWeight="SemiBold" Foreground="{DynamicResource Accent}" Margin="0,0,0,4" />
                 <TextBlock TextWrapping="Wrap" Foreground="{DynamicResource Muted}" Margin="0,0,0,8">
                     Transom writes most edits directly. A few can't be applied in place — most often parameters on
-                    elements inside Revit groups (group members can't be changed outside group-edit mode). In Assist,
-                    Claude applies those for you over a local MCP write bridge.
+                    elements inside Revit groups (group members can't be changed outside group-edit mode). With
+                    Claude Assist on, Claude applies those for you over the local bridge (it listens on
+                    127.0.0.1:48810 by default; change the port under Advanced in Settings).
                 </TextBlock>
                 <TextBlock TextWrapping="Wrap" Foreground="{DynamicResource Muted}" Margin="0,0,0,4">
-                    1 · One-time: click <Run Text="Set up Claude" FontWeight="SemiBold" /> on the ribbon (registers
-                    Transom's bundled MCP servers with Claude Code — no admin), then <Run Text="restart Claude Code" FontWeight="SemiBold" /> so it loads them.
-                </TextBlock>
-                <TextBlock TextWrapping="Wrap" Foreground="{DynamicResource Muted}" Margin="0,0,0,4">
-                    2 · Turn <Run Text="Claude Bridge" FontWeight="SemiBold" /> ON (ribbon toggle). It listens on
-                    127.0.0.1:48810 (the default; change it in Settings) — check it any time with
-                    <Run Text="Bridge Status" FontWeight="SemiBold" /> on the ribbon.
-                </TextBlock>
-                <TextBlock TextWrapping="Wrap" Foreground="{DynamicResource Muted}" Margin="0,0,0,4">
-                    3 · Import → <Run Text="Preview" FontWeight="SemiBold" /> → <Run Text="Apply selected" FontWeight="SemiBold" />.
+                    1 · Import → <Run Text="Preview" FontWeight="SemiBold" /> → <Run Text="Apply selected" FontWeight="SemiBold" />.
                     If edits target group members, the group dialog appears — pick <Run Text="Claude-Assist" FontWeight="SemiBold" />
                     and choose where to save the artifact (<Run Text="transom_group_edits.json" FontStyle="Italic" />).
                     Everything not in a group applies right away.
                 </TextBlock>
                 <TextBlock TextWrapping="Wrap" Foreground="{DynamicResource Muted}" Margin="0,0,0,4">
-                    4 · In Claude Code, drag the staged <Run Text="transom_group_edits.json" FontStyle="Italic" /> into the chat and say:
+                    2 · In Claude Code, drag the staged <Run Text="transom_group_edits.json" FontStyle="Italic" /> into the chat and say:
                 </TextBlock>
                 <Border Background="{DynamicResource CodeBg}" BorderBrush="{DynamicResource Line}" BorderThickness="1" CornerRadius="6" Padding="10,8" Margin="0,0,0,4">
                     <TextBlock FontFamily="Consolas" FontSize="12" TextWrapping="Wrap" Foreground="{DynamicResource Text}"
@@ -106,11 +98,11 @@
 
                 <Border Background="{DynamicResource InfoBg}" BorderBrush="{DynamicResource AccentLine}" BorderThickness="1" CornerRadius="6" Padding="10">
                     <TextBlock TextWrapping="Wrap" Foreground="{DynamicResource Accent}" FontSize="12">
-                        <Run Text="Both modes use the same bridge" FontWeight="SemiBold" /> — the ribbon toggle is what
-                        turns it on and off, never the mode. The mode changes what Transom stages and what you ask
-                        Claude to do: Verify = review and report only; Assist = also apply the staged group edits.
-                        While the bridge is ON, Claude can write to the model in either mode — so in Verify, keep
-                        your prompts to review-only asks.
+                        <Run Text="One switch, everything" FontWeight="SemiBold" /> — the Settings toggle starts the
+                        bridge with Revit and keeps it running until you turn it off; the status panel next to it
+                        shows every layer (bridge, shim, Claude registration) at a glance. While Claude Assist is on,
+                        Claude can write to the model — when you only want a check, keep your prompts to
+                        review-only asks.
                     </TextBlock>
                 </Border>
 

@@ -187,7 +187,7 @@
         </Border>
 
         <!-- Tabs -->
-        <TabControl x:Name="Tabs" Margin="12" Background="Transparent" BorderThickness="0">
+        <TabControl x:Name="Tabs" Margin="12" Background="Transparent" BorderThickness="0" SelectionChanged="Tabs_SelectionChanged">
             <TabItem Header="Export">
                 <Border Background="{DynamicResource Surface}" BorderBrush="{DynamicResource Line}" BorderThickness="1" CornerRadius="6" Padding="16" Margin="0,10,0,0">
                     <DockPanel>
@@ -814,36 +814,137 @@
                         <DockPanel>
                             <Button DockPanel.Dock="Right" Content="How Claude works" Height="28" Padding="12,0"
                                     FontSize="12" VerticalAlignment="Top" Click="ClaudeHelp_Click" />
-                            <TextBlock Text="Claude QA settings" FontSize="14" FontWeight="SemiBold" Foreground="{DynamicResource Text}" VerticalAlignment="Center" />
+                            <TextBlock Text="Claude Assist" FontSize="14" FontWeight="SemiBold" Foreground="{DynamicResource Text}" VerticalAlignment="Center" />
                         </DockPanel>
-                        <TextBlock Text="Transom stages the workbook + a run-log to the exchange folder; you then ask Claude to review it against the live model over MCP."
-                                   Foreground="{DynamicResource Muted}" TextWrapping="Wrap" Margin="0,6,0,16" />
+                        <TextBlock Text="Let a connected Claude client review exports against the live model, apply staged edits, and run Revit operations you ask for. Everything stays on this machine (loopback only, per-user, no admin)."
+                                   Foreground="{DynamicResource Muted}" TextWrapping="Wrap" Margin="0,6,0,14" />
 
-                        <TextBlock Text="Claude mode" Foreground="{DynamicResource Muted}" FontSize="13" Margin="0,0,0,4" />
-                        <ComboBox ItemsSource="{Binding ClaudeModes}" SelectedItem="{Binding ClaudeMode}" Height="32" />
-                        <TextBlock Text="Verify = Claude reads the model to reconcile (read-only, no write bridge needed).  Assist = Claude can also apply / colour-flag in the model (uses the write bridge below)."
-                                   Foreground="{DynamicResource Hint}" FontSize="11" TextWrapping="Wrap" Margin="0,4,0,16" />
+                        <!-- The one Claude switch (replaces the old Off/Verify/Assist dropdown + the Set up Claude /
+                             Claude Bridge ribbon buttons). First ON runs one-time setup, then starts the bridge. -->
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
+                            <CheckBox IsChecked="{Binding IsClaudeAssistEnabled}" IsEnabled="{Binding ClaudeToggleEnabled}"
+                                      VerticalAlignment="Center" Cursor="Hand">
+                                <CheckBox.Template>
+                                    <ControlTemplate TargetType="CheckBox">
+                                        <StackPanel Orientation="Horizontal" Background="Transparent">
+                                            <Border x:Name="Track" Width="44" Height="24" CornerRadius="12"
+                                                    Background="{DynamicResource Line2}" VerticalAlignment="Center">
+                                                <Ellipse x:Name="Knob" Width="18" Height="18" Fill="{DynamicResource Surface}"
+                                                         Stroke="{DynamicResource Line2}" StrokeThickness="1"
+                                                         HorizontalAlignment="Left" Margin="3,0,0,0" />
+                                            </Border>
+                                            <ContentPresenter Margin="10,0,0,0" VerticalAlignment="Center" />
+                                        </StackPanel>
+                                        <ControlTemplate.Triggers>
+                                            <Trigger Property="IsChecked" Value="True">
+                                                <Setter TargetName="Track" Property="Background" Value="{DynamicResource Accent}" />
+                                                <Setter TargetName="Knob" Property="HorizontalAlignment" Value="Right" />
+                                                <Setter TargetName="Knob" Property="Margin" Value="0,0,3,0" />
+                                            </Trigger>
+                                            <Trigger Property="IsEnabled" Value="False">
+                                                <Setter Property="Opacity" Value="0.55" />
+                                            </Trigger>
+                                        </ControlTemplate.Triggers>
+                                    </ControlTemplate>
+                                </CheckBox.Template>
+                                <TextBlock FontSize="13" FontWeight="SemiBold" Foreground="{DynamicResource Text}">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="Text" Value="Off" />
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsClaudeAssistEnabled}" Value="True">
+                                                    <Setter Property="Text" Value="On" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                            </CheckBox>
+                            <TextBlock Text="{Binding ClaudeAssistHint}" Foreground="{DynamicResource Hint}" FontSize="11.5"
+                                       VerticalAlignment="Center" Margin="10,0,0,0" />
+                        </StackPanel>
 
-                        <TextBlock Text="Write bridge port (for Assist)" Foreground="{DynamicResource Muted}" FontSize="13" Margin="0,0,0,4" />
-                        <DockPanel Margin="0,0,0,14">
-                            <Button DockPanel.Dock="Right" Content="Refresh" Command="{Binding RefreshBridgeCommand}" Margin="8,0,0,0"
-                                    ToolTip="Re-check the Claude write-bridge connection" />
-                            <TextBox Text="{Binding BridgePort, UpdateSourceTrigger=PropertyChanged}" Width="110" HorizontalAlignment="Left" />
-                        </DockPanel>
+                        <Border Background="{DynamicResource WarnBg}" BorderBrush="{DynamicResource WarnLine}" BorderThickness="1"
+                                CornerRadius="6" Padding="8,6" Margin="0,8,0,0"
+                                Visibility="{Binding HasRestartNotice, Converter={StaticResource BoolToVis}}">
+                            <TextBlock Text="{Binding RestartNotice}" Foreground="{DynamicResource Warn}" FontSize="11.5" TextWrapping="Wrap" />
+                        </Border>
 
-                        <TextBlock Text="Claude exchange folder" Foreground="{DynamicResource Muted}" FontSize="13" Margin="0,0,0,4" />
-                        <DockPanel Margin="0,0,0,8">
+                        <!-- Always-visible status checklist (replaces the Bridge Status ribbon dialog). -->
+                        <Border BorderBrush="{DynamicResource Line}" BorderThickness="1" CornerRadius="6" Margin="0,10,0,0">
+                            <StackPanel>
+                                <DockPanel Background="{DynamicResource InfoBg}">
+                                    <Button DockPanel.Dock="Right" Content="Refresh" Command="{Binding RefreshClaudeStatusCommand}"
+                                            FontSize="11" Height="22" Padding="8,0" Margin="0,3,4,3"
+                                            ToolTip="Re-check the bridge, shim, and Claude registration" />
+                                    <TextBlock Text="Status" Foreground="{DynamicResource Accent}" FontWeight="SemiBold" FontSize="12"
+                                               VerticalAlignment="Center" Margin="10,0,0,0" />
+                                </DockPanel>
+                                <TextBlock Text="Not set up — turn Claude Assist on to set it up. Registers Transom's tools with Claude Desktop / Claude Code."
+                                           Foreground="{DynamicResource Muted}" FontSize="12" TextWrapping="Wrap" Margin="10,8,10,8"
+                                           Visibility="{Binding ClaudeNotSetUp, Converter={StaticResource BoolToVis}}" />
+                                <ItemsControl ItemsSource="{Binding ClaudeStatusRows}" Margin="0,2,0,2">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <DockPanel Margin="10,3">
+                                                <TextBlock DockPanel.Dock="Right" Text="{Binding Detail}" Foreground="{DynamicResource Hint}"
+                                                           FontSize="11" VerticalAlignment="Center" Margin="8,0,0,0" />
+                                                <TextBlock FontWeight="Bold" FontSize="12" Margin="0,0,8,0" VerticalAlignment="Center">
+                                                    <TextBlock.Style>
+                                                        <Style TargetType="TextBlock">
+                                                            <Setter Property="Text" Value="✗" />
+                                                            <Setter Property="Foreground" Value="{DynamicResource LegendRed}" />
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding Ok}" Value="True">
+                                                                    <Setter Property="Text" Value="✓" />
+                                                                    <Setter Property="Foreground" Value="{DynamicResource LegendGreen}" />
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </TextBlock.Style>
+                                                </TextBlock>
+                                                <TextBlock Text="{Binding Label}" Foreground="{DynamicResource Text}" FontSize="12" VerticalAlignment="Center" />
+                                            </DockPanel>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                                <TextBlock Text="{Binding ClaudeStatusFooter}" Foreground="{DynamicResource Hint}" FontSize="11" Margin="10,2,10,6">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding ClaudeStatusFooter}" Value="">
+                                                    <Setter Property="Visibility" Value="Collapsed" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                            </StackPanel>
+                        </Border>
+
+                        <TextBlock Text="Claude exchange folder" Foreground="{DynamicResource Muted}" FontSize="13" Margin="0,14,0,4" />
+                        <DockPanel Margin="0,0,0,4">
                             <Button DockPanel.Dock="Right" Content="Browse…" Command="{Binding ChooseExchangeFolderCommand}" Margin="8,0,0,0" />
                             <Border BorderBrush="{DynamicResource Line2}" BorderThickness="1" CornerRadius="8" Padding="8,0" Height="32">
                                 <TextBlock Text="{Binding ExchangeFolder}" Foreground="{DynamicResource Muted}" FontSize="12"
                                            VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
                             </Border>
                         </DockPanel>
-                        <!-- (Claude instructions are now written automatically next to the staged group-edits JSON when Claude-Assist runs — no separate button needed.) -->
+                        <!-- (Claude instructions are written automatically next to the staged group-edits JSON when Claude-Assist runs.) -->
 
-                        <Border Background="{DynamicResource InfoBg}" BorderBrush="{DynamicResource AccentLine}" BorderThickness="1" CornerRadius="6" Padding="10">
-                            <TextBlock Text="{Binding BridgeStatus}" Foreground="{DynamicResource Accent}" FontSize="12" TextWrapping="Wrap" />
-                        </Border>
+                        <Expander Margin="0,6,0,0">
+                            <Expander.Header>
+                                <TextBlock Text="Advanced" Foreground="{DynamicResource Accent}" FontSize="12" />
+                            </Expander.Header>
+                            <StackPanel Margin="0,8,0,0">
+                                <TextBlock Text="Bridge port" Foreground="{DynamicResource Muted}" FontSize="13" Margin="0,0,0,4" />
+                                <DockPanel>
+                                    <TextBlock DockPanel.Dock="Right" Text="Changing the port re-registers Claude and restarts the bridge."
+                                               Foreground="{DynamicResource Hint}" FontSize="11" VerticalAlignment="Center" Margin="8,0,0,0" TextWrapping="Wrap" />
+                                    <TextBox Text="{Binding BridgePort, UpdateSourceTrigger=LostFocus}" Width="110" HorizontalAlignment="Left" />
+                                </DockPanel>
+                            </StackPanel>
+                        </Expander>
 
                         <Separator Margin="0,18,0,12" Background="{DynamicResource Line}" />
                         <TextBlock Text="Preferences" FontSize="14" FontWeight="SemiBold" Foreground="{DynamicResource Text}" Margin="0,0,0,8" />

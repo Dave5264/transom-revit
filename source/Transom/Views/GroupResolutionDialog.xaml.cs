@@ -129,7 +129,7 @@ public partial class GroupResolutionDialog : Window
                 "No BIM configuration or strategy changes.",
                 "Slow.  Transom launches ClickHelper; Claude opens each group, edits, verifies, finishes, and hands back a report.");
         else
-            unavailable.Add("• Option 3 (Claude-Assist) is unavailable: set Claude mode to “Assist (write)” to enable it.");
+            unavailable.Add("• Option 3 (Claude-Assist) is unavailable: turn Claude Assist on in Settings to enable it.");
 
         AddOption(GroupResolution.Skip, "4.  Skip — leave this column unchanged", "", "");
 

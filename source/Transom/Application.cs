@@ -13,10 +13,21 @@ public class Application : ExternalApplication
     {
         CreateRibbon();
 
+        // The bridge's ExternalEvent can only be created in an API context — OnStartup is the one moment we
+        // reliably have one, so BridgeRuntime builds its handler/event/server here even if Claude Assist is
+        // off (cheap; nothing listens until Start). The Settings toggle (modeless WPF) then only Start/Stops.
+        Core.BridgeRuntime.Initialize();
+
         // Seamless MCP setup: copy the bundled self-contained shim to the per-user location and register it
         // with the user's Claude clients once (Option A — see install/SEAMLESS_INSTALL.md). Run off the UI
         // thread so Revit startup is never delayed by the file copy; the helper never throws.
         System.Threading.Tasks.Task.Run(Core.McpRegistration.EnsureBundledShimAndAutoRegister);
+
+        // Claude Assist is a persisted toggle: when it's ON, the bridge must come up with Revit or the
+        // Settings panel would show a dead bridge after every restart. Silent, loopback-only, token-gated.
+        var settings = Core.TransomSettings.Load();
+        if (settings.ClaudeAssistEnabled)
+            Core.BridgeRuntime.Start(settings.BridgeSelfHostPort);
     }
 
     private void CreateRibbon()
@@ -42,44 +53,13 @@ public class Application : ExternalApplication
             .SetLargeImage("/Transom;component/Resources/Icons/Help32.png")
             .SetToolTip("Transom help & support — how to use it, report an issue, and documentation.");
 
-        // Claude Assist — its own ribbon group. #107: two buttons — "Set up Claude" (one-click registration of
-        // BOTH MCP servers) and the runtime "Claude Bridge" toggle — plus Settings. The action buttons grey out
-        // when the Claude app isn't running (Revit re-checks availability on UI context changes); Settings stays
-        // enabled so you can configure Claude mode / bridge port before Claude is up.
-        var claudePanel = Application.CreatePanel("Claude Assist", "Transom");
-
-        var claudeAvail = typeof(ClaudeAvailability).FullName;
-
-        // #107: ONE "Set up Claude" button replaces the separate "Register with Claude" + "Claude UI Assist"
-        // buttons — it registers BOTH the data bridge (transom) AND UI-Assist (transom-ui-assist) in one click
-        // and shows the restart notice once. (Old RegisterBridgeCommand / UiAssistSetupCommand are no longer
-        // on the ribbon; SetupClaudeCommand calls the same registration paths.)
-        var setupBtn = claudePanel.AddPushButton<SetupClaudeCommand>("Set up\nClaude");
-        setupBtn.SetImage("/Transom;component/Resources/Icons/Register16.png")
-            .SetLargeImage("/Transom;component/Resources/Icons/Register32.png")
-            .SetToolTip("Set up Claude (one-time, per-user, no admin): registers Transom's bundled MCP servers with " +
-                        "Claude Desktop / Claude Code — the data bridge (read schedules, write parameters incl. group " +
-                        "members) AND UI-Assist (let Claude drive Revit UI commands with no API, e.g. Edit Group). " +
-                        "Run once after install, or after changing the bridge port. Restart Claude afterward.  Claude must be running to use this.");
-        setupBtn.AvailabilityClassName = claudeAvail;
-
-        var bridgeBtn = claudePanel.AddPushButton<BridgeToggleCommand>("Claude\nBridge");
-        bridgeBtn.SetImage("/Transom;component/Resources/Icons/Bridge16.png")
-            .SetLargeImage("/Transom;component/Resources/Icons/Bridge32.png")
-            .SetToolTip("Start/stop the admin-free Claude-assist bridge (loopback HTTP on 127.0.0.1) so Claude can read schedules and write parameters back — including group members.  Claude must be running to use this.");
-        bridgeBtn.AvailabilityClassName = claudeAvail;
-
-        // Read-only status check — deliberately ALWAYS enabled (unlike the two action buttons): when Claude
-        // isn't running or setup is half-done, this is exactly the button that tells you what's missing.
-        claudePanel.AddPushButton<BridgeStatusCommand>("Bridge\nStatus")
-            .SetImage("/Transom;component/Resources/Icons/Bridge16.png")
-            .SetLargeImage("/Transom;component/Resources/Icons/Bridge32.png")
-            .SetToolTip("Check every layer Claude-assist depends on — bridge on/off + port, session token, deployed MCP shim, and Claude registration — and see what (if anything) still needs doing. Read-only; always available.");
-
-        claudePanel.AddPushButton<SettingsCommand>("Settings")
+        // Claude consolidation: the old "Claude Assist" ribbon group (Set up Claude / Claude Bridge / Bridge
+        // Status) is retired — setup, the on/off switch, and the status checklist all live on the Settings tab
+        // now (see docs/design-notes/claude-ui-consolidation.md). Settings is the one remaining entry point.
+        panel.AddPushButton<SettingsCommand>("Settings")
             .SetImage("/Transom;component/Resources/Icons/Settings16.png")
             .SetLargeImage("/Transom;component/Resources/Icons/Settings32.png")
-            .SetToolTip("Open Transom Settings — the Settings tab of Schedule Hub (Claude mode, bridge port, exchange folder, and more). Always available.");
+            .SetToolTip("Open Transom Settings — turn Claude Assist on/off and see its status, plus the exchange folder, bridge port, and preferences. Always available.");
 
         // Revision Tools — its own ribbon group.
         var revisionPanel = Application.CreatePanel("Revision Tools", "Transom");

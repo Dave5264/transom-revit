@@ -21,6 +21,11 @@ public sealed class TransomSettings
     /// first-run registration of the bundled shim with Claude, and re-registration when the port changes.</summary>
     public int McpRegisteredPort { get; set; }
 
+    /// <summary>Master Claude-Assist switch (Settings toggle). While true the bridge auto-starts with Revit,
+    /// exports stage to the exchange folder, and grouped built-in edits may route to the staged Claude path.
+    /// Replaces the old unpersisted Off/Verify/Assist "Claude mode" (true = the old Assist).</summary>
+    public bool ClaudeAssistEnabled { get; set; }
+
     private static string FilePath =>
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Transom", "settings.json");
 
