@@ -66,7 +66,7 @@ public class RevisionNarrativeCommand : ExternalCommand
 
         try
         {
-            RevisionNarrativeDocxWriter.Write(data, sdlg.FileName, templatePath);
+            OfficeIsolation.Engine.WriteRevisionNarrative(data, sdlg.FileName, templatePath);
         }
         catch (System.IO.IOException)
         {

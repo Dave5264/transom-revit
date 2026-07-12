@@ -7,8 +7,9 @@ using NPOI.HSSF.UserModel;
 using NPOI.SS.UserModel;
 using NPOI.SS.Util;
 using NPOI.XSSF.UserModel;
+using Transom.Core;
 
-namespace Transom.Core;
+namespace Transom.Office;
 
 /// <summary>
 ///     Writes one or more <see cref="ScheduleTable"/>s to .xlsx (XSSF), legacy .xls (HSSF), or .csv.

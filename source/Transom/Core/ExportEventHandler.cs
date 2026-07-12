@@ -76,14 +76,14 @@ public sealed class ExportEventHandler : IExternalEventHandler
             {
                 Directory.CreateDirectory(ExchangeFolder);
                 var staged = Path.Combine(ExchangeFolder, Path.GetFileName(OutputPath));
-                new ExcelWriter().WriteMany(tables, staged);
+                OfficeIsolation.Engine.WriteWorkbooks(tables, staged);
                 RunLog.WriteExport(ExchangeFolder, tables, staged);
                 OnStaged(staged);
                 ReportStatus($"Staged {okCount} schedule(s) to the exchange folder. Verify with Claude, then Finalize." + failNote);
             }
             else
             {
-                new ExcelWriter().WriteMany(tables, OutputPath);
+                OfficeIsolation.Engine.WriteWorkbooks(tables, OutputPath);
                 ReportStatus($"Exported {okCount} schedule(s) ({elems} element rows) to {OutputPath}" + failNote);
             }
         }

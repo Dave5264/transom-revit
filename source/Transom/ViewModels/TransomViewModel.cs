@@ -549,7 +549,7 @@ public sealed partial class TransomViewModel : ObservableObject
         try
         {
             // cowork_meta-only read — tiny, no ReadRows, no Revit API; safe synchronously on the UI thread.
-            names = new ExcelReader().ReadSheetNames(WorkbookPath);
+            names = OfficeIsolation.Engine.ReadSheetNames(WorkbookPath);
         }
         catch (Exception ex)
         {

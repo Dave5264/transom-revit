@@ -92,7 +92,7 @@ public static class RunResultsWriter
 
             var outPath = OutputPath(sourceImportPath);
             Directory.CreateDirectory(Path.GetDirectoryName(outPath)!);
-            new ExcelWriter().WriteMany(tables, outPath, outcomes, attempted);
+            OfficeIsolation.Engine.WriteWorkbooks(tables, outPath, outcomes, attempted);
             return outPath;
         }
         catch

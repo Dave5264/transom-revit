@@ -1,0 +1,82 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <!-- The ONLY project allowed to reference NPOI (and its closure: SharpZipLib, BouncyCastle, MathNet,
+             ImageSharp, …). Transom.dll loads this assembly into a dedicated AssemblyLoadContext
+             (Core/OfficeIsolation.cs) and talks to it through Core/IOfficeEngine.cs, so no NPOI-family bind
+             ever happens in Revit's shared default load context — where another add-in shipping a different
+             version would win the bind (FileLoadException 0x80131621, load-order dependent; the same failure
+             pyRevit's Roslyn 4.10 caused before Transom.Scripting was isolated).
+             UNLIKE Transom.Scripting, this project DOES reference Transom.csproj: the engine trades in
+             Transom-defined DTOs (ScheduleTable, ImportWorkbook, …). That is safe because the isolated
+             context delegates Transom*/RevitAPI*/framework binds back to the default context — but it means
+             Transom.csproj must NEVER reference this project (circular, and a compile-time typeref would drag
+             the NPOI closure into the default context). Build THIS project per config: it builds Transom
+             first, then the CopyIntoTransom target below places the payload. -->
+        <!-- ONE TFM per configuration (unlike Transom.Scripting's TargetFrameworks pair): the ProjectReference
+             to Transom means each leg must find a compatible Transom TFM, and under any given configuration
+             Transom offers exactly one (R25/R26 = net8.0-windows, R27 = net10.0-windows) — a second leg would
+             fail restore (NU1201). The -windows suffix is required for the same reason. -->
+        <TargetFramework>net8.0-windows</TargetFramework>
+        <TargetFramework Condition="$(Configuration.EndsWith('R27'))">net10.0-windows</TargetFramework>
+        <!-- Mirror Transom's Revit-per-config names. -->
+        <Configurations>Debug;Release;Debug.R25;Debug.R26;Debug.R27;Release.R25;Release.R26;Release.R27</Configurations>
+        <Optimize Condition="$(Configuration.StartsWith('Release'))">true</Optimize>
+        <Nullable>enable</Nullable>
+        <LangVersion>latest</LangVersion>
+        <!-- Emits Transom.Office.deps.json (the NPOI closure map) and copies package assemblies to the
+             output folder — OfficeIsolation's AssemblyDependencyResolver uses the deps.json when present
+             (prefix matching is the fallback). -->
+        <EnableDynamicLoading>true</EnableDynamicLoading>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <!-- Excel engine: xlsx (XSSF) + legacy xls (HSSF) + docx (XWPF). Pinned per plan. -->
+        <PackageReference Include="NPOI" Version="2.7.1"/>
+        <!-- Override NPOI's transitive SixLabors.ImageSharp 2.1.8 (known CVEs) with the patched 2.1.x.
+             2.1.10 clears both high-severity CVEs + one moderate. The last moderate (GHSA-rxmq-m78w-7wmc)
+             is fixed only in ImageSharp 3.x, which NPOI 2.7.1 is not compatible with; it is an image-decode
+             path Transom never invokes (no image cells), so it is suppressed individually below.
+             Revisit when NPOI targets ImageSharp 3.x. -->
+        <PackageReference Include="SixLabors.ImageSharp" Version="2.1.10"/>
+    </ItemGroup>
+
+    <ItemGroup>
+        <!-- See SixLabors.ImageSharp note above: unused image-decode path, fixed only in incompatible 3.x. -->
+        <NuGetAuditSuppress Include="https://github.com/advisories/GHSA-rxmq-m78w-7wmc"/>
+    </ItemGroup>
+
+    <ItemGroup>
+        <!-- Compile against Transom's DTOs/interface; never copy Transom.dll into our output (the one true
+             copy lives in the default context). -->
+        <ProjectReference Include="..\Transom\Transom.csproj" Private="false"/>
+    </ItemGroup>
+
+    <PropertyGroup>
+        <RevitYear>2025</RevitYear>
+        <RevitYear Condition="$(Configuration.EndsWith('R26'))">2026</RevitYear>
+        <RevitYear Condition="$(Configuration.EndsWith('R27'))">2027</RevitYear>
+    </PropertyGroup>
+
+    <!-- Place the engine + its NPOI closure next to Transom.dll everywhere Transom lands: the build output,
+         the installer's publish payload, and the local dev deploy (Revit Addins). Runs after OUR build, which
+         (via the ProjectReference) runs after Transom's — so all three destinations already exist. Transom
+         itself no longer references NPOI, so these copies are the ONLY way the closure ships. -->
+    <Target Name="CopyIntoTransom" AfterTargets="Build">
+        <ItemGroup>
+            <!-- Exclude anything owned by the default context: Transom.dll must never be duplicated (two
+                 identities), and RevitAPI*/host assemblies belong to Revit. -->
+            <OfficePayload Include="$(OutDir)*.dll;$(OutDir)Transom.Office.deps.json;$(OutDir)Transom.Office.pdb"
+                           Exclude="$(OutDir)Transom.dll;$(OutDir)RevitAPI*.dll;$(OutDir)AdWindows.dll;$(OutDir)UIFramework.dll"/>
+        </ItemGroup>
+        <Copy SourceFiles="@(OfficePayload)" DestinationFolder="..\Transom\bin\$(Configuration)\"
+              Condition="Exists('..\Transom\bin\$(Configuration)\')" SkipUnchangedFiles="true"/>
+        <Copy SourceFiles="@(OfficePayload)" DestinationFolder="..\Transom\bin\$(Configuration)\publish\Transom\"
+              Condition="Exists('..\Transom\bin\$(Configuration)\publish\Transom\')" SkipUnchangedFiles="true"/>
+        <Copy SourceFiles="@(OfficePayload)"
+              DestinationFolder="$([System.Environment]::GetFolderPath(SpecialFolder.ApplicationData))\Autodesk\Revit\Addins\$(RevitYear)\Transom\"
+              Condition="Exists('$([System.Environment]::GetFolderPath(SpecialFolder.ApplicationData))\Autodesk\Revit\Addins\$(RevitYear)\Transom\')"
+              SkipUnchangedFiles="true"/>
+    </Target>
+
+</Project>

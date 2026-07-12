@@ -3,8 +3,9 @@ using System.IO;
 using System.Linq;
 using NPOI.SS.UserModel;
 using NPOI.XSSF.UserModel;
+using Transom.Core;
 
-namespace Transom.Core;
+namespace Transom.Office;
 
 /// <summary>
 ///     Writes a colour-coded import report: per schedule, the element rows with flagged cells filled

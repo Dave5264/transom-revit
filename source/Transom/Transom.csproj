@@ -18,14 +18,15 @@
         <PackageReference Include="Nice3point.Revit.Api.RevitAPI" Version="$(RevitVersion).*"/>
         <PackageReference Include="Nice3point.Revit.Api.RevitAPIUI" Version="$(RevitVersion).*"/>
 
-        <!-- Excel engine: xlsx (XSSF) + legacy xls (HSSF). Pinned per plan; co-deployed via dynamic loading. -->
-        <PackageReference Include="NPOI" Version="2.7.1"/>
-        <!-- Override NPOI's transitive SixLabors.ImageSharp 2.1.8 (known CVEs) with the patched 2.1.x.
-             2.1.10 clears both high-severity CVEs + one moderate. The last moderate (GHSA-rxmq-m78w-7wmc)
-             is fixed only in ImageSharp 3.x, which NPOI 2.7.1 is not compatible with; it is an image-decode
-             path Transom never invokes (no image cells), so it is suppressed individually below.
-             Revisit when NPOI targets ImageSharp 3.x. -->
-        <PackageReference Include="SixLabors.ImageSharp" Version="2.1.10"/>
+        <!-- The Excel/docx engine (NPOI + closure) lives in Transom.Office.dll, loaded into a DEDICATED
+             AssemblyLoadContext at run time (Core/OfficeIsolation.cs) so the NPOI family never binds in
+             Revit's shared default context — same isolation as Transom.Scripting/Roslyn below. NO NPOI or
+             SixLabors PackageReference belongs here, and Transom source must never use an NPOI or
+             Transom.Office type directly — only Core/IOfficeEngine.cs via OfficeIsolation.Engine.
+             NOTE: there is deliberately NO ProjectReference to Transom.Office (it references US for the
+             DTOs; a reference here would be circular AND would drag the NPOI closure into the default
+             context). Build source/Transom.Office/Transom.Office.csproj per config — it builds this
+             project first, then copies the engine + closure into our output/publish/Addins folders. -->
 
         <!-- MVVM -->
         <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2"/>
@@ -43,9 +44,24 @@
         <PackageReference Include="Polyfill" Version="10.5.1" PrivateAssets="all"/>
     </ItemGroup>
     
+    <PropertyGroup>
+        <!-- Scripting builds plain net8.0 (R25/R26) / net10.0 (R27) — it must not carry the -windows7.0
+             suffix our own TFM has, so derive its output folder from the configuration, not TargetFramework. -->
+        <ScriptingTfm>net8.0</ScriptingTfm>
+        <ScriptingTfm Condition="$(Configuration.EndsWith('R27'))">net10.0</ScriptingTfm>
+        <ScriptingDepsJson>..\Transom.Scripting\bin\$(Configuration)\$(ScriptingTfm)\Transom.Scripting.deps.json</ScriptingDepsJson>
+    </PropertyGroup>
     <ItemGroup>
-        <!-- See SixLabors.ImageSharp note above: unused image-decode path, fixed only in incompatible 3.x. -->
-        <NuGetAuditSuppress Include="https://github.com/advisories/GHSA-rxmq-m78w-7wmc"/>
+        <!-- Ship the Scripting satellite's deps.json so ScriptIsolation's AssemblyDependencyResolver arm
+             works (it was silently absent before 2026-07-12; prefix matching carried everything). Guarded by
+             Exists() like the ClickHelper payload: present from the second build of a fresh clone onward.
+             Transom.Office's equivalent arrives via its own CopyIntoTransom post-build target. -->
+        <None Include="$(ScriptingDepsJson)"
+              Condition="Exists('$(ScriptingDepsJson)')">
+            <Link>Transom.Scripting.deps.json</Link>
+            <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+            <Visible>false</Visible>
+        </None>
     </ItemGroup>
 
     <ItemGroup>

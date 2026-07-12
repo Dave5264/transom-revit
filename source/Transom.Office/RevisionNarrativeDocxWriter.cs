@@ -6,8 +6,9 @@ using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
 using NPOI.XWPF.UserModel;
+using Transom.Core;
 
-namespace Transom.Core;
+namespace Transom.Office;
 
 /// <summary>
 ///     Renders a <see cref="RevisionNarrative.Data"/> into a .docx.

@@ -37,7 +37,7 @@ public sealed class ImportEventHandler : IExternalEventHandler
             if (doc == null) { OnError("project not found"); return; }
             if (RequestedMode == Mode.Preview)
             {
-                var wb = new ExcelReader().Read(WorkbookPath, SelectedSheetTabs);   // §16: scoped to picked tabs when set
+                var wb = OfficeIsolation.Engine.ReadWorkbook(WorkbookPath, SelectedSheetTabs);   // §16: scoped to picked tabs when set
 
                 // Apply any user-supplied fixes for previously-unparseable cells IN MEMORY only — we never write
                 // the user's workbook file. Values already in the schedule's unit format are accepted for this
@@ -58,7 +58,7 @@ public sealed class ImportEventHandler : IExternalEventHandler
                     var dir = System.IO.Path.GetDirectoryName(WorkbookPath) ?? ".";
                     var name = System.IO.Path.GetFileNameWithoutExtension(WorkbookPath);
                     var reportPath = System.IO.Path.Combine(dir, name + "_import-report.xlsx");
-                    try { DiagnosticsWriter.Write(wb, cs.Diagnostics, reportPath); cs.ReportPath = reportPath; }
+                    try { OfficeIsolation.Engine.WriteDiagnostics(wb, cs.Diagnostics, reportPath); cs.ReportPath = reportPath; }
                     catch { /* report is best-effort */ }
                 }
                 if (WriteRunLog) RunLog.WriteImport(ExchangeFolder, WorkbookPath, cs);
