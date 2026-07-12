@@ -186,7 +186,7 @@
                 <!-- REVISION NARRATIVE -->
                 <TextBlock Style="{StaticResource H}" Text="Revision Narrative (Word)" />
                 <TextBlock Style="{StaticResource P}">
-                    The <Run Text="Revision Narrative" FontWeight="SemiBold" /> button (Revision panel) turns a revision's clouds into a firm-letterhead <Run Text=".docx" FontWeight="SemiBold" /> — reading each cloud's <Run Text="Comments" FontWeight="SemiBold" />, grouping by discipline and sheet, and numbering the items per sheet. It's stand-alone and read-only: it never changes the model and needs no Claude connection.
+                    The <Run Text="Revision Narrative" FontWeight="SemiBold" /> button (Transom Tools group) turns a revision's clouds into a firm-letterhead <Run Text=".docx" FontWeight="SemiBold" /> — reading each cloud's <Run Text="Comments" FontWeight="SemiBold" />, grouping by discipline and sheet, and numbering the items per sheet. It's stand-alone and read-only: it never changes the model and needs no Claude connection.
                 </TextBlock>
                 <TextBlock Style="{StaticResource P}">
                     <Run Text="1." FontWeight="SemiBold" /> Put your notes in each revision cloud's <Run Text="Comments" FontWeight="SemiBold" /> field (clouds with blank Comments are listed as a warning, not dropped). Click <Run Text="Revision Narrative" FontWeight="SemiBold" />.
@@ -205,13 +205,13 @@
                 </TextBlock>
 
                 <!-- RIBBON REFERENCE -->
-                <TextBlock Style="{StaticResource H}" Text="Ribbon buttons" />
+                <TextBlock Style="{StaticResource H}" Text="Ribbon buttons (Transom Tools group)" />
                 <TextBlock Style="{StaticResource P}">
                     • <Run Text="Schedule Hub" FontWeight="SemiBold" /> — open the Export / Import dialog.
+                    &#x0a;• <Run Text="Revision Narrative" FontWeight="SemiBold" /> — generate a revision narrative (.docx) from a revision's clouds.
                     &#x0a;• <Run Text="Check for Updates" FontWeight="SemiBold" /> — install the latest release in place (per-user, no admin).
                     &#x0a;• <Run Text="Help" FontWeight="SemiBold" /> — this window.
                     &#x0a;• <Run Text="Settings" FontWeight="SemiBold" /> — the Settings tab: Claude Assist on/off + status, exchange folder, bridge port, preferences.
-                    &#x0a;• <Run Text="Revision Narrative" FontWeight="SemiBold" /> — generate a revision narrative (.docx) from a revision's clouds.
                 </TextBlock>
 
                 <!-- TROUBLESHOOTING -->

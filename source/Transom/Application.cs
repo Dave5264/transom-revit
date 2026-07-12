@@ -32,14 +32,19 @@ public class Application : ExternalApplication
 
     private void CreateRibbon()
     {
-        // NOTE: final placement is the built-in Add-Ins tab per SPEC; confirm the tab target
-        // when first loaded in Revit (milestone 1). Using a named panel for now.
-        var panel = Application.CreatePanel("Schedule Tools", "Transom");
+        // One combined "Transom Tools" group (was "Schedule Tools" + a separate "Revision Tools",
+        // merged 2026-07-12 per user request): the two tools first, utilities after the separator.
+        var panel = Application.CreatePanel("Transom Tools", "Transom");
 
         panel.AddPushButton<StartupCommand>("Schedule\nHub")
             .SetImage("/Transom;component/Resources/Icons/RibbonIcon16.png")
             .SetLargeImage("/Transom;component/Resources/Icons/RibbonIcon32.png")
             .SetToolTip("Export schedules to spreadsheets with full fidelity, and import edits back into the model.");
+
+        panel.AddPushButton<RevisionNarrativeCommand>("Revision\nNarrative")
+            .SetImage("/Transom;component/Resources/Icons/RevisionNarrative16.png")
+            .SetLargeImage("/Transom;component/Resources/Icons/RevisionNarrative32.png")
+            .SetToolTip("Generate a Revision Narrative (.docx) from a selected revision's clouds — reads each cloud's Comments, groups by discipline and sheet, numbers the items per sheet, and writes the firm letterhead narrative (start from a previous narrative to keep header/footer/fonts). Stand-alone; no Claude required.");
 
         panel.AddSeparator();
 
@@ -60,12 +65,5 @@ public class Application : ExternalApplication
             .SetImage("/Transom;component/Resources/Icons/Settings16.png")
             .SetLargeImage("/Transom;component/Resources/Icons/Settings32.png")
             .SetToolTip("Open Transom Settings — turn Claude Assist on/off and see its status, plus the exchange folder, bridge port, and preferences. Always available.");
-
-        // Revision Tools — its own ribbon group.
-        var revisionPanel = Application.CreatePanel("Revision Tools", "Transom");
-        revisionPanel.AddPushButton<RevisionNarrativeCommand>("Revision\nNarrative")
-            .SetImage("/Transom;component/Resources/Icons/RevisionNarrative16.png")
-            .SetLargeImage("/Transom;component/Resources/Icons/RevisionNarrative32.png")
-            .SetToolTip("Generate a Revision Narrative (.docx) from a selected revision's clouds — reads each cloud's Comments, groups by discipline and sheet, numbers the items per sheet, and writes the firm letterhead narrative (start from a previous narrative to keep header/footer/fonts). Stand-alone; no Claude required.");
     }
 }
