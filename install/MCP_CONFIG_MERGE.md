@@ -1,6 +1,6 @@
-# Transom — MCP config merge (admin-free shim registration)
+﻿# Transom â€” MCP config merge (admin-free shim registration)
 
-Design doc for **F4** of `docs/BUNDLED_MCP_PLAN.md`. Covers how the bundled
+Design doc for **F4** of `BUNDLED_MCP_PLAN.md (retired 2026-07-13; archived locally)`. Covers how the bundled
 `Transom.McpShim.exe` (installed per-user by `install/BundledMcp.wxs` into
 `%LocalAppData%\Transom\mcp\`) gets registered with the user's MCP client(s)
 **without administrator rights**, idempotently, without clobbering other servers.
@@ -26,7 +26,7 @@ machine-level / `Program Files` / `HKLM` config.
 > and project-scoped `.mcp.json`. We deliberately write only the **user scope**
 > (`~/.claude.json` `mcpServers`) so the shim is available in every project without
 > per-project edits. If the user prefers project scope they can copy the same
-> entry into a repo `.mcp.json` by hand. Both files live under the user profile —
+> entry into a repo `.mcp.json` by hand. Both files live under the user profile â€”
 > no elevation.
 
 ### 1b. The exact entry to merge
@@ -49,7 +49,7 @@ loopback port (constraint #2; default 48810, kept in sync with
 ```
 
 Notes:
-- In real JSON the backslashes in `command` must be escaped (`\\`) — shown above.
+- In real JSON the backslashes in `command` must be escaped (`\\`) â€” shown above.
 - We add **only** the `transom` key under the existing `mcpServers` object. Every
   other server the user already has is left byte-for-byte intact.
 - No `env`, no `cwd` needed: the shim is self-contained and resolves its bridge
@@ -65,7 +65,7 @@ times (first-run, every-run, or from a ribbon button).
 ```
 for each configPath in [claude_desktop_config.json, ~/.claude.json]:
     if not exists(parentDir(configPath)):       # e.g. %APPDATA%\Claude not created yet
-        skip this file        # client not installed → nothing to register for it
+        skip this file        # client not installed â†’ nothing to register for it
     if not exists(configPath):
         root = {}             # create a fresh, minimal config
     else:
@@ -73,7 +73,7 @@ for each configPath in [claude_desktop_config.json, ~/.claude.json]:
         if text is empty/whitespace: root = {}
         else:
             try: root = parseJson(text)
-            except: BACK OFF — do NOT overwrite; log + surface to user, return
+            except: BACK OFF â€” do NOT overwrite; log + surface to user, return
                     (never destroy a config we cannot parse)
 
     if "mcpServers" not in root or root["mcpServers"] is not an object:
@@ -83,7 +83,7 @@ for each configPath in [claude_desktop_config.json, ~/.claude.json]:
 
     existing = root["mcpServers"].get("transom")
     if existing == desired:
-        continue              # already correct → no write, fully idempotent
+        continue              # already correct â†’ no write, fully idempotent
     # update-or-insert ONLY our key; all sibling servers untouched
     root["mcpServers"]["transom"] = desired
 
@@ -100,7 +100,7 @@ Key properties:
   servers and all unrelated top-level keys (e.g. `globalShortcut`, Claude Code
   `projects`, `numStartups`) are round-tripped untouched.
 - **Fail-safe on corrupt JSON:** if the existing file does not parse, we abort
-  rather than overwrite — we never turn a user's hand-edited config into rubble.
+  rather than overwrite â€” we never turn a user's hand-edited config into rubble.
 - **Atomic:** write temp + replace, so a crash mid-write can't truncate the file.
 - **One-time backup:** `*.transom.bak` written the first time we modify, so the
   user can revert.
@@ -112,33 +112,33 @@ mcpServers.transom` only if it points at our shim path, write back atomically.
 
 ## 3. Two implementation options
 
-### Option A — per-user first-run step inside the add-in (RECOMMENDED)
+### Option A â€” per-user first-run step inside the add-in (RECOMMENDED)
 
-The add-in (already running as the user, in `%AppData%\…\Revit\Addins`) performs
+The add-in (already running as the user, in `%AppData%\â€¦\Revit\Addins`) performs
 the merge on first launch after install, and exposes a **ribbon / settings
 button** ("Register MCP bridge with Claude") that re-runs the same idempotent
 merge on demand.
 
 - **Pros**
-  - Runs in the **user's own session** → inherently no elevation, correct
+  - Runs in the **user's own session** â†’ inherently no elevation, correct
     `%APPDATA%`/`%USERPROFILE%` for the actual user (an MSI custom action may run
     in a different/again user context and resolve the wrong profile).
-  - Trivially **idempotent and re-runnable** — handles the case where the user
+  - Trivially **idempotent and re-runnable** â€” handles the case where the user
     installs Claude Desktop *after* Transom, or resets their config, or changes
     the port in `TransomSettings` (we just re-merge with the new port).
   - No MSI custom-action sequencing, no `Impersonate` flags, no rollback custom
     action to author. Pure managed code reusing the add-in's JSON stack.
-  - Can show clear UI ("Claude Desktop not found — install it then click here").
+  - Can show clear UI ("Claude Desktop not found â€” install it then click here").
   - Uninstall story is clean: a "Disable bridge" button removes the entry; even
     if the user just uninstalls the MSI, a stale entry only points at a missing
-    exe (the client silently fails that one server — harmless).
+    exe (the client silently fails that one server â€” harmless).
 - **Cons**
   - Registration happens at first add-in launch, not at MSI finish. (Acceptable:
     the shim is only useful once Revit + Transom are running anyway.)
-  - If the user never launches Revit, registration never happens (also fine —
+  - If the user never launches Revit, registration never happens (also fine â€”
     nothing to bridge to).
 
-### Option B — non-elevated WiX custom action
+### Option B â€” non-elevated WiX custom action
 
 A deferred-but-**not**-elevated (`Impersonate="yes"`, no `Elevated`) custom
 action in the SingleUser MSI runs the merge at install time.
@@ -149,16 +149,16 @@ action in the SingleUser MSI runs the merge at install time.
   - Must run impersonated to hit the right `%APPDATA%`; perUser MSIs already run
     unelevated, but custom-action context bugs are a classic footgun.
   - Harder to make robust/idempotent and to re-run when the user installs Claude
-    later or changes the port — you'd need a separate repair/maintenance path.
+    later or changes the port â€” you'd need a separate repair/maintenance path.
   - Adds a binary/managed custom action to the WixSharp build and a rollback
-    action to undo on failed install — more surface, more to test.
+    action to undo on failed install â€” more surface, more to test.
   - Worse UX for "Claude not installed yet" (can't prompt meaningfully at MSI
     time).
 
 ### Recommendation
 
 **Option A.** Do the merge as a per-user first-run step in the add-in plus a
-ribbon/settings button, using the shared idempotent algorithm in §2. Keep the MSI
+ribbon/settings button, using the shared idempotent algorithm in Â§2. Keep the MSI
 (`BundledMcp.wxs`) responsible only for *placing* the shim and recording its path
 in HKCU; let the add-in own *registration*. This keeps the installer dead-simple
 and admin-free, and makes registration resilient to install-order and port
@@ -169,15 +169,15 @@ code, but is not required.)
 
 ## 4. Why this is admin-free (maps to the three constraints)
 
-`docs/BUNDLED_MCP_PLAN.md` defines three load-bearing constraints. Each step here
+`BUNDLED_MCP_PLAN.md (retired 2026-07-13; archived locally)` defines three load-bearing constraints. Each step here
 honors them:
 
 1. **Per-user install only.** `BundledMcp.wxs` puts the shim under
-   `LocalAppDataFolder` (`%LocalAppData%\Transom\mcp\`) with an **HKCU** keypath —
+   `LocalAppDataFolder` (`%LocalAppData%\Transom\mcp\`) with an **HKCU** keypath â€”
    no `ProgramFilesFolder`, no `HKLM`, no service. The whole MSI is `perUser`
-   (`Installer.cs` → `BuildSingleUserMsi`, `Scope = InstallScope.perUser`), so
+   (`Installer.cs` â†’ `BuildSingleUserMsi`, `Scope = InstallScope.perUser`), so
    Windows installs it with **no UAC prompt**. The config files we edit
-   (`%APPDATA%\Claude\…`, `~/.claude.json`) are inside the user's own profile —
+   (`%APPDATA%\Claude\â€¦`, `~/.claude.json`) are inside the user's own profile â€”
    writable without elevation.
 2. **Loopback TcpListener on a high port.** The shim's `--port 48810` targets
    `127.0.0.1:48810`, the in-Revit `BridgeServer`'s `TcpListener` on
@@ -187,23 +187,23 @@ honors them:
    registration opens a port or touches the firewall.
 3. **Self-contained shim.** The exe is published single-file / self-contained, so
    registration points the MCP client at one standalone binary with **no "install
-   .NET/Node" step** — no runtime installer (which would need admin).
+   .NET/Node" step** â€” no runtime installer (which would need admin).
 
 **SmartScreen note (not elevation):** the shim is currently unsigned, so on first
 launch Windows SmartScreen may show *"Windows protected your PC"* with a *More
-info → Run anyway* link. That is a **single click**, not a UAC / admin
+info â†’ Run anyway* link. That is a **single click**, not a UAC / admin
 elevation. It can be removed entirely later by code-signing the exe (out of scope
 for this pass per the plan). It does not block the admin-free guarantee.
 
 ---
 
-## 5. Verification checklist — confirm NO UAC prompt anywhere
+## 5. Verification checklist â€” confirm NO UAC prompt anywhere
 
-Walk the full path **download → install → launch → use** on a **standard
+Walk the full path **download â†’ install â†’ launch â†’ use** on a **standard
 (non-admin) Windows user account** and confirm a UAC prompt never appears:
 
 - [ ] **Download.** Fetch `Transom-<v>-SingleUser.msi` from the GitHub release.
-      Browser may warn about an unsigned download → that is a click, not UAC.
+      Browser may warn about an unsigned download â†’ that is a click, not UAC.
 - [ ] **Install.** Double-click the MSI. Confirm:
       - [ ] No UAC shield / consent dialog appears.
       - [ ] Add-in lands in `%AppData%\Autodesk\Revit\Addins\<ver>\` (existing).
@@ -212,19 +212,19 @@ Walk the full path **download → install → launch → use** on a **standard
       - [ ] Verify perUser: `msiexec` log shows `MSIINSTALLPERUSER=1`,
             `ALLUSERS` empty; the entry appears in *Apps & features* for the
             current user only.
-- [ ] **Register (Option A).** Launch Revit → Transom on ribbon → click
+- [ ] **Register (Option A).** Launch Revit â†’ Transom on ribbon â†’ click
       "Register MCP bridge with Claude" (or confirm first-run auto-merge):
       - [ ] No UAC prompt.
       - [ ] `%APPDATA%\Claude\claude_desktop_config.json` now contains a
             `mcpServers.transom` entry with the correct shim path + `--port`.
       - [ ] Any pre-existing servers in that file are still present and unchanged.
-      - [ ] Re-click the button → file is byte-identical (idempotent no-op).
+      - [ ] Re-click the button â†’ file is byte-identical (idempotent no-op).
       - [ ] Repeat for `~/.claude.json` if Claude Code is installed.
       - [ ] If a Claude config is hand-corrupted, the merge aborts and warns
             instead of overwriting.
 - [ ] **Launch shim.** Start Claude Desktop / Claude Code; it spawns
       `Transom.McpShim.exe`:
-      - [ ] At most a SmartScreen *Run anyway* click (unsigned) — **no UAC**.
+      - [ ] At most a SmartScreen *Run anyway* click (unsigned) â€” **no UAC**.
       - [ ] `tools/list` shows: status, list_schedules, read_schedule,
             set_parameter, set_parameters.
 - [ ] **Use.** In Revit, toggle the bridge ON (ribbon). Confirm:
@@ -232,7 +232,7 @@ Walk the full path **download → install → launch → use** on a **standard
             `TcpListener` on `127.0.0.1:48810` (loopback + high port).
       - [ ] A Claude `tools/call` (e.g. `status`) round-trips and returns
             `{"ok":true,...}` with no prompt of any kind.
-- [ ] **Uninstall.** *Apps & features → Transom → Uninstall*:
+- [ ] **Uninstall.** *Apps & features â†’ Transom â†’ Uninstall*:
       - [ ] No UAC prompt; shim folder removed.
       - [ ] (If implemented) "Disable bridge" removed the `transom` config entry,
             leaving other servers intact; otherwise the stale entry harmlessly

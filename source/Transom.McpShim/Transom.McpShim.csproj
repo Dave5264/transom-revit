@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
@@ -10,7 +10,7 @@
 
     <!-- Self-contained, single-file publish: load-bearing.
          The shim must run with NO admin rights and NO separate .NET runtime
-         install (it bundles its own runtime). See docs/BUNDLED_MCP_PLAN.md constraint 3. -->
+         install (it bundles its own runtime). See BUNDLED_MCP_PLAN.md (retired 2026-07-13; archived locally) constraint 3. -->
     <PublishSingleFile>true</PublishSingleFile>
     <SelfContained>true</SelfContained>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
