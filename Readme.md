@@ -194,5 +194,5 @@ all-versions build run through the `build/` ModularPipelines project (`cd build;
 | `source/Transom/` | the add-in (commands, views, view-models, core logic) |
 | `build/`, `install/` | ModularPipelines build + WiX installer |
 | `branding/` | ribbon icon + generator |
-| `docs/` | planning + design docs: `SPEC.md`, `BRIEF.md`, `IMPLEMENTATION_PLAN.md`, the `AUDIT*.md` viability audits, `mockup.html`, plus `design-notes/` |
+| `docs/` | planning + design docs: `SPEC.md`, `IMPLEMENTATION_PLAN.md`, the `AUDIT*.md` viability audits, plus `design-notes/` (shipped-fix rationale + consolidated Revit-API research notes) |
 | `tools/` | standalone dev tools (`transom_verify.py`) |

@@ -17,3 +17,12 @@
 .claude-exchange/
 /exports/
 run-log.json
+
+#IDE run configs + UI preview scratch (retired from the repo 2026-07-13)
+/.run/
+/.uipreview/
+
+#Local-only knowledge/test folders — keep off GitHub
+/research-kb/
+/clickhelper-test/
+/_hangrepro/
