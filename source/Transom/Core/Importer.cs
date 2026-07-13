@@ -156,6 +156,18 @@ public sealed class ProposedChange : System.ComponentModel.INotifyPropertyChange
     /// <c>ApplyNewParam</c> as the created parameter's name instead of the hardcoded "&lt;field&gt; (Transom)"
     /// default. Empty ⇒ use the default suggestion.</summary>
     public string NewParamName { get; set; } = "";
+
+    /// <summary>Option-2 extras (user request 2026-07-12), stamped per column by the VM when the user commits an
+    /// option 2a/2b: OTHER schedules (uids) the user ticked to have their column replaced too. ApplyNewParam
+    /// processes them like source schedules with no edits (carry-forward only) and repoints their field.</summary>
+    public List<string> Option2ExtraScheduleUids = new();
+
+    /// <summary>What ApplyNewParam does with the OLD parameter's values after the conversion (chosen in the
+    /// <c>Option2OldValuesDialog</c>). Leave = untouched (default). Clear/SetValue run AFTER all carry-forward
+    /// reads, and never touch instances whose original values are the §10 divergent-blank recovery copy.</summary>
+    public OldValueDisposition Option2OldValues = OldValueDisposition.Leave;
+    /// <summary>The uniform value written into the old parameter when <see cref="Option2OldValues"/> is SetValue.</summary>
+    public string Option2OldValueText = "";
     public string OldValue { get; set; } = "";
 
     /// <summary>The value shown in the preview's New cell. MUST notify — <c>ConfirmRow</c> updates it IN PLACE when
@@ -339,6 +351,14 @@ public sealed class ChangeSet
 
     /// <summary>The (ParameterId, Field) key used to identify one resolvable group-conflict column.</summary>
     public static string ColumnKey(int parameterId, string field) => parameterId + "|" + field;
+
+    /// <summary>Option-2 scan (user request 2026-07-12): per resolvable column (<see cref="ColumnKey"/>), the OTHER
+    /// project schedules — not sources of this import — that display the column's source parameter as a field.
+    /// Computed at BUILD time (<c>ComputeOption2OtherSchedules</c>, API thread) because the Apply-time dialogs run
+    /// on the UI thread with no Document. Offered as a checklist when the user picks option 2a/2b so those
+    /// schedules' columns can be replaced in the same conversion. Only schedules whose category can carry a bound
+    /// shared param are listed (multi-category and unbindable schedules are excluded — they couldn't be repointed).</summary>
+    public Dictionary<string, List<Option2ScheduleRef>> Option2OtherSchedules = new();
 
     /// <summary>Names of the schedules in this import (workbook sheets). Used by option 2 to add the new
     /// type-parameter field to the affected schedules.</summary>
@@ -814,7 +834,7 @@ public sealed class Importer
                                     ch.SpecTypeId = col.SpecTypeId;
                                     ch.EditValue = cellText;     // the box starts at what the user typed; interpreted only on Confirm
                                     ch.Suggestion = canonical;   // the "interpreted as …" line shown until they confirm/re-prompt
-                                    ch.Selected = false;
+                                    ch.Selected = true;          // interpretable → ticked (will apply once confirmed); Apply is gated on confirm/discard either way
                                 }
                                 cs.Changes.Add(Mark(doc, ch, elInGroup, elGroupName));
                             }
@@ -855,6 +875,7 @@ public sealed class Importer
         cs.ImportedScheduleNames = wb.Sheets.Select(s => s.ScheduleName).Distinct().ToList();
         ComputeOption2Eligibility(doc, cs);
         ComputeOption2Mode(doc, cs);
+        ComputeOption2OtherSchedules(doc, cs);
         // Stamp geometry-driving built-in instance changes so the resolution dialog shows the right message + path
         // (Claude-Assist only; option 2 already suppressed above). Matches the export's yellow colouring.
         foreach (var ch in cs.Changes)
@@ -1188,6 +1209,77 @@ public sealed class Importer
                      : Option2Mode.AmbiguousPreferInstance;
             cs.Option2Modes[pg.Key] = mode;
         }
+    }
+
+    /// <summary>
+    ///     Option-2 scan (user request 2026-07-12): for each column that CAN be converted (has an Option2Mode),
+    ///     find every OTHER project schedule that displays the column's source parameter as a field — candidates
+    ///     for having their column replaced in the same conversion. Runs at BUILD time (API thread) because the
+    ///     Apply-time dialogs have no Document. Excluded: schedule templates, the import's own source schedules
+    ///     (they're converted regardless), and schedules whose category can't carry a bound shared parameter
+    ///     (multi-category / unresolvable — ApplyNewParam couldn't bind the new param for their elements, so
+    ///     offering them would only produce failures).
+    /// </summary>
+    private static void ComputeOption2OtherSchedules(Document doc, ChangeSet cs)
+    {
+        if (cs.Option2Modes.Count == 0) return;
+
+        // Schedules with ANY change to the column (any GroupMode) are excluded below — review finding 2026-07-13:
+        // excluding only the GROUPED-change schedules offered a same-import source schedule whose edits to this
+        // column are all ungrouped; ticking it would repoint its column to carried PRE-EDIT values while the
+        // direct pass wrote its edits onto the hidden old param (stale display, invisible edits).
+        var byKey = cs.Changes
+            .Where(c => !c.Frozen)
+            .GroupBy(c => ChangeSet.ColumnKey(c.ParameterId, c.Field))
+            .Where(g => cs.Option2Modes.ContainsKey(g.Key))
+            .ToList();
+        var sourcesByKey = byKey.ToDictionary(g => g.Key,
+            g => g.Select(c => c.SourceScheduleUid).Where(u => !string.IsNullOrEmpty(u)).ToHashSet());
+        // Parameter id per column key, read off the changes themselves (never re-parse the key string —
+        // ColumnKey owns that format).
+        var paramByKey = byKey.ToDictionary(g => g.Key, g => g.First().ParameterId);
+
+        try
+        {
+            foreach (var vs in new FilteredElementCollector(doc).OfClass(typeof(ViewSchedule)).Cast<ViewSchedule>())
+            {
+                if (vs.IsTemplate) continue;
+                ScheduleDefinition def;
+                long catId;
+                try
+                {
+                    def = vs.Definition;
+                    catId = def.CategoryId?.Value ?? -1;
+                }
+                catch { continue; }
+                // Category must exist and allow bound params, or the new shared param can't reach this
+                // schedule's elements (multi-category schedules report an invalid category id).
+                Category? cat = null;
+                try { cat = catId > 0 || catId < -1 ? Category.GetCategory(doc, new ElementId(catId)) : null; } catch { }
+                if (cat is not { AllowsBoundParameters: true }) continue;
+
+                // Which converted columns' source params does this schedule display?
+                var fieldParamIds = new HashSet<long>();
+                try
+                {
+                    int n = def.GetFieldCount();
+                    for (int i = 0; i < n; i++) fieldParamIds.Add(def.GetField(i).ParameterId.Value);
+                }
+                catch { continue; }
+
+                foreach (var kv in paramByKey)
+                {
+                    if (!fieldParamIds.Contains(kv.Value)) continue;
+                    if (sourcesByKey.TryGetValue(kv.Key, out var srcs) && srcs.Contains(vs.UniqueId)) continue;
+                    if (!cs.Option2OtherSchedules.TryGetValue(kv.Key, out var refs))
+                        cs.Option2OtherSchedules[kv.Key] = refs = new List<Option2ScheduleRef>();
+                    refs.Add(new Option2ScheduleRef { ScheduleName = vs.Name, ScheduleUid = vs.UniqueId, CategoryId = catId });
+                }
+            }
+            foreach (var refs in cs.Option2OtherSchedules.Values)
+                refs.Sort((a, b) => string.Compare(a.ScheduleName, b.ScheduleName, StringComparison.OrdinalIgnoreCase));
+        }
+        catch { /* scan is best-effort — no other-schedule offer beats a failed preview */ }
     }
 
     /// <summary>
@@ -1771,13 +1863,13 @@ public sealed class Importer
                 if (ungrouped.Count > 0)
                 {
                     var bc = BulkChange(nameEl, col, ungrouped, oldDisp, cellDisp, isString, str, dbl, isInt, iv, row.UniqueId);
-                    if (bulkNeedsConfirm) { bc.NeedsConfirm = true; bc.EnteredValue = bulkEntered; bc.SpecTypeId = col.SpecTypeId ?? ""; bc.EditValue = bulkEntered; bc.Suggestion = cellDisp; bc.Selected = false; }
+                    if (bulkNeedsConfirm) { bc.NeedsConfirm = true; bc.EnteredValue = bulkEntered; bc.SpecTypeId = col.SpecTypeId ?? ""; bc.EditValue = bulkEntered; bc.Suggestion = cellDisp; bc.Selected = true; }
                     cs.Changes.Add(bc);
                 }
                 if (grouped.Count > 0)
                 {
                     var bc = BulkChange(nameEl, col, grouped, oldDisp, cellDisp, isString, str, dbl, isInt, iv, row.UniqueId);
-                    if (bulkNeedsConfirm) { bc.NeedsConfirm = true; bc.EnteredValue = bulkEntered; bc.SpecTypeId = col.SpecTypeId ?? ""; bc.EditValue = bulkEntered; bc.Suggestion = cellDisp; bc.Selected = false; }
+                    if (bulkNeedsConfirm) { bc.NeedsConfirm = true; bc.EnteredValue = bulkEntered; bc.SpecTypeId = col.SpecTypeId ?? ""; bc.EditValue = bulkEntered; bc.Suggestion = cellDisp; bc.Selected = true; }
                     cs.Changes.Add(Mark(doc, bc, true, gName));
                 }
             }
@@ -1896,7 +1988,8 @@ public sealed class Importer
             {
                 ch.NeedsConfirm = true; ch.EnteredValue = ghEntered; ch.EditValue = ghEntered;
                 ch.SpecTypeId = ghe.SpecTypeId ?? ""; ch.Suggestion = ghSuggestion; ch.ConfirmError = ghError;
-                ch.Selected = false;
+                // Interpretable (has a suggestion) → ticked; unreadable → unticked until the user supplies a value.
+                ch.Selected = ghSuggestion != "";
             }
             return ch;
         }
@@ -2108,7 +2201,7 @@ public sealed class Importer
                     chD.SpecTypeId = tc.SpecTypeId ?? "";
                     chD.EditValue = value;       // the box starts at what the user typed; interpreted only on Confirm
                     chD.Suggestion = canonical;  // the "interpreted as …" line shown until they confirm/re-prompt
-                    chD.Selected = false;
+                    chD.Selected = true;         // interpretable → ticked (will apply once confirmed)
                 }
                 cs.Changes.Add(chD);
             }
@@ -2180,7 +2273,9 @@ public sealed class Importer
             Suggestion = reformat ? canonical : "",   // an unreadable pick has no interpretation to show
             ConfirmError = unreadable ? $"enter a usable value for {c.Field} (e.g. 7' or 7\")" : "",
             SpecTypeId = needsConfirm ? c.SpecTypeId : "",
-            Selected = !needsConfirm,
+            // A reformat pick has an interpretation → ticked (applies once confirmed); an unreadable pick stays
+            // unticked until the user supplies a value. Apply is gated on confirm/discard for both.
+            Selected = !unreadable,
             // C-7: stamp the source schedule so this resolved conflict rolls up under its schedule's tri-state and a
             // per-schedule deselect skips it (ChangesForSchedule matches on these — uid-first, name fallback).
             SourceScheduleName = c.ScheduleName, SourceScheduleUid = c.ScheduleUid,
@@ -3248,6 +3343,20 @@ public sealed class Importer
                 }
                 if (cat is { AllowsBoundParameters: true }) cats.Insert(cat);
             }
+            // Ticked OTHER schedules (user request 2026-07-12): bind their categories too, or the new param can't
+            // reach their elements (e.g. a window schedule ticked for a built-in the doors also carry). Collected
+            // BEFORE EnsureSharedParam so one binding covers every target schedule.
+            var extraScheduleUids = sample.Option2ExtraScheduleUids ?? new List<string>();
+            foreach (var xuid in extraScheduleUids)
+            {
+                try
+                {
+                    if ((doc.GetElement(xuid) as ViewSchedule)?.Definition is { } xdef
+                        && Category.GetCategory(doc, xdef.CategoryId) is { AllowsBoundParameters: true } xcat)
+                        cats.Insert(xcat);
+                }
+                catch { /* unbindable extra schedule → its writes fail honestly below */ }
+            }
             string kind = instanceBinding ? "instance" : "type";
             if (src == null || cats.IsEmpty)
             {
@@ -3337,10 +3446,57 @@ public sealed class Importer
             // (mirrors the bulk-write semantics on the direct path).
             var touched = new HashSet<ProposedChange>();
             var changeFailed = new HashSet<ProposedChange>();
+            // §10 divergent-blank instances: their original values become the ONLY copy of that data once the
+            // column is repointed — the old-values disposition below must never clear/overwrite them.
+            var preserveOld = new HashSet<string>();
 
-            foreach (var schedUid in list.Select(c => c.SourceScheduleUid).Distinct())
+            // Review findings 2026-07-13 (overlap clobber + disposition safety):
+            // • The edit lookups are built ONCE per column over ALL its changes — never per schedule. An element
+            //   that appears in TWO processed schedules (a second source sheet, or a ticked extra schedule)
+            //   would otherwise find "no edit" on the later pass and overwrite the just-written edit with its
+            //   stale pre-edit live value (stamped Applied — a silent loss).
+            // • writtenTargets makes every new-param target write-once across schedules, same reason.
+            // • dispositionUids collects ONLY elements whose new-param write verified — the old-values pass may
+            //   touch nothing else (clearing an old value whose new copy never landed destroys the only copy).
+            var writtenTargets = new HashSet<long>();
+            var dispositionUids = new List<string>();
+            var editByUid = new Dictionary<string, ProposedChange>();
+            foreach (var ch in list)
+                foreach (var uid in (ch.BulkInstanceIds ?? new List<string> { ch.UniqueId }))
+                    if (!string.IsNullOrEmpty(uid)) editByUid[uid] = ch;
+            // Type-edit lookup (used by TYPE binding): key by the LIVE type id of EACH targeted instance — see
+            // DEFECT D1 note below; built once, globally, with the same three-tier resolution as before.
+            var editByType = new Dictionary<long, ProposedChange>();
+            foreach (var ch in list)
             {
-                var vs = ResolveSchedule(doc, schedUid, list.First(c => c.SourceScheduleUid == schedUid).SourceScheduleName);
+                if (ch.TypeId != 0) { editByType[ch.TypeId] = ch; continue; }
+                var chUids = ch.BulkInstanceIds ?? (string.IsNullOrEmpty(ch.UniqueId) ? new List<string>() : new List<string> { ch.UniqueId });
+                bool mappedAny = false;
+                foreach (var uid in chUids)
+                {
+                    if (string.IsNullOrEmpty(uid)) continue;
+                    var inst = doc.GetElement(uid);
+                    var tid = inst?.GetTypeId();
+                    if (tid != null && tid != ElementId.InvalidElementId) { editByType[tid.Value] = ch; mappedAny = true; }
+                }
+                if (!mappedAny)
+                {
+                    long t = ElementTypeIdOf(doc, ch);
+                    if (t >= 0) editByType[t] = ch;
+                }
+            }
+
+            // Source schedules first, then the user-ticked OTHER schedules (user request 2026-07-12). An extra
+            // schedule has no edits, so inside the loop its edit lookups come up empty and every element simply
+            // carries its live source value onto the new param — then its field is repointed like a source's.
+            var schedUids = list.Select(c => c.SourceScheduleUid).Distinct().ToList();
+            foreach (var xuid in extraScheduleUids)
+                if (!schedUids.Contains(xuid)) schedUids.Add(xuid);
+
+            foreach (var schedUid in schedUids)
+            {
+                var vs = ResolveSchedule(doc, schedUid,
+                    list.FirstOrDefault(c => c.SourceScheduleUid == schedUid)?.SourceScheduleName ?? "");
                 if (vs == null)
                 {
                     // Can't resolve the schedule → can't merge originals; fall back to writing edits only +
@@ -3361,16 +3517,13 @@ public sealed class Importer
 
                 if (instanceBinding)
                 {
-                    // Edit lookup: instance UniqueId → the change carrying its edit (over bulk ids + single uid).
-                    var editByUid = new Dictionary<string, ProposedChange>();
-                    foreach (var ch in list.Where(c => c.SourceScheduleUid == schedUid))
-                        foreach (var uid in (ch.BulkInstanceIds ?? new List<string> { ch.UniqueId }))
-                            if (!string.IsNullOrEmpty(uid)) editByUid[uid] = ch;
-
                     foreach (var el in elements)
                     {
+                        // GLOBAL edit lookup (all schedules) + write-once: an element already written by an
+                        // earlier schedule pass is never re-written — see the 2026-07-13 clobber note above.
                         bool isEdit = editByUid.TryGetValue(el.UniqueId, out var ech);
                         if (isEdit) touched.Add(ech!);
+                        if (!writtenTargets.Add(el.Id.Value)) continue;
                         var np = el.get_Parameter(guid);
                         if (np == null || np.IsReadOnly)
                         {
@@ -3384,45 +3537,15 @@ public sealed class Importer
                         // exactly what the old column showed = not data loss).
                         var finalVal = isEdit ? EditVal(ech!) : ReadLive(el, sourceParamId);
                         bool ok = SetParsed(np, finalVal) && VerifyParsed(np, finalVal);
-                        if (ok) { written++; wroteThisSched++; }
+                        if (ok) { written++; wroteThisSched++; dispositionUids.Add(el.UniqueId); }
                         else { failed.Add($"{newParamName} on {SafeName(el)}"); if (isEdit) changeFailed.Add(ech!); }
                     }
                 }
                 else // TYPE binding
                 {
-                    // Edit lookup: type id → the change carrying that type's edit.
-                    // DEFECT D1 FIX: key by the LIVE type id of EACH instance the change targets — NOT by a single
-                    // representative (ElementTypeIdOf used only BulkInstanceIds[0].GetTypeId()). The old single-rep
-                    // keying mis-routed values: for a TYPE-organized schedule the changes are instance-bulk (Binding
-                    // "instance", BulkInstanceIds = the row's instances, TypeId unset), and keying off only [0] let
-                    // two type-rows collide on the same dictionary key (last-write-wins) → a neighbor-shift where some
-                    // types got an adjacent type's value (5/16 wrong, silent). Mapping every instance's resolved type
-                    // makes the key set EXACTLY match the write loop's GroupBy(e.GetTypeId().Value), so each type pulls
-                    // its OWN edit. Prefer the change's stamped TypeId when present (type-conflict-picker changes set
-                    // it); otherwise resolve per instance.
-                    var editByType = new Dictionary<long, ProposedChange>();
-                    foreach (var ch in list.Where(c => c.SourceScheduleUid == schedUid))
-                    {
-                        // 1) If the change carries an explicit TypeId (type-conflict picker), trust it.
-                        if (ch.TypeId != 0) { editByType[ch.TypeId] = ch; continue; }
-                        // 2) Otherwise map EACH targeted instance's live type → this change (instance-bulk changes).
-                        var uids = ch.BulkInstanceIds ?? (string.IsNullOrEmpty(ch.UniqueId) ? new List<string>() : new List<string> { ch.UniqueId });
-                        bool mappedAny = false;
-                        foreach (var uid in uids)
-                        {
-                            if (string.IsNullOrEmpty(uid)) continue;
-                            var inst = doc.GetElement(uid);
-                            var tid = inst?.GetTypeId();
-                            if (tid != null && tid != ElementId.InvalidElementId) { editByType[tid.Value] = ch; mappedAny = true; }
-                        }
-                        // 3) Last-resort fallback (no resolvable instances): the old single-rep behavior, so a change
-                        // is never silently dropped if BulkInstanceIds is empty but a UniqueId resolves.
-                        if (!mappedAny)
-                        {
-                            long t = ElementTypeIdOf(doc, ch);
-                            if (t >= 0) editByType[t] = ch;
-                        }
-                    }
+                    // Edit lookup: the GLOBAL editByType built once above (DEFECT D1 semantics preserved: keyed by
+                    // the LIVE type id of each targeted instance, TypeId-stamped changes trusted first). Built over
+                    // ALL schedules so an overlapping type never loses its edit to a later carry-forward pass.
 
                     // Group the schedule's elements by type; each type writes ONE value to its type param.
                     foreach (var typeGrp in elements.Where(e => e.GetTypeId() != ElementId.InvalidElementId)
@@ -3432,14 +3555,16 @@ public sealed class Importer
                         var typeEl = doc.GetElement(new ElementId(typeId));
                         var np = typeEl?.get_Parameter(guid);
                         bool edited = editByType.TryGetValue(typeId, out var tch);
+                        if (edited) touched.Add(tch!);
+                        // Write-once across schedules: a type already written keeps its (edit-wins) value.
+                        if (!writtenTargets.Add(typeId)) continue;
 
                         if (edited)
                         {
                             // Edited type → write the edit once to the type (shared by all its instances).
-                            touched.Add(tch!);
                             var v = EditVal(tch!);
                             bool ok = np != null && !np.IsReadOnly && SetParsed(np, v) && VerifyParsed(np, v);
-                            if (ok) { written++; wroteThisSched++; }
+                            if (ok) { written++; wroteThisSched++; foreach (var e in typeGrp) dispositionUids.Add(e.UniqueId); }
                             else { failed.Add($"{newParamName} on type {SafeName(typeEl ?? (Element)typeGrp.First())}"); changeFailed.Add(tch!); }
                             continue;
                         }
@@ -3452,16 +3577,19 @@ public sealed class Importer
                             // Uniform (or single instance) → carry forward the one original value.
                             var v = originals[0];
                             bool ok = np != null && !np.IsReadOnly && SetParsed(np, v) && VerifyParsed(np, v);
-                            if (ok) { written++; wroteThisSched++; }
+                            if (ok) { written++; wroteThisSched++; foreach (var e in typeGrp) dispositionUids.Add(e.UniqueId); }
                             else failed.Add($"{newParamName} on type {SafeName(typeEl ?? (Element)typeGrp.First())}");
                         }
                         else
                         {
                             // §10: DIVERGENT + UNEDITED under a TYPE param → SKIP (write nothing). The built-in
                             // source param is RETAINED on every instance (only the FIELD is removed), so no data
-                            // is deleted; the new cell shows blank for this type. Record the MANDATORY warning.
+                            // is deleted; the new cell shows blank for this type. Record the MANDATORY warning,
+                            // and shield these instances from the old-values disposition — their source values
+                            // are now the only copy of that data.
                             string typeName = SafeName(typeEl ?? (Element)typeGrp.First());
                             warnings.Add(DivergentTypeWarning(newParamName, typeName, sample.Field));
+                            foreach (var e in typeGrp) preserveOld.Add(e.UniqueId);
                         }
                     }
                 }
@@ -3485,6 +3613,62 @@ public sealed class Importer
                         // AlreadyPresent (idempotent re-run) / NotSchedulable / Failed → no field-count change to report.
                     }
                 }
+            }
+
+            // OLD-VALUES DISPOSITION (user request 2026-07-12; hardened per review 2026-07-13): after EVERY
+            // carry-forward write above, apply the user's choice for the now-hidden source values. Leave =
+            // untouched (default, no code path). Clear/SetValue touch ONLY dispositionUids — elements whose
+            // new-param write VERIFIED — so a value whose new copy never landed (unbindable extra schedule,
+            // failed write, §10 divergent-blank type) is never destroyed. The old param's true host is resolved
+            // per element (instance first, then its type) instead of trusting an arbitrary sample's Binding.
+            // Grouped members: a built-in DATA param (negative id) writes directly (established since v1.4.1;
+            // geometry built-ins can never reach option 2); a PROJECT/SHARED param on a group member is skipped
+            // unless it already varies by group instance — writing it per-member risks Revit's group-consistency
+            // failure, which posts at commit and would roll back the whole import.
+            if (sample.Option2OldValues != OldValueDisposition.Leave)
+            {
+                bool clearing = sample.Option2OldValues == OldValueDisposition.Clear;
+                int oldWritten = 0, oldFailed = 0, oldReadonly = 0, oldGrouped = 0;
+                int oldPreserved = preserveOld.Count;   // §10 divergent instances (never in dispositionUids)
+                var doneIds = new HashSet<long>();
+                foreach (var uid in dispositionUids)
+                {
+                    var el = doc.GetElement(uid);
+                    if (el == null || preserveOld.Contains(uid)) continue;
+                    // Resolve where the OLD value actually lives: the instance, else its type.
+                    var op = GetParam(el, sourceParamId);
+                    Element owner = el;
+                    if (op == null)
+                    {
+                        var tid = el.GetTypeId();
+                        var te = tid != null && tid != ElementId.InvalidElementId ? doc.GetElement(tid) : null;
+                        if (te != null) { op = GetParam(te, sourceParamId); owner = te; }
+                    }
+                    if (op == null || op.IsReadOnly) { oldReadonly++; continue; }
+                    if (!doneIds.Add(owner.Id.Value)) continue;
+                    if (sourceParamId > 0 && ReferenceEquals(owner, el)
+                        && el.GroupId != null && el.GroupId != ElementId.InvalidElementId
+                        && op.Definition is not InternalDefinition { VariesAcrossGroups: true })
+                    { oldGrouped++; continue; }
+                    // Clear = empty string (string storage only — the dialog gates it, this is the belt).
+                    // SetValue = the user's text parsed against THIS param's storage (int / unit-aware double).
+                    ParsedVal pv;
+                    if (clearing)
+                    {
+                        if (op.StorageType != StorageType.String) { oldFailed++; continue; }
+                        pv = ParsedVal.OfString("");
+                    }
+                    else if (!TryParseForParam(doc, op, sample.Option2OldValueText, out pv)) { oldFailed++; continue; }
+                    try { if (SetParsed(op, pv)) oldWritten++; else oldFailed++; }
+                    catch { oldFailed++; }
+                }
+                var verb = clearing ? "cleared" : $"set to '{sample.Option2OldValueText}'";
+                var oldNote = $"old '{sample.Field}' values {verb} on {oldWritten} element(s)/type(s)";
+                if (oldPreserved > 0) oldNote += $"; {oldPreserved} kept unchanged (divergent types left blank by the conversion — the old value is the only copy)";
+                if (oldGrouped > 0) oldNote += $"; {oldGrouped} grouped member(s) left unchanged (the old parameter can't be edited in place on group members)";
+                if (oldReadonly > 0) oldNote += $"; {oldReadonly} read-only";
+                if (oldFailed > 0) oldNote += $"; {oldFailed} failed";
+                guards.Add(oldNote);
             }
 
             // Stamp every change: Applied only when it was actually written AND none of its writes failed.
@@ -3918,6 +4102,40 @@ public sealed class Importer
     /// <summary>Writes a <see cref="ParsedVal"/> to a parameter (ParsedVal variant of <see cref="SetValue"/>).</summary>
     private static bool SetParsed(Parameter param, ParsedVal v) =>
         v.IsString ? param.Set(v.Str) : v.IsInt ? param.Set(v.Int) : param.Set(v.Dbl);
+
+    /// <summary>Parses free text into a <see cref="ParsedVal"/> matching a parameter's storage type — string
+    /// verbatim, int invariant, double via the document's unit settings (so "2'-6"" works for a length) with an
+    /// invariant plain-number fallback. Used by the option-2 old-values SetValue pass, where the user's one
+    /// replacement value must fit whatever the old column stores. False = the text doesn't fit this parameter.</summary>
+    private static bool TryParseForParam(Document doc, Parameter p, string text, out ParsedVal v)
+    {
+        v = ParsedVal.OfString("");
+        try
+        {
+            switch (p.StorageType)
+            {
+                case StorageType.String:
+                    v = ParsedVal.OfString(text ?? "");
+                    return true;
+                case StorageType.Integer:
+                    // Same parser every other integer import path uses — accepts Yes/No text on checkbox params.
+                    if (TryParseInteger(IsYesNo(p), text ?? "", out var i))
+                    { v = ParsedVal.OfInt(i); return true; }
+                    return false;
+                case StorageType.Double:
+                    if (string.IsNullOrWhiteSpace(text)) return false;
+                    if (UnitFormatUtils.TryParse(doc.GetUnits(), p.Definition.GetDataType(), text, out double d))
+                    { v = ParsedVal.OfDouble(d); return true; }
+                    if (double.TryParse(text.Trim(), System.Globalization.NumberStyles.Float,
+                            System.Globalization.CultureInfo.InvariantCulture, out d))
+                    { v = ParsedVal.OfDouble(d); return true; }
+                    return false;
+                default:
+                    return false;
+            }
+        }
+        catch { return false; }
+    }
 
     /// <summary>Re-reads a parameter and confirms a <see cref="ParsedVal"/> persisted (ParsedVal variant of
     /// <see cref="VerifyWrite"/> — string trimmed to match Revit's storage trim, doubles to 1e-6).</summary>

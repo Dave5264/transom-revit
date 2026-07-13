@@ -6,6 +6,7 @@ using System.Runtime.Loader;
 using System.Threading;
 using Microsoft.CodeAnalysis.CSharp.Scripting;
 using Microsoft.CodeAnalysis.Scripting;
+using Microsoft.CodeAnalysis.Scripting.Hosting;
 
 namespace Transom.Scripting;
 
@@ -46,8 +47,15 @@ public static class ScriptHost
             // everything else falls through to the default context.
             using (AssemblyLoadContext.GetLoadContext(typeof(ScriptHost).Assembly)?.EnterContextualReflection())
             {
-                var state = CSharpScript.RunAsync(code, options, globals, globals.GetType(), token)
-                    .GetAwaiter().GetResult();
+                // Pin every reference to its LIVE assembly instance. Without this, Roslyn's interactive
+                // loader re-loads references from their file paths into its own load context — harmless
+                // when the caller's assemblies sit in the default context (Revit 2025/2026), but Revit
+                // 2027 loads each add-in into its OWN AddInLoadContext, so the re-load produced a second
+                // Transom.dll identity and the Globals cast failed ("[A]Globals cannot be cast to [B]Globals").
+                using var loader = new InteractiveAssemblyLoader();
+                foreach (var reference in references) loader.RegisterDependency(reference);
+                var script = CSharpScript.Create(code, options, globals.GetType(), loader);
+                var state = script.RunAsync(globals, token).GetAwaiter().GetResult();
                 return new Dictionary<string, object?> { ["status"] = "ok", ["value"] = state.ReturnValue };
             }
         }

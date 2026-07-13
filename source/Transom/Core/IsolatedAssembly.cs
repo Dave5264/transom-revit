@@ -60,6 +60,13 @@ internal sealed class IsolatedAssembly
 
     private sealed class SatelliteLoadContext : AssemblyLoadContext
     {
+        /// <summary>The context Transom.dll itself lives in — the shared default context on Revit
+        /// 2025/2026, but Revit 2027 loads each add-in into its OWN AddInLoadContext, so "fall back to
+        /// Default" no longer finds Transom/its satellites' shared world there. Shared-world names must
+        /// resolve through THIS context to keep one type identity across the boundary.</summary>
+        private static readonly AssemblyLoadContext HostContext =
+            GetLoadContext(typeof(IsolatedAssembly).Assembly) ?? Default;
+
         private readonly AssemblyDependencyResolver? _resolver;
         private readonly string _dir;
         private readonly string _satelliteName;
@@ -81,13 +88,18 @@ internal sealed class IsolatedAssembly
             if (name.Name is null) return null;
 
             // Never shadow the shared world: Revit API assemblies, Transom.dll itself, and the framework must
-            // keep resolving in the DEFAULT context, or types passed across the boundary (Document, the DTOs,
-            // the IOfficeEngine interface) would have two identities and nothing would cast.
+            // keep resolving in the HOST's context, or types passed across the boundary (Document, the DTOs,
+            // the IOfficeEngine interface) would have two identities and nothing would cast. Resolve them via
+            // HostContext explicitly (see field doc — on Revit 2027 the null→Default fallback can't find them);
+            // on failure (e.g. optional ".resources" satellite probes) fall back to null as before.
             bool isSatellite = name.Name.Equals(_satelliteName, StringComparison.OrdinalIgnoreCase);
             if (!isSatellite &&
                 (name.Name.StartsWith("Transom", StringComparison.OrdinalIgnoreCase) ||
                  name.Name.StartsWith("RevitAPI", StringComparison.OrdinalIgnoreCase)))
-                return null;
+            {
+                try { return HostContext.LoadFromAssemblyName(name); }
+                catch { return null; }
+            }
 
             // The isolated family + its pinned transitive closure (per deps.json) load from OUR folder into
             // THIS context.

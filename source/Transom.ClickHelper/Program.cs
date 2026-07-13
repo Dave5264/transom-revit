@@ -382,8 +382,10 @@ internal static class Program
     /// <summary>
     ///     Tile Revit and the other foreground app (Claude) side by side on Revit's monitor, so Revit is
     ///     visible and not occluded — which is what makes physical clicks and keyboard input land on it.
-    ///     Revit goes left by default (<c>--revit-side right</c> to flip). The "other" window auto-detects
-    ///     Claude (Chrome_WidgetWin_1 titled "Claude"), or pass <c>--other &lt;hwnd&gt;</c>.
+    ///     Revit takes 2/3 of the work-area width by default (user-preferred over half/half: Revit needs the
+    ///     canvas room to pick elements, Claude only needs a chat column; <c>--revit-frac</c> overrides,
+    ///     clamped 0.5–0.85). Revit goes left by default (<c>--revit-side right</c> to flip). The "other"
+    ///     window auto-detects Claude (Chrome_WidgetWin_1 titled "Claude"), or pass <c>--other &lt;hwnd&gt;</c>.
     /// </summary>
     private static int RunTile(ArgSet args)
     {
@@ -392,15 +394,20 @@ internal static class Program
         if (revit == IntPtr.Zero) return Fail("no Revit window to tile.", 5);
 
         if (!GetWorkArea(revit, out var wa)) return Fail("could not read the monitor work area.", 5);
-        int halfW = (wa.Right - wa.Left) / 2, h = wa.Bottom - wa.Top;
+        int waW = wa.Right - wa.Left, h = wa.Bottom - wa.Top;
+        double frac = 2.0 / 3.0;
+        if (args.GetString("--revit-frac") is { } fs &&
+            double.TryParse(fs, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var f))
+            frac = Math.Clamp(f, 0.5, 0.85);
+        int revitW = (int)Math.Round(waW * frac), otherW = waW - revitW;
         bool revitLeft = !string.Equals(args.GetString("--revit-side"), "right", StringComparison.OrdinalIgnoreCase);
 
         (int x, int y, int w, int h) revitRect = revitLeft
-            ? (wa.Left, wa.Top, halfW, h)
-            : (wa.Left + halfW, wa.Top, halfW, h);
+            ? (wa.Left, wa.Top, revitW, h)
+            : (wa.Left + otherW, wa.Top, revitW, h);
         (int x, int y, int w, int h) otherRect = revitLeft
-            ? (wa.Left + halfW, wa.Top, halfW, h)
-            : (wa.Left, wa.Top, halfW, h);
+            ? (wa.Left + revitW, wa.Top, otherW, h)
+            : (wa.Left, wa.Top, otherW, h);
 
         IntPtr other = IntPtr.Zero;
         if (args.GetString("--other") is { } os && long.TryParse(os, out var oh)) other = new IntPtr(oh);

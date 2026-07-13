@@ -1,0 +1,238 @@
+<Window
+    x:Class="Transom.Views.ExportLegendDialog"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    Title="Transom — Export cell colors"
+    Width="560"
+    Height="680"
+    ResizeMode="CanResizeWithGrip"
+    MinWidth="460"
+    MinHeight="420"
+    ShowInTaskbar="False"
+    WindowStartupLocation="CenterOwner"
+    Background="{DynamicResource Bg}"
+    FontFamily="Segoe UI">
+    <!-- The "More information" dialog under the Export tab's color legend. Copy source of truth:
+         docs/design-notes/export-legend-copy.md — edit the wording THERE first, then mirror it here. -->
+    <Window.Resources>
+        <SolidColorBrush x:Key="Bg" Color="#F4F3EE" />
+        <SolidColorBrush x:Key="Surface" Color="#FFFFFF" />
+        <SolidColorBrush x:Key="Text" Color="#26251F" />
+        <SolidColorBrush x:Key="Muted" Color="#6B6A62" />
+        <SolidColorBrush x:Key="Line" Color="#E3E1D9" />
+        <SolidColorBrush x:Key="Accent" Color="#185FA5" />
+        <SolidColorBrush x:Key="InfoBg" Color="#E6F1FB" />
+        <SolidColorBrush x:Key="AccentLine" Color="#85B7EB" />
+        <SolidColorBrush x:Key="LegendGreen" Color="#1E7A34" />
+        <SolidColorBrush x:Key="LegendYellow" Color="#B8860B" />
+        <SolidColorBrush x:Key="LegendRed" Color="#C0392B" />
+
+        <Style x:Key="P" TargetType="TextBlock">
+            <Setter Property="TextWrapping" Value="Wrap" />
+            <Setter Property="Foreground" Value="{DynamicResource Muted}" />
+            <Setter Property="Margin" Value="0,0,0,6" />
+            <Setter Property="FontSize" Value="12.5" />
+        </Style>
+        <Style x:Key="Swatch" TargetType="Border">
+            <Setter Property="Width" Value="12" />
+            <Setter Property="Height" Value="12" />
+            <Setter Property="CornerRadius" Value="2" />
+            <Setter Property="BorderBrush" Value="#CFCDC4" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+        </Style>
+        <Style x:Key="H" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="13.5" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Foreground" Value="{DynamicResource Accent}" />
+            <Setter Property="Margin" Value="8,0,0,0" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+        </Style>
+    </Window.Resources>
+    <DockPanel Margin="18" TextElement.Foreground="{DynamicResource Text}">
+
+        <Button DockPanel.Dock="Bottom" Content="Got it" Width="92" Height="32" HorizontalAlignment="Right"
+                Margin="0,14,0,0" Background="{DynamicResource Accent}" Foreground="White" BorderThickness="0"
+                Click="Close_Click">
+            <Button.Template>
+                <ControlTemplate TargetType="Button">
+                    <Border Background="{TemplateBinding Background}" CornerRadius="8" Padding="12,0">
+                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Border>
+                </ControlTemplate>
+            </Button.Template>
+        </Button>
+
+        <TextBlock DockPanel.Dock="Top" Text="Export cell colors — the full story" FontSize="17" FontWeight="SemiBold" Foreground="{DynamicResource Text}" />
+        <TextBlock DockPanel.Dock="Top" Margin="0,4,0,12" Foreground="{DynamicResource Muted}" TextWrapping="Wrap" FontSize="12.5"
+                   Text="Transom colors each editable cell by how the edit can be applied back to the model. White and green cells import directly. Blue, yellow, and red mark elements inside Revit model groups — Revit restricts writes to group members, so Transom resolves each case differently. Grey cells can't be written at all. Colors are painted at export time from the live model, so a re-export always reflects the current grouping." />
+
+        <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="0,0,8,0">
+            <StackPanel>
+
+                <StackPanel Orientation="Horizontal" Margin="0,2,0,4">
+                    <Border Style="{StaticResource Swatch}" Background="#FFFFFF" />
+                    <TextBlock Style="{StaticResource H}" Text="normal (white)" />
+                </StackPanel>
+                <TextBlock Style="{StaticResource P}">
+                    A writable <Run Text="instance parameter" FontWeight="SemiBold" /> that needs no special handling.
+                    The edit's scope is exactly the element(s) the row represents: on an itemized schedule that's one
+                    element; on a non-itemized schedule, where one row stands for several elements, the edit writes to
+                    <Run Text="every member of that row" FontWeight="SemiBold" /> (the import preview shows the exact
+                    count first). Identity built-ins like Mark stay white even on grouped elements — Revit accepts a
+                    direct write for those.
+                </TextBlock>
+
+                <StackPanel Orientation="Horizontal" Margin="0,10,0,4">
+                    <Border Style="{StaticResource Swatch}" Background="#DDF0DD" />
+                    <TextBlock Style="{StaticResource H}" Text="green — shared value" Foreground="{DynamicResource LegendGreen}" />
+                </StackPanel>
+                <TextBlock Style="{StaticResource P}">
+                    The value is shared <Run Text="beyond the row" FontStyle="Italic" />: a
+                    <Run Text="type parameter" FontWeight="SemiBold" /> (every instance of that type shows it, including
+                    instances on other schedules) or an <Run Text="editable group-header cell" FontWeight="SemiBold" />
+                    (the header's value is the grouping parameter of every row under it). Editing it writes to every
+                    element the value covers, in one transaction — the import preview shows the exact element count
+                    before anything is written. The white/green distinction is scope: white stays inside the row,
+                    green reaches past it.
+                </TextBlock>
+
+                <StackPanel Orientation="Horizontal" Margin="0,10,0,4">
+                    <Border Style="{StaticResource Swatch}" Background="#DDEBF7" />
+                    <TextBlock Style="{StaticResource H}" Text="blue — grouped, resolves automatically" />
+                </StackPanel>
+                <TextBlock Style="{StaticResource P}">
+                    A <Run Text="project or shared instance parameter" FontWeight="SemiBold" /> on an element inside a
+                    model group. Revit normally forces group members to match the group definition, but these
+                    parameters support <Run Text="“vary by group instance”" FontWeight="SemiBold" />. On import,
+                    Transom enables that flag on the parameter (a one-time, one-way model change — this is “option 1”
+                    in the group dialog) and then writes each element's own value. Nothing is ungrouped and other
+                    instances of the group are untouched.
+                </TextBlock>
+
+                <StackPanel Orientation="Horizontal" Margin="0,10,0,4">
+                    <Border Style="{StaticResource Swatch}" Background="#FFF2CC" />
+                    <TextBlock Style="{StaticResource H}" Text="yellow — grouped, needs a decision" Foreground="{DynamicResource LegendYellow}" />
+                </StackPanel>
+                <TextBlock Style="{StaticResource P}">
+                    A <Run Text="built-in data parameter" FontWeight="SemiBold" /> (Comments, Mark, Finish…) on a group
+                    member. Built-ins can't “vary by group instance” and can't be written on a member from outside
+                    group-edit mode, so there is no silent fix — the import group dialog asks you to pick one:
+                </TextBlock>
+                <TextBlock Style="{StaticResource P}" Margin="14,0,0,2">
+                    • <Run Text="Option 2a / 2b" FontWeight="SemiBold" /> — Transom creates a
+                    <Run Text="new type (2a) or instance (2b) parameter" FontWeight="SemiBold" />, moves the column onto
+                    it in the schedule, and writes your edits there. Nothing is ungrouped; the original built-in stays
+                    as-is underneath.
+                </TextBlock>
+                <TextBlock Style="{StaticResource P}" Margin="14,0,0,2">
+                    • <Run Text="Claude-Assist (option 3)" FontWeight="SemiBold" /> — Claude drives Revit's Edit Group
+                    mode and sets the built-in itself. The value lands on the
+                    <Run Text="group definition" FontWeight="SemiBold" />, so every instance of that group type gets the
+                    same value.
+                </TextBlock>
+                <TextBlock Style="{StaticResource P}" Margin="14,0,0,6">
+                    • <Run Text="Skip" FontWeight="SemiBold" /> — leave the column unchanged.
+                </TextBlock>
+
+                <StackPanel Orientation="Horizontal" Margin="0,10,0,4">
+                    <Border Style="{StaticResource Swatch}" Background="#F8D2D5" />
+                    <TextBlock Style="{StaticResource H}" Text="red — grouped, geometry-driving" Foreground="{DynamicResource LegendRed}" />
+                </StackPanel>
+                <TextBlock Style="{StaticResource P}">
+                    A parameter that <Run Text="drives geometry" FontWeight="SemiBold" /> (sill height, head height…)
+                    on a group member. Replacing it with a new parameter (the yellow fix) would only change a number
+                    in the schedule — the model geometry wouldn't move, and the schedule would silently disagree with
+                    the model. So Transom never offers option 2 here: the only paths are
+                    <Run Text="Claude-Assist" FontWeight="SemiBold" /> (Claude edits the group the way a person would,
+                    and verifies the result) or editing it yourself in <Run Text="Edit Group mode" FontWeight="SemiBold" />.
+                </TextBlock>
+                <TextBlock Style="{StaticResource P}">
+                    When Claude Assist is <Run Text="off" FontWeight="SemiBold" /> at export time, red cells render
+                    with <Run Text="grey text" FontWeight="SemiBold" /> — effectively locked until you turn Claude
+                    Assist on (in Settings) and re-export.
+                </TextBlock>
+
+                <StackPanel Orientation="Horizontal" Margin="0,10,0,4">
+                    <Border Style="{StaticResource Swatch}" Background="#E6E6E6" />
+                    <TextBlock Style="{StaticResource H}" Text="grey — not importable" Foreground="{DynamicResource Muted}" />
+                </StackPanel>
+                <TextBlock Style="{StaticResource P}">
+                    Anything Transom can't write back: calculated and combined fields, counts and geometry-derived
+                    values, parameters the family/type drives read-only, header cells that don't round-trip (the
+                    blanks under merged super-headers), and every data cell of a schedule that can't round-trip at
+                    all (display-only export). Edit them in the spreadsheet if it helps your downstream use — Transom
+                    ignores them on import and lists them in the skipped panel.
+                </TextBlock>
+
+                <Border Background="{DynamicResource InfoBg}" BorderBrush="{DynamicResource AccentLine}" BorderThickness="1" CornerRadius="6" Padding="10" Margin="0,8,0,4">
+                    <TextBlock TextWrapping="Wrap" Foreground="{DynamicResource Accent}" FontSize="12"
+                               Text="Ungrouped elements never show blue/yellow/red — those three exist only because Revit locks group members. If a schedule has no model groups, everything is white, green, or grey." />
+                </Border>
+
+                <!-- ===== The import group dialog — options in depth ===== -->
+                <TextBlock Text="The import group dialog — options in depth" FontSize="14" FontWeight="SemiBold"
+                           Foreground="{DynamicResource Accent}" Margin="0,14,0,4" />
+                <TextBlock Style="{StaticResource P}">
+                    White and green cells never see this dialog — Transom writes them with a standard edit (a normal
+                    parameter write inside the import transaction), so there is nothing to resolve. The dialog appears
+                    only when an Apply touches parameters on <Run Text="model-group members" FontWeight="SemiBold" />:
+                    Transom pauses per affected column and asks how to resolve it. Which options appear depends on the
+                    column's parameter — the cell color predicts it: blue offers option 1, yellow offers options 2/3,
+                    red offers only 3. Skip is always available.
+                </TextBlock>
+                <TextBlock Style="{StaticResource P}">
+                    <Run Text="Option 1 — “Vary by group instance”" FontWeight="SemiBold" /> (blue cells).
+                    Project/shared instance parameters support per-instance values inside groups once the parameter's
+                    “vary by group instance” flag is on. Transom flips that flag, then writes each element's own value.
+                    The flag is a property of the parameter itself, project-wide, and is effectively a one-way switch —
+                    turning it back off later collapses members to matching values again. Side effect to know: a
+                    schedule cell spanning group instances shows <Run Text="&lt;varies&gt;" FontStyle="Italic" /> when
+                    their values differ. No new parameter, nothing ungrouped.
+                </TextBlock>
+                <TextBlock Style="{StaticResource P}">
+                    <Run Text="Option 2a — replace the column with a new type parameter" FontWeight="SemiBold" />
+                    (yellow cells, when every instance of a type shares one value). Transom creates a new
+                    <Run Text="shared parameter" FontWeight="SemiBold" /> bound to the category as a
+                    <Run Text="type" FontWeight="SemiBold" /> parameter, merges the column's existing values with your
+                    edits into it, and repoints the schedule field so the column keeps its heading. Every instance of
+                    the type shows the value. You confirm the parameter's name first (pre-filled “&lt;field&gt;
+                    (Transom)”). Not offered when the schedule is itemized with differing per-instance values — a
+                    single type parameter can't hold them.
+                </TextBlock>
+                <TextBlock Style="{StaticResource P}">
+                    <Run Text="Option 2b — replace the column with a new instance parameter" FontWeight="SemiBold" />
+                    (yellow cells). Same mechanics as 2a but <Run Text="instance" FontWeight="SemiBold" />-bound, so
+                    each element keeps its own value. Offered for built-ins, where option 1 is impossible; for blue
+                    cells it's suppressed because option 1 already preserves per-instance values without adding a
+                    parameter. Never ungroups and is safe with excluded group members.
+                </TextBlock>
+                <TextBlock Style="{StaticResource P}">
+                    Both option-2 paths also write the column's <Run Text="ungrouped" FontWeight="SemiBold" /> elements
+                    onto the new parameter, so the displayed column stays consistent; the original built-in keeps its
+                    old values underneath.
+                </TextBlock>
+                <TextBlock Style="{StaticResource P}">
+                    <Run Text="Option 3 — Claude-Assist" FontWeight="SemiBold" /> (yellow and red cells; requires
+                    Claude Assist on in Settings). Transom stages the edits to
+                    <Run Text="transom_group_edits.json" FontStyle="Italic" /> (with a how-to file beside it) and
+                    Claude drives Revit's <Run Text="Edit Group" FontWeight="SemiBold" /> mode the way a person would —
+                    enter the group, set the parameter, finish, verify the value and that the member count is
+                    unchanged. Because this edits the <Run Text="group definition" FontWeight="SemiBold" />, every
+                    instance of that group type receives the same value. Works even with excluded members, attached
+                    detail groups, and nested groups.
+                </TextBlock>
+                <TextBlock Style="{StaticResource P}">
+                    <Run Text="Skip" FontWeight="SemiBold" /> — leaves the whole column unchanged, including its
+                    ungrouped elements (they aren't written either, so the model never half-applies a column).
+                </TextBlock>
+                <TextBlock Style="{StaticResource P}">
+                    Why red never offers option 2: a geometry-driving parameter (sill height, head height…) that's
+                    replaced by a new parameter would just be a number in a schedule — the model geometry wouldn't
+                    move, and the two would silently disagree. Option 3 (or manual Edit Group) is the only honest path.
+                </TextBlock>
+
+            </StackPanel>
+        </ScrollViewer>
+    </DockPanel>
+</Window>

@@ -230,10 +230,12 @@ internal static class Program
             Tool("revit_tile",
                 "Tile Revit and Claude side-by-side on Revit's monitor so Revit is visible and not occluded. " +
                 "Do this FIRST in any UI-driving session: clicks land by screen coordinate and keystrokes go " +
-                "to the visible foreground window, so an occluded Revit can't be driven. Revit goes left by default.",
+                "to the visible foreground window, so an occluded Revit can't be driven. Revit takes 2/3 of " +
+                "the screen width and Claude 1/3 by default (the user-preferred layout), Revit on the left.",
                 ObjSchema(new()
                 {
-                    ["revitSide"] = Prop("string", "Which half Revit takes: 'left' (default) or 'right'."),
+                    ["revitSide"] = Prop("string", "Which side Revit takes: 'left' (default) or 'right'."),
+                    ["revitFrac"] = Prop("number", "Fraction of the work-area width Revit gets (default 0.667, clamped 0.5-0.85)."),
                     ["pid"] = PidProp(),
                 })),
 
@@ -376,6 +378,9 @@ internal static class Program
         var args = new List<string> { "tile" };
         if (a["revitSide"]?.GetValue<string>() is { } side && (side == "left" || side == "right"))
         { args.Add("--revit-side"); args.Add(side); }
+        if (a["revitFrac"] is { } fracNode && double.TryParse(fracNode.ToString(),
+                System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var frac))
+        { args.Add("--revit-frac"); args.Add(frac.ToString(System.Globalization.CultureInfo.InvariantCulture)); }
         return args;
     }
 

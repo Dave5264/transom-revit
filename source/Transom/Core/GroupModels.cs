@@ -37,6 +37,51 @@ public enum Option2Mode
     AmbiguousPreferInstance,// itemized / not grouped by type → offer both, recommend INSTANCE
 }
 
+/// <summary>What to do with the OLD (source) parameter's values after an option-2a/2b conversion replaced its
+/// column. The old values are no longer displayed (the column now shows the new parameter) but still live on
+/// every element — the user decides their fate in the <c>Option2OldValuesDialog</c>.</summary>
+public enum OldValueDisposition
+{
+    Leave,    // keep the old values on the elements (default — no data touched)
+    Clear,    // blank the old parameter on every affected element (string columns only)
+    SetValue, // write one user-entered value into the old parameter on every affected element
+}
+
+/// <summary>One OTHER schedule (not a source of the current import) that displays the source parameter an
+/// option-2 conversion is replacing — a candidate for having its column replaced too. Found by
+/// <c>Importer.ComputeOption2OtherSchedules</c> at preview time; offered in <c>Option2SchedulesDialog</c>.</summary>
+public sealed class Option2ScheduleRef
+{
+    public string ScheduleName = "";
+    public string ScheduleUid = "";
+    /// <summary>The schedule's category id — bound to the new shared parameter when this schedule is ticked
+    /// (its elements may be a different category than the edited ones, e.g. Comments on a window schedule).</summary>
+    public long CategoryId = -1;
+}
+
+/// <summary>Prompt for the option-2 "also replace in these schedules" step: the OTHER schedules that display the
+/// source parameter, each tickable. The dialog returns the ticked uids via its own Result (consumed by the
+/// viewmodel's resolver callback) — this prompt only carries the display inputs.</summary>
+public sealed class Option2SchedulesPrompt
+{
+    public string Field = "";          // the source parameter / column being replaced
+    public string NewParamName = "";   // the confirmed new parameter name (for the dialog text)
+    public List<Option2ScheduleRef> Schedules = new();
+}
+
+/// <summary>Prompt for the option-2 "what happens to the old values" step. The dialog writes the choice (and the
+/// uniform replacement value for <see cref="OldValueDisposition.SetValue"/>) back onto this object.</summary>
+public sealed class Option2OldValuesPrompt
+{
+    public string Field = "";          // the old parameter whose values are being dispositioned
+    public string NewParamName = "";
+    /// <summary>False when the old column stores numbers (a length etc.) — "clear" can't blank a numeric
+    /// parameter, so the dialog disables that option with a note.</summary>
+    public bool AllowClear = true;
+    public OldValueDisposition Choice = OldValueDisposition.Leave;
+    public string NewValue = "";
+}
+
 /// <summary>
 ///     One blue/yellow column's conflict, surfaced to the user as a multi-option choice (the
 ///     <c>GroupResolutionDialog</c>). Blue = project/shared param (offers all five paths); yellow =

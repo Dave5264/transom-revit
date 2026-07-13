@@ -144,13 +144,16 @@
                     • <Run Text="Greyed (frozen) rows" FontWeight="SemiBold" /> can’t be changed by import — they’re read-only or driven by the family/type. They’re shown for context, never applied.
                 </TextBlock>
                 <TextBlock Style="{StaticResource P}">
-                    • <Run Text="Fix-unparseable pane" FontWeight="SemiBold" /> — values that can’t be read, or aren’t in the schedule’s unit format, are held with an input box; correct or confirm, then Preview again.
+                    • <Run Text="Confirm or discard" FontWeight="SemiBold" /> — a value that parses but isn’t in the schedule’s format (e.g. 2'6) appears at the <Run Text="top" FontWeight="SemiBold" /> of the grid as a pending row showing the interpretation (2'-6&quot;). Confirm it (or correct it in the box), or Discard the row to drop that edit. Apply stays greyed until every pending row is confirmed or discarded — nothing is skipped silently.
+                </TextBlock>
+                <TextBlock Style="{StaticResource P}">
+                    • <Run Text="Fix-unparseable pane" FontWeight="SemiBold" /> — values that can’t be read at all are held with an input box; correct them, then Preview again.
                 </TextBlock>
                 <TextBlock Style="{StaticResource P}">
                     • <Run Text="Type-parameter conflicts" FontWeight="SemiBold" /> — if rows sharing one type disagree on a new value, import asks you to pick (or skips); a consistent edit writes once to the type.
                 </TextBlock>
                 <TextBlock Style="{StaticResource P}">
-                    • <Run Text="Group dialog" FontWeight="SemiBold" /> — edits on elements inside Revit groups can be skipped, cancelled, or (in Assist mode) handed to Claude.
+                    • <Run Text="Group dialog" FontWeight="SemiBold" /> — edits on elements inside Revit groups get a per-column choice: flip the parameter to “vary by group instance”, replace the column with a new type/instance parameter, hand the edits to Claude (Assist on), or skip. Choosing a replacement also asks which <Run Text="other schedules" FontWeight="SemiBold" /> showing that parameter should switch to the new column, and what happens to the <Run Text="old values" FontWeight="SemiBold" /> — leave them, clear them, or write one value everywhere.
                 </TextBlock>
                 <TextBlock Style="{StaticResource P}">
                     • <Run Text="Copy log" FontWeight="SemiBold" /> — copies a full diagnostic (column matching, anchors, every skip/conflict) to the clipboard for troubleshooting.

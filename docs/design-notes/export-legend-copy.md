@@ -1,6 +1,8 @@
-# Export tab — color legend copy (draft for review)
+# Export tab — color legend copy
 
-Edit the wording below, then hand it back for implementation. Two tiers:
+**IMPLEMENTED 2026-07-12**: the short tier lives in TransomView.xaml (Export tab legend + "More
+information…" link), the full tier in Views/ExportLegendDialog.xaml. Edit the wording HERE first,
+then mirror it into those two places. Two tiers:
 
 - **Legend** = the at-a-glance line next to each swatch on the Export tab. Goal: a new user
   instantly knows what happens if they edit a cell of that color. One short clause, no jargon

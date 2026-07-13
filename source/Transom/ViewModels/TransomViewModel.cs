@@ -189,21 +189,33 @@ public sealed partial class TransomViewModel : ObservableObject
     private bool _initialized;
     private ChangeSet? _lastChangeSet;
     /// <summary>"Apply selected" is enabled (not greyed) only after a Preview has produced a change set — i.e. when
-    /// <see cref="_lastChangeSet"/> is non-null. Before any preview (just Browsed), and after a completed apply
-    /// (which nulls _lastChangeSet), it's disabled, so the user must Preview before they can Apply. Raise
-    /// OnPropertyChanged(nameof(CanApply)) wherever _lastChangeSet is set or nulled.</summary>
-    public bool CanApply => _lastChangeSet != null;
+    /// <see cref="_lastChangeSet"/> is non-null — AND every pending (NeedsConfirm) row in a SELECTED schedule has
+    /// been confirmed or discarded (the confirm-or-discard gate: a pending row must never be silently skipped by an
+    /// Apply, so Apply waits for all of them). Scoped to selected schedules per review 2026-07-13: a pending row in
+    /// a schedule the user DESELECTED can never apply, so it must not block the rest of the import. Raise
+    /// OnPropertyChanged(nameof(CanApply)) wherever _lastChangeSet is set/nulled, a pending row is confirmed,
+    /// discarded, or added (conflict resolution), the grid is refilled, OR a schedule's selection flips.</summary>
+    public bool CanApply => _lastChangeSet != null && !Changes.Any(PendingBlocksApply);
+
+    /// <summary>True for a pending row whose schedule is still selected — the rows the confirm-or-discard gate
+    /// counts. A pending row in a fully-deselected schedule is excluded everywhere the gate looks.</summary>
+    private bool PendingBlocksApply(ProposedChange c) => c.NeedsConfirm && ScheduleSelectedFor(c);
+
+    /// <summary>Whether the change's source schedule is selected (checked or mixed). No per-schedule row (single-
+    /// schedule import / unattributable) ⇒ selected, fail-open — matches ResolveSelectedAndFinalize's rule.</summary>
+    private bool ScheduleSelectedFor(ProposedChange c)
+    {
+        var row = AffectedSchedules.FirstOrDefault(r =>
+            (!string.IsNullOrEmpty(c.SourceScheduleUid) && r.ScheduleUid == c.SourceScheduleUid)
+            || r.ScheduleName == c.SourceScheduleName);
+        return row == null || row.SelectionState != false;
+    }
     /// <summary>Conflict choices the user already made, keyed by (typeId, parameterId), remembered ACROSS a re-Preview
     /// so confirming a format fix (which re-runs the whole analysis) does NOT re-prompt conflicts already resolved.
     /// Stores the chosen value (parsed double + string) so it can be matched to the re-built conflict's options even
     /// after the value's format changed (e.g. "2.5" → "2'-6""). Cleared when the workbook path changes.</summary>
     private readonly System.Collections.Generic.Dictionary<(long, int), (bool isString, string str, double dbl)> _resolvedConflicts = new();
-    private string _stagedPath = "";
-    private string _finalDestination = "";
     private string _pendingGroupNote = "";
-    /// <summary>Set in Apply when format-mismatched rows are still unconfirmed → appended to the post-apply status so
-    /// the user is told those edits weren't applied (not silently dropped). Captured before OnApplied clears Changes.</summary>
-    private string _pendingConfirmNote = "";
     /// <summary>Set while a per-schedule bulk toggle is driving many <see cref="ProposedChange.Selected"/> sets, so the
     /// per-change SelectionChanged handler doesn't re-run the row/helper refresh once per change (the bulk op refreshes
     /// once at the end via OnAffectedSelectionChanged). A single per-CELL edit leaves this false → handler runs.</summary>
@@ -230,8 +242,8 @@ public sealed partial class TransomViewModel : ObservableObject
     [ObservableProperty] private bool _hasAffected;     // any schedule with at least one proposed change
 
     // Claude Assist is ONE persisted on/off switch (replaces the old unpersisted Off/Verify/Assist mode).
-    // ON = exports stage to the exchange folder, run-logs are written, grouped built-ins may route to the
-    // staged Claude path, and the loopback bridge runs (auto-started with Revit while the flag is set).
+    // ON = run-logs are written to the exchange folder, grouped built-ins may be staged for Claude on Apply,
+    // and the loopback bridge runs (auto-started with Revit while the flag is set).
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(ClaudeAssistHint))]
     private bool _isClaudeAssistEnabled;
@@ -253,7 +265,6 @@ public sealed partial class TransomViewModel : ObservableObject
     public string ClaudeAssistHint => IsClaudeAssistEnabled
         ? "Claude can read schedules and write parameters over the local bridge."
         : "First time on runs one-time setup (per-user, no admin).";
-    [ObservableProperty] private bool _canFinalize;
     // G1: the bridge port the UI binds/probes is Transom's OWN self-host bridge (BridgeSelfHostPort, 48810) —
     // NOT the retired external-pyRevit probe (48884), which Transom never listened on.
     [ObservableProperty] private int _bridgePort = 48810;
@@ -278,9 +289,8 @@ public sealed partial class TransomViewModel : ObservableObject
         _importHandler.OnPreview = cs => _ui.BeginInvoke(() => ShowPreview(cs));
         _importHandler.OnApplied = s => _ui.Invoke(() =>
         {
-            ImportStatus = s + _pendingGroupNote + _pendingConfirmNote;
+            ImportStatus = s + _pendingGroupNote;
             _pendingGroupNote = "";
-            _pendingConfirmNote = "";
             Changes.Clear();
             Skipped.Clear();
             Fixes.Clear();
@@ -295,7 +305,6 @@ public sealed partial class TransomViewModel : ObservableObject
         });
         _importHandler.OnAppliedLog = log => _ui.Invoke(() => _diagnosticLog = log);
         _importHandler.OnError = s => _ui.Invoke(() => ImportStatus = "Error: " + s);
-        _exportHandler.OnStaged = p => _ui.Invoke(() => { _stagedPath = p; CanFinalize = true; });
         _scheduleLoadHandler.OnLoaded = (activeId, scheds) => _ui.Invoke(() => SetSchedules(activeId, scheds));
 
         // Cross-update (UX_SPEC §5 C-3): when a per-CELL checkbox in the changes grid toggles a change's Selected,
@@ -420,6 +429,15 @@ public sealed partial class TransomViewModel : ObservableObject
     /// returns the chosen <see cref="GroupResolution"/> (or null to cancel the whole import).</summary>
     public Func<GroupResolutionPrompt, GroupResolution?>? GroupConflictResolver;
 
+    /// <summary>Set by the view (option-2 follow-up 1, user request 2026-07-12): the "also replace this column in
+    /// these other schedules" checklist for one converted column. Returns the ticked schedule uids; null (dialog
+    /// closed) = replace nowhere else. Only invoked when the build-time scan found other schedules.</summary>
+    public Func<Option2SchedulesPrompt, List<string>?>? Option2SchedulesResolver;
+
+    /// <summary>Set by the view (option-2 follow-up 2): the "what happens to the old values" chooser — leave,
+    /// clear, or one uniform replacement value. Null (dialog closed) = Leave, the safe default.</summary>
+    public Func<Option2OldValuesPrompt, Option2OldValuesPrompt?>? Option2OldValuesResolver;
+
     /// <summary>Set by the view: tells the user built-in group edits were staged for Claude-assist. Arg = staged path.</summary>
     public Action<string>? ClaudeStagedNotice;
 
@@ -477,16 +495,12 @@ public sealed partial class TransomViewModel : ObservableObject
         };
         if (dlg.ShowDialog() != true) return;
 
-        bool stage = IsClaudeAssistEnabled && !string.IsNullOrWhiteSpace(ExchangeFolder);
         _exportHandler.ScheduleIds = ids;
         _exportHandler.OutputPath = dlg.FileName;
         _exportHandler.DocTitle = SelectedProject;
-        _exportHandler.Stage = stage;
-        _exportHandler.ExchangeFolder = ExchangeFolder;
+        _exportHandler.ExchangeFolder = ExchangeFolder;   // still passed: enables the Claude-review run-log (no finalize gate)
         _exportHandler.ClaudeAssistEnabled = IsClaudeAssistEnabled;
-        _finalDestination = dlg.FileName;
-        CanFinalize = false;
-        Status = stage ? $"Staging {ids.Count} schedule(s)…" : $"Exporting {ids.Count} schedule(s)…";
+        Status = $"Exporting {ids.Count} schedule(s)…";
         _exportEvent.Raise();
         MaybeEncourage();
     }
@@ -680,23 +694,66 @@ public sealed partial class TransomViewModel : ObservableObject
         if (ExcelCorrector.SameFormat(change.NewValue, change.OldValue))
             Changes.Remove(change);
         else
-            change.Selected = true;    // a real confirmed change is ticked for apply by default
+            // A real confirmed change is ticked for apply by default — UNLESS its schedule is deselected
+            // (review 2026-07-13: unconditional Selected=true wrote a confirmed row into a schedule the user
+            // had unticked, because the tri-state setter skips non-selectable pending rows when deselecting).
+            change.Selected = ScheduleSelectedFor(change);
 
         RefreshAffectedRows();         // its schedule's tri-state now reflects the confirmed/removed change
         RecomputeAffectedSelectionInfo();
+        OnPropertyChanged(nameof(CanApply));   // one fewer pending row — the confirm-or-discard gate may open
+    }
+
+    /// <summary>Discards a PENDING (NeedsConfirm) row from the inline strip — the row disappears and nothing is
+    /// written for it. The dropped edit is recorded as skipped ("discarded by user") so the skip panel / log stay
+    /// honest — a discard is deliberate, never silent. Together with Confirm this is the confirm-or-discard gate:
+    /// Apply stays greyed until every pending row is resolved one way or the other.</summary>
+    [RelayCommand]
+    private void DiscardRow(ProposedChange? change)
+    {
+        if (change is not { NeedsConfirm: true }) return;
+        Changes.Remove(change);
+
+        // Attribute the skip to its schedule's tab (uid-first, name fallback) so subset-mode scoping still works.
+        var tab = _lastChangeSet?.SheetSummaries.FirstOrDefault(s =>
+                (!string.IsNullOrEmpty(change.SourceScheduleUid) && s.ScheduleUid == change.SourceScheduleUid)
+                || s.ScheduleName == change.SourceScheduleName)?.SheetTabName ?? "";
+        var skip = new SkippedItem
+        {
+            Reason = "discarded by user",
+            Detail = $"{change.Field} ({change.ElementName}) — entered “{change.EnteredValue}”, discarded at the confirm prompt",
+            SheetTabName = tab,
+        };
+        // §15-D honesty: the DISPLAY collection is contractually scoped to selected schedules in subset mode —
+        // a discard from a deselected schedule goes to the change-set log only, not the scoped panel/count.
+        if (!SkipLogScopedToSelection || ScheduleSelectedFor(change))
+            Skipped.Add(skip);                // skip panel (display)
+        _lastChangeSet?.Skipped.Add(skip);    // copy-log diagnostic rebuilds read the change-set's list
+
+        RefreshAffectedRows();                // its schedule's tri-state no longer counts the discarded row
+        RecomputeAffectedSelectionInfo();
+        OnPropertyChanged(nameof(CanApply));  // one fewer pending row — the confirm-or-discard gate may open
     }
 
     [RelayCommand]
     private void Apply()
     {
-        // SAFETY BELT (code2): apply only rows that are BOTH ticked AND selectable. The confirm-gate already keeps a
-        // pending (NeedsConfirm) row un-ticked, but Selected defaults true, so requiring Selectable here means a
-        // future select-path that forgets the guard can never silently apply a half-interpreted value.
-        var selected = Changes.Where(c => c.Selected && c.Selectable).ToList();
+        // CONFIRM-OR-DISCARD GATE: Apply is blocked outright while any pending (NeedsConfirm) row remains in a
+        // SELECTED schedule — every such row must be confirmed or discarded first (they sit at the TOP of the grid
+        // so they can't hide below the fold, the original silent-skip complaint). Pending rows in deselected
+        // schedules can never apply, so they don't block (review 2026-07-13). CanApply greys the button for the
+        // same condition; this guard is the belt for a programmatic invoke.
+        int pending = Changes.Count(PendingBlocksApply);
+        if (pending > 0)
+        {
+            ImportStatus = $"{pending} change(s) still need confirmation — Confirm or Discard each pending row at the top of the list, then Apply.";
+            return;
+        }
 
-        // Rows the user hasn't confirmed yet (format-mismatched, awaiting the inline confirm) are EXCLUDED above.
-        // Count them so we can tell the user instead of silently dropping their edits (the original complaint).
-        int pending = Changes.Count(c => c.NeedsConfirm);
+        // SAFETY BELT (code2): apply only rows that are BOTH ticked AND selectable. The gate above already blocks
+        // pending rows, but requiring Selectable here means a future select-path that forgets the guard can never
+        // silently apply a half-interpreted value.
+        var selected = Changes.Where(c => c.Selected && c.Selectable).ToList();
 
         // Header (column-caption) renames to apply, scoped to the SELECTED schedules (header edits have no per-row
         // checkbox — they ride their schedule's selection). A header edit is included when its schedule is ticked
@@ -705,26 +762,23 @@ public sealed partial class TransomViewModel : ObservableObject
 
         if (selected.Count == 0 && selectedHeaderChanges.Count == 0)
         {
-            // If the only reason nothing's selected is unconfirmed rows, say THAT (not a generic dead-end) — so the
-            // user knows their edits are waiting on confirmation, not lost.
-            ImportStatus = pending > 0
-                ? $"{pending} row(s) need confirmation before they can be applied — confirm the interpreted value(s) below, then Apply."
-                : AffectedSchedules.Count > 0
-                    ? "No schedules selected — tick at least one schedule to import."
-                    : "Nothing selected to apply.";
+            ImportStatus = AffectedSchedules.Count > 0
+                ? "No schedules selected — tick at least one schedule to import."
+                : "Nothing selected to apply.";
             return;
         }
 
-        // Stash a note about rows left unconfirmed so the post-apply status TELLS the user they weren't applied
-        // (rather than silently omitting them from the "Applied N" count — the original silent-drop complaint).
-        // Captured now because OnApplied clears Changes before it builds the status.
-        _pendingConfirmNote = pending > 0
-            ? $"  ⚠ {pending} row(s) were not applied — they still need confirmation (confirm the interpreted value, then Apply again)."
-            : "";
-
         // Clear any stale resolutions from a prior Apply — these ProposedChange objects are shared with the
         // cached change-set, so a cancelled or retried Apply must never route a column by a previous choice.
-        foreach (var c in selected) c.Resolution = null;
+        // The option-2 follow-up stamps are cleared for the same reason (review 2026-07-13): a cancelled Apply
+        // must not leave ticked extra schedules or a Clear/SetValue disposition to fire on the retry.
+        foreach (var c in selected)
+        {
+            c.Resolution = null;
+            c.Option2ExtraScheduleUids = new List<string>();
+            c.Option2OldValues = OldValueDisposition.Leave;
+            c.Option2OldValueText = "";
+        }
 
         var notes = new List<string>();
         bool assist = IsClaudeAssistEnabled;
@@ -789,6 +843,47 @@ public sealed partial class TransomViewModel : ObservableObject
                 removed += n;
             }
             return removed;
+        }
+
+        // OPTION-2 FOLLOW-UPS (user request 2026-07-12): after a committed 2a/2b choice, (1) when the build-time
+        // scan found OTHER schedules displaying this parameter, offer them as replace-targets too (checklist);
+        // then (2) ask what happens to the OLD values — leave (default), clear, or one uniform replacement value.
+        // Both choices are stamped on every change in the column; ApplyNewParam reads them off the column's sample.
+        // Closing either dialog without choosing takes the safe default (no extra schedules / leave old values).
+        void ResolveOption2Extras(string columnKey, GroupResolutionPrompt p)
+        {
+            var column = newParamChanges.Where(c => ChangeSet.ColumnKey(c.ParameterId, c.Field) == columnKey).ToList();
+            if (column.Count == 0) return;
+
+            var ticked = new List<string>();
+            var others = _lastChangeSet?.Option2OtherSchedules.GetValueOrDefault(columnKey);
+            if (others is { Count: > 0 } && Option2SchedulesResolver != null)
+            {
+                var sp = new Option2SchedulesPrompt { Field = p.Field, NewParamName = p.ChosenParamName, Schedules = others };
+                ticked = Option2SchedulesResolver(sp) ?? new List<string>();
+            }
+
+            var disp = OldValueDisposition.Leave;
+            string dispText = "";
+            if (Option2OldValuesResolver != null)
+            {
+                var op = new Option2OldValuesPrompt
+                {
+                    Field = p.Field,
+                    NewParamName = p.ChosenParamName,
+                    // "Clear" can't blank a numeric parameter — only offer it for string-storage columns.
+                    AllowClear = column[0].IsString,
+                };
+                var r = Option2OldValuesResolver(op);
+                if (r != null) { disp = r.Choice; dispText = r.NewValue; }
+            }
+
+            foreach (var c in column)
+            {
+                c.Option2ExtraScheduleUids = ticked;
+                c.Option2OldValues = disp;
+                c.Option2OldValueText = dispText;
+            }
         }
 
         // The ungrouped directChanges belonging to the SAME column (ParameterId + Field) as a set of grouped changes,
@@ -861,9 +956,11 @@ public sealed partial class TransomViewModel : ObservableObject
                     // F1: 2a repoints the column too (AddOrReplaceField), so it adopts the ungrouped instances exactly
                     // like 2b — via the shared helper, no copy-paste. (#97 name + #96 D2 fix + F2 scope folded in.)
                     AdoptColumn(list, GroupResolution.NewTypeParam, prompt);
+                    ResolveOption2Extras(key, prompt);
                     break;
                 case GroupResolution.NewInstanceParam:
                     AdoptColumn(list, GroupResolution.NewInstanceParam, prompt);
+                    ResolveOption2Extras(key, prompt);
                     break;
                 case GroupResolution.ClaudeAssist:
                     foreach (var c in list) c.Resolution = GroupResolution.ClaudeAssist;
@@ -1141,9 +1238,11 @@ public sealed partial class TransomViewModel : ObservableObject
     private void OnAnyChangeSelectionChanged()
     {
         if (_bulkSelecting) return;
-        // The event can fire off the UI thread in theory; marshal to be safe (cheap, idempotent).
-        if (_ui.CheckAccess()) { RefreshAffectedRows(); RecomputeAffectedSelectionInfo(); }
-        else _ui.BeginInvoke(() => { RefreshAffectedRows(); RecomputeAffectedSelectionInfo(); });
+        // The event can fire off the UI thread in theory; marshal to be safe (cheap, idempotent). Per-cell edits
+        // can flip a schedule's tri-state to fully-deselected, which re-scopes the confirm-or-discard gate →
+        // CanApply re-evaluates with the rest.
+        if (_ui.CheckAccess()) { RefreshAffectedRows(); RecomputeAffectedSelectionInfo(); OnPropertyChanged(nameof(CanApply)); }
+        else _ui.BeginInvoke(() => { RefreshAffectedRows(); RecomputeAffectedSelectionInfo(); OnPropertyChanged(nameof(CanApply)); });
     }
 
     /// <summary>Called after any per-schedule toggle: refresh the changes grid (so the per-cell checkboxes redraw),
@@ -1154,6 +1253,9 @@ public sealed partial class TransomViewModel : ObservableObject
         RefreshChanges();
         RefreshAffectedRows();
         RecomputeAffectedSelectionInfo();
+        // The confirm-or-discard gate is scoped to SELECTED schedules, so flipping a schedule's checkbox can
+        // open or close it — re-evaluate (review 2026-07-13).
+        OnPropertyChanged(nameof(CanApply));
     }
 
     /// <summary>Re-raise the computed tri-state on every affected-schedule row (e.g. after a per-CELL edit changed
@@ -1161,6 +1263,17 @@ public sealed partial class TransomViewModel : ObservableObject
     private void RefreshAffectedRows()
     {
         foreach (var row in AffectedSchedules) row.Refresh();
+    }
+
+    /// <summary>Reorder the changes grid so PENDING (NeedsConfirm) rows sit at the TOP — they need an action
+    /// (confirm/discard) and must not hide below the fold. Stable: relative order within the pending and
+    /// non-pending halves is preserved. No-op when already ordered (avoids a needless grid rebuild).</summary>
+    private void MovePendingFirst()
+    {
+        var ordered = Changes.OrderByDescending(c => c.NeedsConfirm).ToList();
+        if (ordered.SequenceEqual(Changes)) return;
+        Changes.Clear();
+        foreach (var c in ordered) Changes.Add(c);
     }
 
     /// <summary>Recompute the "N of M schedules selected…" helper line + its visibility. UX_SPEC §4c.</summary>
@@ -1178,12 +1291,17 @@ public sealed partial class TransomViewModel : ObservableObject
     private void ShowPreview(ChangeSet cs)
     {
         _lastChangeSet = cs;
-        OnPropertyChanged(nameof(CanApply));   // a preview ran → there's a change set → enable Apply
         InTabPickStep = false;   // §16: analysis returned → the pre-analysis tab picker is done
         _diagnosticLog = cs.DiagnosticLog;
         Changes.Clear();
         Skipped.Clear();
         foreach (var c in cs.Changes) Changes.Add(c);
+        // PENDING (NeedsConfirm) rows go to the TOP of the grid — they need an action (confirm/discard) and used
+        // to hide below the fold, where they were silently skipped on Apply. MovePendingFirst is the ONE home of
+        // that ordering rule (stable; no-op when already ordered).
+        MovePendingFirst();
+        // After the fill, not before: CanApply now also reads the pending rows just added (confirm-or-discard gate).
+        OnPropertyChanged(nameof(CanApply));
         // §12 (user rule 2026-06-14): the skip display shows ONLY the user's data edits that won't apply — drop
         // structural/back-end skips (UserRelevant==false: inherent headers incl. user-edited, display-only schedules,
         // duplicate rows, metadata) ENTIRELY. This is the ONE place the VM Skipped collection is filled, so every skip
@@ -1336,9 +1454,13 @@ public sealed partial class TransomViewModel : ObservableObject
                     SheetTabName = ConflictTab(conflict.ScheduleUid, conflict.ScheduleName) });
         }
         // A newly-resolved conflict change is added to Changes here — re-evaluate the schedule rows' tri-state so
-        // its parent reflects it (the change is now selectable + selected by default).
+        // its parent reflects it (the change is now selectable + selected by default). A resolved pick that came
+        // back PENDING (reformat/unreadable) was appended at the bottom — move it to the top with the rest, and
+        // re-evaluate the confirm-or-discard gate.
+        MovePendingFirst();
         RefreshAffectedRows();
         RecomputeAffectedSelectionInfo();
+        OnPropertyChanged(nameof(CanApply));
 
         // CHANGE 2 §3b (FULL — integ1-2 final ruling): on a STRICT subset selection, scope BOTH the fix-pane (Fixes)
         // AND the skip-log (Skipped) display collections to the SELECTED schedules — so the post-resolve preview shows
@@ -1384,8 +1506,10 @@ public sealed partial class TransomViewModel : ObservableObject
         // §15-E: read-only/out-of-range edits now drop silently at the diff sites, so no FrozenChange is ever
         // created — there is no "frozen" tally and no frozen panel. HasFrozen stays false (the XAML panel hides).
         HasFrozen = false;
-        // Apply filters on Selected; the SELECTED message reports what Apply will actually do.
-        int applyableSelected = Changes.Count(c => c.Selected);
+        // Apply filters on Selected && Selectable; the SELECTED message reports what Apply will actually do —
+        // a pre-ticked PENDING row is not applyable until confirmed, so it must not inflate this count
+        // (review 2026-07-13: the old Selected-only count claimed 15 when Apply would write 10).
+        int applyableSelected = Changes.Count(c => c.Selected && c.Selectable);
         int applyableTotal = Changes.Count;
         int selSched = AffectedSchedules.Count(r => r.SelectionState != false);
         // Header (caption) renames the user made, scoped to the selected schedules (same scoping the apply uses).
@@ -1424,8 +1548,12 @@ public sealed partial class TransomViewModel : ObservableObject
                 ? AffectedSchedules.First(r => r.SelectionState != false).ScheduleName
                 : $"{selSched} selected schedules")
             : "";
+        // Confirm-or-discard gate: say up-front how many rows still block Apply (they're at the top of the grid).
+        // Same selected-schedule scope as the gate itself — a deselected schedule's pending rows don't block.
+        int pendingCount = Changes.Count(PendingBlocksApply);
         string selectedMsg = (subset ? $"Selected ({selName}): " : "")
                        + $"{applyableSelected} change(s)"
+                       + (pendingCount > 0 ? $"  —  ⚠ {pendingCount} need confirmation (top of the list): Confirm or Discard each before Apply" : "")
                        + (selectedHeaderCount > 0 ? $", {selectedHeaderCount} heading rename(s)" : "")
                        + (Skipped.Count > 0 ? $", {Skipped.Count} skipped" : "")
                        + (cs.Conflicts.Count > 0 ? $", {cs.Conflicts.Count} conflict(s) reviewed" : "")
@@ -1566,23 +1694,6 @@ public sealed partial class TransomViewModel : ObservableObject
     }
 
     [RelayCommand]
-    private void FinalizeExport()
-    {
-        if (string.IsNullOrEmpty(_stagedPath) || string.IsNullOrEmpty(_finalDestination)) return;
-        try
-        {
-            File.Copy(_stagedPath, _finalDestination, true);
-            Status = $"Finalized to {_finalDestination}";
-            CanFinalize = false;
-            _stagedPath = "";
-        }
-        catch (Exception ex)
-        {
-            Status = "Finalize failed: " + ex.Message;
-        }
-    }
-
-    [RelayCommand]
     private void ChooseExchangeFolder()
     {
         var dlg = new OpenFolderDialog();
@@ -1687,7 +1798,9 @@ pick one uniform value.
 ## 4. Apply each built-in group edit (per member element)
 
 ### Phase A — API setup (use the Revit API via `execute_revit_code`; do this BEFORE entering Edit Group)
-1. **revit_tile** if Revit isn't already tiled side-by-side.
+1. **revit_tile** if Revit isn't already tiled side-by-side. The right split is **Revit at ~2/3 of the
+   screen, Claude at 1/3** (user-confirmed: half/half cramps the Revit canvas; Claude only needs a chat
+   column) — revit_tile does this by default; pass `revitFrac` only to deviate.
 2. **Open a view where the member is visible** — if the active view doesn't contain it, activate/open one that
    does (a plan/elevation/section that shows it).
 3. **Select + zoom via API:** `Selection.SetElementIds([id])`, `ShowElements([id])`. `revit_screenshot(screen:true)`;

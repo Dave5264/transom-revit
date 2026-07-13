@@ -194,45 +194,50 @@
                         <TextBlock DockPanel.Dock="Top" Text="Export schedules → spreadsheet" FontSize="14" FontWeight="SemiBold" Foreground="{DynamicResource Text}" />
                         <TextBlock DockPanel.Dock="Top" Text="Check schedules to export — each becomes a sheet (CSV writes one file per schedule)."
                                    Foreground="{DynamicResource Muted}" TextWrapping="Wrap" Margin="0,6,0,6" />
-                        <!-- Export edit-hint legend: one aligned swatch row per colour (term colours are theme-aware) -->
+                        <!-- Export edit-hint legend: one aligned swatch row per colour (term colours are theme-aware).
+                             Copy source of truth: docs/design-notes/export-legend-copy.md (short tier here; the full
+                             technical tier lives in ExportLegendDialog, opened by "More information" below). -->
                         <StackPanel DockPanel.Dock="Top" Margin="0,0,0,12">
-                            <TextBlock Text="In the exported file:" Foreground="{DynamicResource Hint}" FontSize="11.5" Margin="0,0,0,4" />
+                            <TextBlock Text="Cell colors show what an edit will touch on import:" Foreground="{DynamicResource Hint}" FontSize="11.5" Margin="0,0,0,4" />
                             <Grid Margin="0,1">
                                 <Grid.ColumnDefinitions><ColumnDefinition Width="16" /><ColumnDefinition Width="56" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
                                 <Border Grid.Column="0" Width="12" Height="12" CornerRadius="2" Background="#FFFFFF" BorderBrush="#CFCDC4" BorderThickness="1" VerticalAlignment="Top" Margin="0,1,0,0" />
                                 <TextBlock Grid.Column="1" Text="normal" FontWeight="SemiBold" Foreground="{DynamicResource Muted}" FontSize="11.5" />
-                                <TextBlock Grid.Column="2" Text="edits one element" Foreground="{DynamicResource Muted}" FontSize="11.5" TextWrapping="Wrap" />
+                                <TextBlock Grid.Column="2" Text="instance parameter — edits the element(s) in that row, nothing else" Foreground="{DynamicResource Muted}" FontSize="11.5" TextWrapping="Wrap" />
                             </Grid>
                             <Grid Margin="0,1">
                                 <Grid.ColumnDefinitions><ColumnDefinition Width="16" /><ColumnDefinition Width="56" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
                                 <Border Grid.Column="0" Width="12" Height="12" CornerRadius="2" Background="#DDF0DD" BorderBrush="#CFCDC4" BorderThickness="1" VerticalAlignment="Top" Margin="0,1,0,0" />
                                 <TextBlock Grid.Column="1" Text="green" FontWeight="SemiBold" Foreground="{DynamicResource LegendGreen}" FontSize="11.5" />
-                                <TextBlock Grid.Column="2" Text="bulk edit — a type parameter or group header; changing one updates every element it covers" Foreground="{DynamicResource Muted}" FontSize="11.5" TextWrapping="Wrap" />
+                                <TextBlock Grid.Column="2" Text="type parameter (shared value) — edits every element of the type (or under the header)" Foreground="{DynamicResource Muted}" FontSize="11.5" TextWrapping="Wrap" />
                             </Grid>
                             <Grid Margin="0,1">
                                 <Grid.ColumnDefinitions><ColumnDefinition Width="16" /><ColumnDefinition Width="56" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
                                 <Border Grid.Column="0" Width="12" Height="12" CornerRadius="2" Background="#DDEBF7" BorderBrush="#CFCDC4" BorderThickness="1" VerticalAlignment="Top" Margin="0,1,0,0" />
                                 <TextBlock Grid.Column="1" Text="blue" FontWeight="SemiBold" Foreground="{DynamicResource Accent}" FontSize="11.5" />
-                                <TextBlock Grid.Column="2" Text="grouped element's project/shared instance parameter — Transom resolves it on import by enabling “vary by group instance” (option 1), preserving each element's own value" Foreground="{DynamicResource Muted}" FontSize="11.5" TextWrapping="Wrap" />
+                                <TextBlock Grid.Column="2" Text="project parameter in a model group — imports fine; each element keeps its own value" Foreground="{DynamicResource Muted}" FontSize="11.5" TextWrapping="Wrap" />
                             </Grid>
                             <Grid Margin="0,1">
                                 <Grid.ColumnDefinitions><ColumnDefinition Width="16" /><ColumnDefinition Width="56" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
                                 <Border Grid.Column="0" Width="12" Height="12" CornerRadius="2" Background="#FFF2CC" BorderBrush="#CFCDC4" BorderThickness="1" VerticalAlignment="Top" Margin="0,1,0,0" />
                                 <TextBlock Grid.Column="1" Text="yellow" FontWeight="SemiBold" Foreground="{DynamicResource LegendYellow}" FontSize="11.5" />
-                                <TextBlock Grid.Column="2" Text="grouped element's built-in data parameter (e.g. Comments, Finish) — resolved on import by replacing the column with a new instance or type parameter (it can't vary and can't be written in place)" Foreground="{DynamicResource Muted}" FontSize="11.5" TextWrapping="Wrap" />
+                                <TextBlock Grid.Column="2" Text="built-in data parameter in a model group — Transom asks how to apply it on import" Foreground="{DynamicResource Muted}" FontSize="11.5" TextWrapping="Wrap" />
                             </Grid>
                             <Grid Margin="0,1">
                                 <Grid.ColumnDefinitions><ColumnDefinition Width="16" /><ColumnDefinition Width="56" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
                                 <Border Grid.Column="0" Width="12" Height="12" CornerRadius="2" Background="#F8D2D5" BorderBrush="#CFCDC4" BorderThickness="1" VerticalAlignment="Top" Margin="0,1,0,0" />
                                 <TextBlock Grid.Column="1" Text="red" FontWeight="SemiBold" Foreground="{DynamicResource LegendRed}" FontSize="11.5" />
-                                <TextBlock Grid.Column="2" Text="grouped element's geometry-driving parameter (e.g. sill/head height) — can only be resolved with Claude-Assist (replacing it would desync the 3D model); otherwise edit it in Revit's Edit Group mode" Foreground="{DynamicResource Muted}" FontSize="11.5" TextWrapping="Wrap" />
+                                <TextBlock Grid.Column="2" Text="geometry-driving parameter — may only be changed through group edit mode (requires Claude-Assist to automate)" Foreground="{DynamicResource Muted}" FontSize="11.5" TextWrapping="Wrap" />
                             </Grid>
                             <Grid Margin="0,1">
                                 <Grid.ColumnDefinitions><ColumnDefinition Width="16" /><ColumnDefinition Width="56" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
                                 <Border Grid.Column="0" Width="12" Height="12" CornerRadius="2" Background="#E6E6E6" BorderBrush="#CFCDC4" BorderThickness="1" VerticalAlignment="Top" Margin="0,1,0,0" />
                                 <TextBlock Grid.Column="1" Text="grey" FontWeight="SemiBold" Foreground="{DynamicResource Muted}" FontSize="11.5" />
-                                <TextBlock Grid.Column="2" Text="can't be imported — read-only or driven by the family/type" Foreground="{DynamicResource Muted}" FontSize="11.5" TextWrapping="Wrap" />
+                                <TextBlock Grid.Column="2" Text="not importable — Revit computes it or locks it" Foreground="{DynamicResource Muted}" FontSize="11.5" TextWrapping="Wrap" />
                             </Grid>
+                            <TextBlock Margin="16,4,0,0" FontSize="11.5">
+                                <Hyperlink Click="LegendMoreInfo_Click" Foreground="{DynamicResource Accent}" TextDecorations="None">More information…</Hyperlink>
+                            </TextBlock>
                         </StackPanel>
 
                         <!-- Active schedule: pinned, always exported -->
@@ -322,11 +327,6 @@
                             <Button DockPanel.Dock="Right" Content="Export…" Height="32" Padding="18,0"
                                     Background="{DynamicResource Accent}" Foreground="White" BorderThickness="0" Command="{Binding ExportCommand}"
                                     ToolTip="Save the ticked schedules to a spreadsheet" />
-                            <Button DockPanel.Dock="Right" Content="Finalize" Height="32" Padding="14,0" Margin="0,0,8,0"
-                                    Background="Transparent" Foreground="{DynamicResource Ok}" BorderBrush="{DynamicResource Ok}" BorderThickness="1"
-                                    Visibility="{Binding CanFinalize, Converter={StaticResource BoolToVis}}"
-                                    Command="{Binding FinalizeExportCommand}"
-                                    ToolTip="Copy the staged / QA'd workbook to its final destination" />
                             <TextBlock Text="{Binding SelectionInfo}" Foreground="{DynamicResource Hint}" FontSize="11" VerticalAlignment="Center" />
                         </DockPanel>
 
@@ -376,7 +376,7 @@
                                         Background="{DynamicResource Accent}" Foreground="White" BorderThickness="0" Command="{Binding ApplyCommand}"
                                         Visibility="{Binding InPreviewStep, Converter={StaticResource BoolToVis}}"
                                         IsEnabled="{Binding CanApply}"
-                                        ToolTip="Preview changes first, then this writes the ticked changes into the model" />
+                                        ToolTip="Preview changes first, then this writes the ticked changes into the model (greyed while rows at the top of the list still need Confirm or Discard)" />
                             </StackPanel>
                             <!-- Cell-level All/None act on the changes grid → hidden during step 1 -->
                             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right"
@@ -740,6 +740,18 @@
                                     <Border Background="{DynamicResource WarnBg}" BorderBrush="{DynamicResource WarnLine}" BorderThickness="0,0,0,1"
                                             Padding="10,5" Visibility="{Binding NeedsConfirm, Converter={StaticResource BoolToVis}}">
                                         <DockPanel>
+                                            <!-- Discard: drop this edit — the row disappears, nothing is written, and it's logged as
+                                                 "discarded by user". Every pending row must be Confirmed or Discarded before Apply.
+                                                 Declared FIRST with Dock=Right so it sits RIGHTMOST — Confirm (declared next) lands to
+                                                 its left, i.e. visual order: [value box] [Confirm] [Discard]. -->
+                                            <Button DockPanel.Dock="Right" Content="Discard" Height="26" Padding="10,0" Margin="8,0,0,0"
+                                                    Background="Transparent" BorderBrush="{DynamicResource LegendRed}" BorderThickness="1"
+                                                    Foreground="{DynamicResource LegendRed}" FontSize="11" Cursor="Hand"
+                                                    AutomationProperties.Name="DiscardValue" AutomationProperties.AutomationId="DiscardValue"
+                                                    ToolTip="Drop this edit — the row disappears and nothing is written for it"
+                                                    PreviewMouseLeftButtonDown="DiscardButton_PreviewMouseLeftButtonDown"
+                                                    Command="{Binding DataContext.DiscardRowCommand, RelativeSource={RelativeSource AncestorType=DataGrid}}"
+                                                    CommandParameter="{Binding}" />
                                             <Button DockPanel.Dock="Right" Content="Confirm" Height="26" Padding="14,0" Margin="8,0,0,0"
                                                     Background="{DynamicResource Accent}" Foreground="White" BorderThickness="0" FontSize="11"
                                                     AutomationProperties.Name="ConfirmValue" AutomationProperties.AutomationId="ConfirmValue"
@@ -772,7 +784,7 @@
                                                             </Style.Triggers>
                                                         </Style>
                                                     </TextBlock.Style>
-                                                    <Run Text="{Binding ElementName, Mode=OneWay}" /><Run Text=": you typed “" /><Run Text="{Binding EnteredValue, Mode=OneWay}" FontWeight="SemiBold" /><Run Text="” — interpreted as “" /><Run Text="{Binding Suggestion, Mode=OneWay}" FontWeight="SemiBold" /><Run Text="” · confirm to apply" />
+                                                    <Run Text="{Binding ElementName, Mode=OneWay}" /><Run Text=": you typed “" /><Run Text="{Binding EnteredValue, Mode=OneWay}" FontWeight="SemiBold" /><Run Text="” — interpreted as “" /><Run Text="{Binding Suggestion, Mode=OneWay}" FontWeight="SemiBold" /><Run Text="” · confirm to apply, or discard" />
                                                 </TextBlock>
                                                 <!-- (b) no interpretation yet and no error (e.g. an unreadable entry the user is
                                                      editing): neutral prompt. -->
@@ -863,6 +875,19 @@
                             <TextBlock Text="{Binding ClaudeAssistHint}" Foreground="{DynamicResource Hint}" FontSize="11.5"
                                        VerticalAlignment="Center" Margin="10,0,0,0" />
                         </StackPanel>
+
+                        <!-- Bypass-permissions advisory (shown only while Claude Assist is ON): permission prompts in
+                             the Claude client steal Windows focus from Revit mid-sequence, so UI-assist clicks/keys
+                             miss without Claude knowing. The Why? link explains the failure mode in depth. -->
+                        <DockPanel Margin="0,4,0,0"
+                                   Visibility="{Binding IsClaudeAssistEnabled, Converter={StaticResource BoolToVis}}">
+                            <Button DockPanel.Dock="Right" Content="Why?" VerticalAlignment="Center" Margin="8,0,0,0"
+                                    Background="Transparent" BorderThickness="0" Foreground="{DynamicResource Accent}"
+                                    FontSize="11.5" Cursor="Hand" Padding="4,0" Click="BypassWhy_Click"
+                                    ToolTip="Why Claude needs bypass permissions for UI-assist" />
+                            <TextBlock Foreground="{DynamicResource Warn}" FontSize="11.5" TextWrapping="Wrap"
+                                       Text="⚠ Run Claude with bypass permissions enabled — otherwise its permission prompts steal focus from Revit and UI-assist clicks silently miss." />
+                        </DockPanel>
 
                         <Border Background="{DynamicResource WarnBg}" BorderBrush="{DynamicResource WarnLine}" BorderThickness="1"
                                 CornerRadius="6" Padding="8,6" Margin="0,8,0,0"

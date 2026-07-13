@@ -1,0 +1,54 @@
+<Window
+    x:Class="Transom.Views.Option2OldValuesDialog"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    Title="Old values"
+    SizeToContent="Height"
+    Width="520"
+    ResizeMode="NoResize"
+    ShowInTaskbar="False"
+    WindowStartupLocation="CenterOwner"
+    Background="{DynamicResource Bg}"
+    FontFamily="Segoe UI">
+    <Window.Resources>
+        <SolidColorBrush x:Key="Bg" Color="#F4F3EE" />
+        <SolidColorBrush x:Key="Surface" Color="#FFFFFF" />
+        <SolidColorBrush x:Key="Text" Color="#26251F" />
+        <SolidColorBrush x:Key="Muted" Color="#6B6A62" />
+        <SolidColorBrush x:Key="Line" Color="#E3E1D9" />
+        <SolidColorBrush x:Key="Accent" Color="#185FA5" />
+        <SolidColorBrush x:Key="Error" Color="#B3261E" />
+
+        <Style TargetType="RadioButton">
+            <Setter Property="Foreground" Value="{DynamicResource Text}" />
+            <Setter Property="Margin" Value="0,5" />
+        </Style>
+    </Window.Resources>
+    <StackPanel Margin="18" TextElement.Foreground="{DynamicResource Text}">
+        <TextBlock x:Name="HeadingText" FontSize="14" FontWeight="Medium" Foreground="{DynamicResource Text}" TextWrapping="Wrap" />
+        <TextBlock x:Name="SubText" Foreground="{DynamicResource Muted}" FontSize="12" TextWrapping="Wrap" Margin="0,6,0,12" />
+
+        <Border Background="{DynamicResource Surface}" BorderBrush="{DynamicResource Line}" BorderThickness="1" CornerRadius="6" Padding="12">
+            <StackPanel>
+                <RadioButton x:Name="LeaveRb" IsChecked="True"
+                             Content="Leave them — the values stay on the elements, just no longer displayed" />
+                <RadioButton x:Name="ClearRb"
+                             Content="Clear them — blank the old parameter on every affected element" />
+                <TextBlock x:Name="ClearNote" Foreground="{DynamicResource Muted}" FontSize="11" Margin="20,0,0,0"
+                           Visibility="Collapsed"
+                           Text="(unavailable — this column stores numeric values, which can't be blanked)" />
+                <RadioButton x:Name="SetRb"
+                             Content="Replace them — write one value into the old parameter on every affected element:" />
+                <TextBox x:Name="ValueBox" Margin="20,4,0,0" Width="240" HorizontalAlignment="Left" Height="26"
+                         VerticalContentAlignment="Center" IsEnabled="False" />
+                <TextBlock x:Name="ValueError" Foreground="{DynamicResource Error}" FontSize="11" Margin="20,4,0,0"
+                           Visibility="Collapsed" Text="Enter the value to write (or choose Leave / Clear)." />
+            </StackPanel>
+        </Border>
+
+        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">
+            <Button Content="Continue" Height="32" Padding="18,0" Background="{DynamicResource Accent}" Foreground="White"
+                    BorderThickness="0" Click="Continue_Click" />
+        </StackPanel>
+    </StackPanel>
+</Window>

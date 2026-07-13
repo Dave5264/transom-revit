@@ -9,21 +9,20 @@ namespace Transom.Core;
 
 /// <summary>
 ///     Runs the export inside Revit's API context. Reads each selected schedule and writes one workbook
-///     (a sheet each). When Claude-assist staging is on, writes to the exchange folder + a run-log and
-///     reports the staged path for a later Finalize.
+///     (a sheet each) straight to <see cref="OutputPath"/>. With Claude Assist on, a run-log pointing at the
+///     workbook is additionally written to the exchange folder (best-effort) — the old stage/Finalize flow
+///     (staged copy in the exchange folder, applied later) was removed 2026-07-12, user-directed.
 /// </summary>
 public sealed class ExportEventHandler : IExternalEventHandler
 {
     public List<long> ScheduleIds = new();
     public string OutputPath = "";
     public string DocTitle = "";
-    public bool Stage;
     public string ExchangeFolder = "";
     /// <summary>When true, grouped built-in-parameter cells export as yellow (Claude can apply them via the
     /// definition-swap); when false they export as a distinct grey (no path to apply).</summary>
     public bool ClaudeAssistEnabled;
     public Action<string> ReportStatus = _ => { };
-    public Action<string> OnStaged = _ => { };
 
     public void Execute(UIApplication app)
     {
@@ -72,20 +71,17 @@ public sealed class ExportEventHandler : IExternalEventHandler
                 string.Join(", ", failures.Select(f => f.Name)) +
                 $"\nFull error details (copyable): {logPath}";
 
-            if (Stage && !string.IsNullOrWhiteSpace(ExchangeFolder))
+            // Always export straight to the user's chosen destination — no stage/verify/finalize gate (removed
+            // 2026-07-12, user-directed: Claude Assist should not change how Export behaves). When Claude Assist
+            // is on and an exchange folder is set, ALSO drop a run-log there (pointing at the real workbook) so
+            // Claude can still review the export in place — but the file the user asked for lands immediately.
+            OfficeIsolation.Engine.WriteWorkbooks(tables, OutputPath);
+            if (ClaudeAssistEnabled && !string.IsNullOrWhiteSpace(ExchangeFolder))
             {
-                Directory.CreateDirectory(ExchangeFolder);
-                var staged = Path.Combine(ExchangeFolder, Path.GetFileName(OutputPath));
-                OfficeIsolation.Engine.WriteWorkbooks(tables, staged);
-                RunLog.WriteExport(ExchangeFolder, tables, staged);
-                OnStaged(staged);
-                ReportStatus($"Staged {okCount} schedule(s) to the exchange folder. Verify with Claude, then Finalize." + failNote);
+                try { Directory.CreateDirectory(ExchangeFolder); RunLog.WriteExport(ExchangeFolder, tables, OutputPath); }
+                catch { /* the run-log is a review convenience — never fail the export over it */ }
             }
-            else
-            {
-                OfficeIsolation.Engine.WriteWorkbooks(tables, OutputPath);
-                ReportStatus($"Exported {okCount} schedule(s) ({elems} element rows) to {OutputPath}" + failNote);
-            }
+            ReportStatus($"Exported {okCount} schedule(s) ({elems} element rows) to {OutputPath}" + failNote);
         }
         catch (IOException)
         {

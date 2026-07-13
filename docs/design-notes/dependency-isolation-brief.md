@@ -147,6 +147,21 @@ binds, into the DEFAULT context, defeating everything).
   full 12-dll NPOI closure ships in all three configs, plus all THREE deps.json files, in
   `publish\Transom\` AND `%AppData%\Autodesk\Revit\Addins\<yr>\Transom\`.
 
+## Revit 2027 correction (found in live R27 smoke test, 2026-07-12)
+
+The premise "Revit loads every add-in into one shared default ALC" holds for R25/R26 only —
+**Revit 2027 loads each add-in into its own `AddInLoader.AddInLoadContext`**. Two fixes followed:
+
+- `ScriptHost.Run` now registers every reference with an `InteractiveAssemblyLoader` — without it,
+  Roslyn re-loaded Transom.dll from disk into its own context ("[A]Globals cannot be cast to
+  [B]Globals"; pre-existing on R27 since scripting shipped, first exercised today).
+- `IsolatedAssembly.SatelliteLoadContext` resolves `Transom*`/`RevitAPI*` through the context that
+  loaded Transom.dll (`HostContext`), not the null→Default fallback (Default has no Transom on R27).
+
+R27 smoke test after the fix (doc springfield_test_R27, .NET 10.0.8): one Transom.dll in ALC "TRANSOM",
+cross-boundary `is IOfficeEngine` check true, xlsx round-trip (PARTITION TYPE F) + docx smoke pass,
+NPOI family only in the Transom.Office ALC. Contexts: TRANSOM / Transom.Roslyn / Transom.Office.
+
 ## Status checklist (update as you go)
 
 - [x] 1. ImportModels.cs split

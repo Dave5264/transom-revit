@@ -14,7 +14,7 @@
 
 [![Latest release](https://img.shields.io/github/v/release/Dave5264/transom-revit?label=latest%20release&color=2ea44f&logo=github)](https://github.com/Dave5264/transom-revit/releases/latest)
 
-### ⬇ [Download the installer](https://github.com/Dave5264/transom-revit/releases/download/v1.7.0/Transom-1.7.0-SingleUser.msi)
+### ⬇ [Download the installer](https://github.com/Dave5264/transom-revit/releases/download/v1.8.0/Transom-1.8.0-SingleUser.msi)
 
 **One click, no admin rights** — installs into your per-user Revit add-ins folder.
 Double-click the `.msi`, then start Revit. Supports **Revit 2025, 2026 & 2027**.
@@ -42,7 +42,21 @@ Then drop the guidance file from [`claude/`](claude/) (`CLAUDE.md`) into your pr
 so Claude Code already knows the tools and the safe-write workflow. See [`claude/README.md`](claude/README.md) for
 exactly where it goes.
 
-> **Status:** v1.7.0 released (Revit 2025/2026/2027) — **Claude in one switch.** The three Claude ribbon buttons
+> **Status:** v1.8.0 released (Revit 2025/2026/2027) — **no edit left behind: the import confirm gate + option-2 conversion scope.**
+> Format-mismatched edits (e.g. typing `2'6` where the schedule shows `2'-6"`) now surface as pending rows at the
+> **top** of the import preview — pre-ticked when Transom can interpret them, with a red **Discard** button next to
+> **Confirm** — and **Apply stays greyed until every pending row in a selected schedule is confirmed or discarded**,
+> so a needs-confirmation edit hiding below the fold can never be silently skipped again. The option-2a/2b
+> "replace the column with a new parameter" path gained two follow-up steps: a checklist of the **other schedules**
+> that display the same parameter (tick them to repoint their columns to the new parameter, current values carried
+> over — categories bound automatically), and an **old-values** chooser (leave them, clear them, or write one value
+> everywhere) with safety guards that never touch a value whose new-parameter copy didn't verify, grouped members
+> that can't be edited in place, or the divergent-type instances whose old value is the only remaining copy.
+> Exports now write **directly** to the chosen file (the exchange-folder stage/finalize step is gone; a run-log
+> still points Claude at the workbook), the Settings tab warns that Claude should run with **bypass permissions**
+> for UI-assist (with a "Why?" explainer covering the focus-steal failure mode), and the Excel engine (NPOI) is
+> isolated into its own `Transom.Office.dll` load context alongside a ribbon consolidation into one
+> **Transom Tools** group. Built on v1.7.0 — **Claude in one switch.** The three Claude ribbon buttons
 > ("Set up Claude", "Claude Bridge", "Bridge Status") and the Off/Verify/Assist mode dropdown are consolidated into a
 > single persisted **Claude Assist** toggle on the Settings tab: the first ON runs the one-time setup (shim + both
 > MCP registrations) and starts the bridge, the bridge **auto-starts with Revit** while the toggle is on, changing

@@ -35,6 +35,22 @@ public sealed partial class TransomView
             return dlg.Result;
         };
 
+        // Option-2 follow-ups (user request 2026-07-12): after a 2a/2b choice, the "also replace in these
+        // schedules" checklist, then the "what happens to the old values" chooser. Closing either without
+        // Continue returns null → the viewmodel takes the safe default (no extra schedules / leave old values).
+        viewModel.Option2SchedulesResolver = prompt =>
+        {
+            var dlg = new Option2SchedulesDialog(prompt) { Owner = this };
+            dlg.ShowDialog();
+            return dlg.Result;
+        };
+        viewModel.Option2OldValuesResolver = prompt =>
+        {
+            var dlg = new Option2OldValuesDialog(prompt) { Owner = this };
+            dlg.ShowDialog();
+            return dlg.Result;
+        };
+
         // Tell the user built-in group edits were staged for Claude-assist.
         viewModel.ClaudeStagedNotice = path =>
             System.Windows.MessageBox.Show(this,
@@ -98,9 +114,48 @@ public sealed partial class TransomView
         }
     }
 
+    // Same first-click treatment for the Discard button next to Confirm.
+    private void DiscardButton_PreviewMouseLeftButtonDown(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        if (sender is Button { DataContext: Core.ProposedChange change } && DataContext is TransomViewModel vm
+            && vm.DiscardRowCommand.CanExecute(change))
+        {
+            vm.DiscardRowCommand.Execute(change);
+            e.Handled = true;
+        }
+    }
+
     private void ClaudeHelp_Click(object sender, System.Windows.RoutedEventArgs e)
     {
         new ClaudeAssistHelpDialog { Owner = this }.ShowDialog();
+    }
+
+    /// <summary>The "Why?" link next to the bypass-permissions advisory — explains the focus-steal failure mode
+    /// in depth (user-reported: approval prompts pull focus off Revit mid-sequence and UI-assist clicks miss).</summary>
+    private void BypassWhy_Click(object sender, System.Windows.RoutedEventArgs e)
+    {
+        System.Windows.MessageBox.Show(this,
+            "When Claude applies staged edits with UI-assist, it drives Revit's own user interface: it enters " +
+            "Edit Group mode, clicks the member in the drawing area, types the new value into the Properties " +
+            "palette, and clicks Finish. For those clicks and keystrokes to land, the Revit window must stay in " +
+            "front and keep keyboard/mouse focus for the whole sequence.\n\n" +
+            "If Claude is running with normal permission prompts, each tool call can pop an “Allow this?” " +
+            "dialog in the Claude window. That prompt takes Windows focus away from Revit at that exact moment — " +
+            "and Claude has no way to see the focus change. Its next click lands on the Claude window (or on " +
+            "nothing), the Edit Group session is left half-finished, and Claude gets confused about why its " +
+            "clicks aren’t landing. The result is stalled or partially-applied edits that look like Revit " +
+            "misbehaving when it’s really a focus war between the two windows.\n\n" +
+            "Running Claude with bypass permissions (for example “claude --dangerously-skip-permissions”, or " +
+            "the client’s session-wide “don’t ask again” approval) means no prompt appears mid-sequence, " +
+            "Revit keeps focus, and the click–type–finish sequence completes reliably.\n\n" +
+            "Scope note: bypass only relaxes Claude’s own tool-approval prompts on this machine. The Transom " +
+            "bridge itself is unchanged — loopback-only, per-user, session-token gated, no admin rights.",
+            "Why bypass permissions?", System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Information);
+    }
+
+    private void LegendMoreInfo_Click(object sender, System.Windows.RoutedEventArgs e)
+    {
+        new ExportLegendDialog { Owner = this }.ShowDialog();
     }
 
     /// <summary>Matches Revit's UI theme — swaps the palette brushes to dark when Revit is dark.</summary>

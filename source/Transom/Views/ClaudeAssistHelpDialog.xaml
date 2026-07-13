@@ -56,14 +56,15 @@
                     below the switch shows every layer is in place.
                 </TextBlock>
                 <TextBlock TextWrapping="Wrap" Foreground="{DynamicResource Muted}" Margin="0,0,0,4">
-                    2 · Export or Preview as usual — Transom stages the workbook + a run-log to the exchange folder.
+                    2 · Export as usual — your workbook saves where you chose, and Transom also drops a run-log
+                    (pointing at that workbook) in the exchange folder so Claude can find it.
                 </TextBlock>
                 <TextBlock TextWrapping="Wrap" Foreground="{DynamicResource Muted}" Margin="0,0,0,4">
                     3 · In Claude Code, ask:
                 </TextBlock>
                 <Border Background="{DynamicResource CodeBg}" BorderBrush="{DynamicResource Line}" BorderThickness="1" CornerRadius="6" Padding="10,8" Margin="0,0,0,4">
                     <TextBlock FontFamily="Consolas" FontSize="12" TextWrapping="Wrap" Foreground="{DynamicResource Text}"
-                               Text="Review the staged Transom workbook against the model and flag anything off." />
+                               Text="Review my latest Transom export against the model and flag anything off." />
                 </Border>
                 <TextBlock TextWrapping="Wrap" Foreground="{DynamicResource Muted}" Margin="0,0,0,16">
                     4 · Claude reports discrepancies. Nothing is written — you decide what to apply.

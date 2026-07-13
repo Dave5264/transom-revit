@@ -22,7 +22,8 @@ public sealed class TransomSettings
     public int McpRegisteredPort { get; set; }
 
     /// <summary>Master Claude-Assist switch (Settings toggle). While true the bridge auto-starts with Revit,
-    /// exports stage to the exchange folder, and grouped built-in edits may route to the staged Claude path.
+    /// exports write a run-log to the exchange folder, and grouped built-in edits may be staged as a Claude
+    /// group-edits JSON on Apply. (The old stage/Finalize EXPORT flow was removed 2026-07-12, user-directed.)
     /// Replaces the old unpersisted Off/Verify/Assist "Claude mode" (true = the old Assist).</summary>
     public bool ClaudeAssistEnabled { get; set; }
 
