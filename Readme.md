@@ -58,8 +58,7 @@ exactly where it goes.
 > added the **extended bridge tools** (element/selection/view workflows a Claude client can drive
 > directly, live-reviewed), plus a revision confirm step and anchor-pass hardening. v1.5.0 made
 > **`execute_revit_code` work alongside other add-ins that load Roslyn** (isolated load context — no more
-> `FileLoadException`). Requirements are locked in [`SPEC.md`](docs/SPEC.md); the build approach is in
-> [`IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md).
+> `FileLoadException`).
 
 ### Using Claude-Assist
 
@@ -110,9 +109,7 @@ The visible sheet is rendered straight from `ViewSchedule.GetCellText` / `GetTab
 combined, percentage and subtotal fields — and Revit's row order — come out exactly as shown. A separate
 *anchor pass* stamps each element row's `UniqueId` into a hidden, sentinel-headed column, which drives a
 safe, durable round-trip on import. Round-trip is enabled only where each row maps cleanly to one writable
-element; material-takeoff, embedded, linked-element and non-itemized schedules export display-only. See
-[`IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md) and the two design audits ([`AUDIT.md`](docs/AUDIT.md),
-[`AUDIT2.md`](docs/AUDIT2.md)).
+element; material-takeoff, embedded, linked-element and non-itemized schedules export display-only.
 
 ## Targets
 
@@ -145,5 +142,5 @@ all-versions build run through the `build/` ModularPipelines project (`cd build;
 | `source/Transom/` | the add-in (commands, views, view-models, core logic) |
 | `build/`, `install/` | ModularPipelines build + WiX installer |
 | `branding/` | ribbon icon + generator |
-| `docs/` | planning + design docs: `SPEC.md`, `IMPLEMENTATION_PLAN.md`, the `AUDIT*.md` viability audits, plus `design-notes/` (shipped-fix rationale + consolidated Revit-API research notes) |
+| `docs/` | design docs: `design-notes/` (shipped-fix rationale + consolidated Revit-API research notes) and `parity-tool-status.md` (bridge-tool review state) |
 | `tools/` | standalone dev tools (`transom_verify.py`) |
