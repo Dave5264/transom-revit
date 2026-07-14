@@ -79,10 +79,19 @@ public class StartupCommand : ExternalCommand
         var doc = uiDoc?.Document;
 
         var projects = new List<string>();
+        Document? firstProject = null;
         if (app.Application?.Documents != null)
             foreach (Document d in app.Application.Documents)
                 if (!d.IsLinked && !d.IsFamilyDocument)
+                {
                     projects.Add(d.Title);
+                    firstProject ??= d;
+                }
+
+        // DocumentCreated/Opened fire BEFORE the new document becomes active, so ActiveUIDocument can be
+        // null (or stale) while a project is already open — fall back to the first open project so the
+        // Hub binds a real document (dropdown + schedules) instead of enabling tabs against nothing.
+        doc ??= firstProject;
 
         var active = uiDoc?.ActiveView as ViewSchedule;
         var schedules = doc != null ? DocUtil.UserSchedules(doc) : new List<(long id, string name)>();
