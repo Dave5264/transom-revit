@@ -50,73 +50,16 @@ exactly where it goes.
 > helper on the status row when it can't), and settings copy consistently says **Claude Code** so nobody tries
 > the chat app.
 >
-> **Previously (v1.8.0):** **no edit left behind: the import confirm gate + option-2 conversion scope.**
-> Format-mismatched edits (e.g. typing `2'6` where the schedule shows `2'-6"`) now surface as pending rows at the
-> **top** of the import preview — pre-ticked when Transom can interpret them, with a red **Discard** button next to
-> **Confirm** — and **Apply stays greyed until every pending row in a selected schedule is confirmed or discarded**,
-> so a needs-confirmation edit hiding below the fold can never be silently skipped again. The option-2a/2b
-> "replace the column with a new parameter" path gained two follow-up steps: a checklist of the **other schedules**
-> that display the same parameter (tick them to repoint their columns to the new parameter, current values carried
-> over — categories bound automatically), and an **old-values** chooser (leave them, clear them, or write one value
-> everywhere) with safety guards that never touch a value whose new-parameter copy didn't verify, grouped members
-> that can't be edited in place, or the divergent-type instances whose old value is the only remaining copy.
-> Exports now write **directly** to the chosen file (the exchange-folder stage/finalize step is gone; a run-log
-> still points Claude at the workbook), the Settings tab warns that Claude should run with **bypass permissions**
-> for UI-assist (with a "Why?" explainer covering the focus-steal failure mode), and the Excel engine (NPOI) is
-> isolated into its own `Transom.Office.dll` load context alongside a ribbon consolidation into one
-> **Transom Tools** group. Built on v1.7.0 — **Claude in one switch.** The three Claude ribbon buttons
-> ("Set up Claude", "Claude Bridge", "Bridge Status") and the Off/Verify/Assist mode dropdown are consolidated into a
-> single persisted **Claude Assist** toggle on the Settings tab: the first ON runs the one-time setup (shim + both
-> MCP registrations) and starts the bridge, the bridge **auto-starts with Revit** while the toggle is on, changing
-> the bridge port re-registers and restarts it automatically, and an always-visible **status checklist** in Settings
-> (bridge + port, session token, shim, both registrations, Claude app detected) replaces the old Bridge Status
-> dialog. Built on v1.6.1, which advertised the **live-reviewed bridge toolset** — the extended tools that
-> passed a live review, with seven not-yet-reviewed parity tools gated off until they pass (see
-> `docs/parity-tool-status.md`). Built on v1.6.0, which added the **extended bridge tools** (element/selection/view
-> workflows a Claude client can drive directly), a **revision confirm step** before revision-modifying operations
-> (with combined per-detail comments in the revision narrative), anchor-pass hardening (identity params are never
-> stamped; no-stamp key-column path with verified rollback), and reliability fixes. Built on v1.5.0, where
-> **`execute_revit_code` works alongside other add-ins that
-> load Roslyn.** When another add-in (e.g. pyRevit) had a different `Microsoft.CodeAnalysis` loaded in the Revit
-> process, the in-process script tool could fail with a `FileLoadException`; Transom now pins Roslyn's assembly
-> resolution to its own load context so it always binds its bundled 4.12. Built on v1.4.8, which **gave Claude-Assist
-> full Revit API access** — a new
-> `execute_revit_code` bridge tool lets a connected Claude client run arbitrary Revit API code in the live model
-> (compiled in-process via Roslyn), advertised in the MCP shim's tool list alongside the schedule tools. The bridge
-> status probe was also corrected (it now binds the right loopback port and asserts on the live status body), and
-> the in-app help points at the Claude Code path. Built on v1.4.7, where **Claude-Assist first actually connected**:
-> the bundled MCP shim framing was corrected (newline-delimited JSON-RPC over stdio, plus a `protocolVersion` echo on
-> initialize) so a Claude client (Claude Code) completes the handshake and stays connected — in v1.4.6 the bridge
-> installed but the connection never succeeded. The three Claude ribbon buttons are also consolidated into one **"Set
-> up Claude"**. Built on v1.4.6's **seamless setup**: the per-user installer places the MCP shim into `%LocalAppData%`
-> at **install time**, so the bridge has the current shim without needing to open Revit first; and the Claude-Assist
-> guidance directs the **manual "Edit Group" mode** path (drive the Revit UI to edit a grouped built-in) instead of
-> an API group-rebuild, with richer staging files (doc path + GUID, old→new values, the new-parameter name) so
-> Claude Code can apply and verify reliably. Built on v1.4.5
-> (grouped-import correctness + option-2 UX): when a column edit touches members of a model group, the chosen
-> resolution now applies to the column's **ungrouped**
-> instances too: Skip skips them (they no longer write anyway), Claude-Assist stages them with the grouped ones,
-> and the new-parameter (option-2a/2b) path writes the edit to the new param for ungrouped members instead of
-> leaving it on the old hidden column. The group-conflict dialog now lets you **confirm/rename the new parameter**
-> before it's created, drops the misleading "Recommended" tag, offers the new-instance-param path only when
-> per-instance Vary isn't available, suppresses the type-param option on a per-type conflict, and the replacement
-> column inherits the original column's text justification. The installer dialogs were also fixed so their title
-> text is readable (was dark-on-dark). Built on v1.4.3, which fixed option-2a value routing on type-organized
-> schedules + read-only-edit reporting; and v1.4.2, which refreshed the installer art plus import-UX:
-> "Apply selected" stays greyed until you Preview, format-mismatched values become inline confirm rows
-> (you confirm "2.5 → 2'-6"" before it applies), the conflict picker accepts any entered value, and the
-> bundled Claude-Assist helper got UI-automation hardening. Built on v1.4.1, which hardened grouped-schedule import:
-> type- and group-organized schedules now key their import baseline **per rendered row**, so editing one row no
-> longer collapses the whole type to a single value or produces phantom edits; grouped built-in *data* params
-> (Mark, Comments, Number, Finish) write directly while only geometry-driving built-ins route through
-> Claude-Assist; and conflict-only schedules stay selectable so their type conflicts reach the resolution dialog.
-> v1.4.0 added **editable column headers** (rename a column caption or a grouped super-header in the spreadsheet
-> and it writes back), **hidden-group instance resolution**, and a clearer **per-parameter color contract** —
-> every cell gets a definite color: no-fill = directly editable instance, green = type/bulk, blue = grouped
-> instance Transom resolves without AI, yellow = grouped geometry-driving built-in (Claude-Assist only),
-> grey = not settable. v1.3.1 bundled the MCP shim and auto-registers it on first launch, so the Claude bridge
-> connects with no manual setup. Requirements are locked in
-> [`SPEC.md`](docs/SPEC.md); the build approach is in [`IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md).
+> **Previously:** v1.8.0 closed the import **confirm gate** — format-mismatched edits (e.g. `2'6` for `2'-6"`)
+> surface as pending rows and **Apply stays greyed until each is confirmed or discarded** — and broadened the
+> option-2 "replace column with a new parameter" path (repoint other schedules to the new param, choose what
+> happens to the old values); exports now write **directly** to the chosen file. v1.7.0 consolidated every Claude
+> control into a single persisted **Claude Assist** toggle with an always-visible status checklist. v1.6.0–v1.6.1
+> added the **extended bridge tools** (element/selection/view workflows a Claude client can drive
+> directly, live-reviewed), plus a revision confirm step and anchor-pass hardening. v1.5.0 made
+> **`execute_revit_code` work alongside other add-ins that load Roslyn** (isolated load context — no more
+> `FileLoadException`). Requirements are locked in [`SPEC.md`](docs/SPEC.md); the build approach is in
+> [`IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md).
 
 ### Using Claude-Assist
 
