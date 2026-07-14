@@ -63,6 +63,7 @@ A plain `dotnet build source/Transom/Transom.csproj -c Debug.R2x` **is** the loc
 
 ### Steps (Revit closed)
 1. **Bump version** — `source/Transom/Core/AppInfo.cs` `Version` → new value; update `Readme.md` download link + Status. Commit to `main` (no branch). Push.
+   **Version increments are 0.0.1** (maintainer policy, 2026-07-13): 1.9.0 → 1.9.1 → 1.9.2 …, regardless of feature size. Only jump further if the maintainer explicitly says so in the session.
 2. **Clean** — `rm -rf source/Transom/bin source/Transom/obj` (a stale `Debug.R25/publish` next to `Release.R25/publish` collides at "2025" → duplicate WiX component IDs).
 3. **Build each Revit config (csproj-direct, NOT the .sln)** with the version:
    ```
@@ -110,6 +111,7 @@ A plain `dotnet build source/Transom/Transom.csproj -c Debug.R2x` **is** the loc
 
 ## 4. Conventions & safety
 - **Commit to `main`, no feature branches** (maintainer preference). Don't `--no-verify`. End commit messages with the standard `Co-Authored-By` trailer.
+- **Multi-line commit messages: write the message to a temp file and `git commit -F <file>`.** A PowerShell 5.1 here-string (`@'…'@`) passed to `git commit -m` has broken in practice here (line-ending mangling splits it into bogus pathspec args). `-F` sidesteps quoting entirely and is also the reliable path for `gh release create --notes-file`.
 - **Workshared models:** never Synchronize/Save a workshared model during a test; on a close prompt answer "do not save" / "keep ownership" — never sync. Use throwaway/test models for Assist runs.
 - **Test the published binary, not the build flavor:** the smoke test builds a framework-dependent exe; the *shipped* exe is self-contained (different md5, same framing code). Verify against the actual `%LocalAppData%` exe when proving connect.
 - **Version source of truth:** `AppInfo.Version`. After bumping, the deployed DLL's FileVersion and the MSI version should match it.
