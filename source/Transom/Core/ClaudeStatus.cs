@@ -5,8 +5,9 @@ using System.Text.Json;
 
 namespace Transom.Core;
 
-/// <summary>One ✓/✗ row in the Settings status panel.</summary>
-public sealed record ClaudeStatusRow(bool Ok, string Label, string Detail);
+/// <summary>One ✓/✗ row in the Settings status panel. ShowHelp adds a "?" button to the row (used by the
+/// Claude-running row when red, since that detection can false-negative — see ClaudeConnectHelpDialog).</summary>
+public sealed record ClaudeStatusRow(bool Ok, string Label, string Detail, bool ShowHelp = false);
 
 /// <summary>
 ///     Point-in-time snapshot of every layer Claude-assist depends on — bridge listener, session token,
@@ -22,6 +23,7 @@ public sealed class ClaudeStatus
     public bool DataRegistered { get; init; }
     public bool UiRegistered { get; init; }
     public bool ClaudeAppRunning { get; init; }
+    public string ClaudeAppVia { get; init; } = "";
     public int Port { get; init; }
     public string ShimDate { get; init; } = "";
 
@@ -50,6 +52,7 @@ public sealed class ClaudeStatus
             DataRegistered = data,
             UiRegistered = ui,
             ClaudeAppRunning = ClaudeDetector.IsRunning(),
+            ClaudeAppVia = ClaudeDetector.DetectedVia,
             Port = port,
         };
     }
@@ -60,9 +63,11 @@ public sealed class ClaudeStatus
         new ClaudeStatusRow(BridgeOn, "Bridge listening", BridgeOn ? $"127.0.0.1:{Port}" : "off"),
         new ClaudeStatusRow(TokenPresent, "Session token", TokenPresent ? "written for this session" : "written when the bridge turns on"),
         new ClaudeStatusRow(ShimPresent, "MCP shim deployed", ShimPresent ? ShimDate : "reinstall Transom or restart Revit to self-heal"),
-        new ClaudeStatusRow(DataRegistered, "Data bridge registered with Claude", "“transom”"),
-        new ClaudeStatusRow(UiRegistered, "UI-Assist registered with Claude", "“transom-ui-assist”"),
-        new ClaudeStatusRow(ClaudeAppRunning, "Claude app running", ClaudeAppRunning ? "detected" : "start Claude Desktop / Claude Code to connect"),
+        new ClaudeStatusRow(DataRegistered, "Data bridge registered with Claude Code", "“transom”"),
+        new ClaudeStatusRow(UiRegistered, "UI-Assist registered with Claude Code", "“transom-ui-assist”"),
+        new ClaudeStatusRow(ClaudeAppRunning, "Claude app running",
+            ClaudeAppRunning ? (string.IsNullOrEmpty(ClaudeAppVia) ? "detected" : ClaudeAppVia) : "start Claude Code to connect",
+            ShowHelp: !ClaudeAppRunning),
     };
 
     /// <summary>

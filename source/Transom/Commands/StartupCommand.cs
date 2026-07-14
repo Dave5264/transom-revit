@@ -26,27 +26,16 @@ public class StartupCommand : ExternalCommand
     /// <see cref="SettingsCommand"/> so the Settings button reuses the exact same window.</summary>
     internal static TransomView OpenOrActivate(Autodesk.Revit.UI.UIApplication app)
     {
-        var uiDoc = app.ActiveUIDocument;
-        var doc = uiDoc?.Document;
-
         // Re-read the LIVE document state so a re-invoke after a doc close/reopen rebinds the Hub
         // instead of showing the previous document's stale schedule list / filter (code3 fix).
-        var projects = new List<string>();
-        if (app.Application?.Documents != null)
-            foreach (Document d in app.Application.Documents)
-                if (!d.IsLinked && !d.IsFamilyDocument)
-                    projects.Add(d.Title);
-
-        var active = uiDoc?.ActiveView as ViewSchedule;
-        var schedules = doc != null ? DocUtil.UserSchedules(doc) : new List<(long id, string name)>();
+        var (projects, doc, activeScheduleId, schedules) = GatherDocumentState(app);
 
         if (TransomView.Instance != null)
         {
             // Existing window: rebind to the current document (rebuild projects, reload schedules,
             // clear stale filter), then focus it.
             if (TransomView.Instance.DataContext is TransomViewModel existingVm)
-                existingVm.RefreshFromDocument(
-                    projects, doc?.Title ?? "", active?.Id.Value ?? 0, schedules);
+                existingVm.RefreshFromDocument(projects, doc?.Title ?? "", activeScheduleId, schedules);
             TransomView.Instance.Activate();
             return TransomView.Instance;
         }
@@ -59,11 +48,44 @@ public class StartupCommand : ExternalCommand
         var loadEvent = Autodesk.Revit.UI.ExternalEvent.Create(loadHandler);
 
         var viewModel = new TransomViewModel(
-            projects, doc?.Title ?? "", active?.Id.Value ?? 0, schedules,
+            projects, doc?.Title ?? "", activeScheduleId, schedules,
             exportEvent, exportHandler, importEvent, importHandler, loadEvent, loadHandler);
         var view = new TransomView(viewModel);
         new WindowInteropHelper(view) { Owner = app.MainWindowHandle };
         view.Show();
+        // Zero documents (Settings is always-available): Export/Import are disabled, so land on the one
+        // tab that works instead of a greyed Export page.
+        if (projects.Count == 0) view.SelectSettingsTab();
         return view;
+    }
+
+    /// <summary>Rebinds an already-open Hub to the current document state — called from the document
+    /// opened/created/closed events (Application.RefreshOpenHub) so the window tracks documents live while
+    /// it sits open (the tabs enable/disable via TransomViewModel.HasProject). No-op when the Hub is closed.</summary>
+    internal static void RefreshOpenHub(Autodesk.Revit.UI.UIApplication app)
+    {
+        if (TransomView.Instance?.DataContext is not TransomViewModel vm) return;
+        var (projects, doc, activeScheduleId, schedules) = GatherDocumentState(app);
+        vm.RefreshFromDocument(projects, doc?.Title ?? "", activeScheduleId, schedules);
+        if (projects.Count == 0) TransomView.Instance.SelectSettingsTab(); // last doc closed → only live tab
+    }
+
+    /// <summary>The Hub's document snapshot: open project titles, the active document (null at zero docs),
+    /// the active schedule view id (0 if none), and the active document's user schedules.</summary>
+    private static (List<string> projects, Document? doc, long activeScheduleId, List<(long id, string name)> schedules)
+        GatherDocumentState(Autodesk.Revit.UI.UIApplication app)
+    {
+        var uiDoc = app.ActiveUIDocument;
+        var doc = uiDoc?.Document;
+
+        var projects = new List<string>();
+        if (app.Application?.Documents != null)
+            foreach (Document d in app.Application.Documents)
+                if (!d.IsLinked && !d.IsFamilyDocument)
+                    projects.Add(d.Title);
+
+        var active = uiDoc?.ActiveView as ViewSchedule;
+        var schedules = doc != null ? DocUtil.UserSchedules(doc) : new List<(long id, string name)>();
+        return (projects, doc, active?.Id.Value ?? 0, schedules);
     }
 }

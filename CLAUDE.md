@@ -43,6 +43,14 @@ Repo: `Dave5264/transom-revit`. Default branch: `main`. Primary dev path on the 
 
 > This is the authoritative release runbook. If a build/publish detail here ever disagrees with observed behavior, live behavior is the source of truth.
 
+### Local dev deploy (every build IS a deploy)
+A plain `dotnet build source/Transom/Transom.csproj -c Debug.R2x` **is** the local deploy — `DeployAddin=true` copies the payload to `%AppData%\Autodesk\Revit\Addins\<year>\Transom\`. Consequences:
+- **WARN THE USER to close Revit BEFORE building — up front, not after errors appear.** A running Revit holds the deployed DLLs; the failure shows up as file-copy/lock errors or a flaky "N Error(s)" build that mysteriously succeeds on retry (that retry only worked because the user closed Revit in the meantime). Check `Get-Process Revit` immediately before each build; if it's running, ask the user to close it — **never kill it yourself**.
+- Strictly, only the matching version locks (Debug.R25 ↔ Revit 2025, .R26 ↔ 2026, .R27 ↔ 2027), but the safe default is **all** Revit closed, since a deploy pass usually builds all three.
+- Revit loads the add-in at startup — after a deploy the user must **restart Revit** to pick it up; there is no hot reload.
+- Config map: `Debug/Release.R25`/`.R26` = .NET 8, `.R27` = .NET 10 → Revit 2025/2026/2027.
+- If `source/Transom.Office/` changed, also build `Transom.Office.csproj` for each config — it copies the Office engine into the output/Addins folders via its own post-build target (see the comment in `Transom.csproj`).
+
 ### Hard rules
 - **Every build auto-deploys the add-in DLL** (`DeployAddin=true`) to `%AppData%\Autodesk\Revit\Addins\<ver>\` — so **Revit MUST be CLOSED** before building, or the copy fails (locked DLL). Re-confirm Revit is closed immediately before each build. Never force-kill Revit; the user closes it.
 - **A published GitHub release version is IMMUTABLE.** Never re-publish a different binary under an existing version tag — bump `AppInfo.Version` to a new number.

@@ -177,10 +177,10 @@
                 <!-- CLAUDE / MCP -->
                 <TextBlock Style="{StaticResource H}" Text="Claude Assist (optional)" />
                 <TextBlock Style="{StaticResource P}">
-                    Transom works fully on its own. Turn <Run Text="Claude Assist" FontWeight="SemiBold" /> on (Settings tab) and a connected Claude client can review an export/import against the live model, and apply the edits a normal import can’t — chiefly instance parameters on group members.
+                    Transom works fully on its own. Turn <Run Text="Claude Assist" FontWeight="SemiBold" /> on (Settings tab) and a connected Claude Code session can review an export/import against the live model, and apply the edits a normal import can’t — chiefly instance parameters on group members.
                 </TextBlock>
                 <TextBlock Style="{StaticResource P}">
-                    The bridge is <Run Text="admin-free" FontWeight="SemiBold" />: it listens only on 127.0.0.1 (loopback) on a high port and requires a per-session token, so other apps and web pages can’t drive it. The first time you turn Claude Assist on, Transom registers its bundled connectors with Claude Desktop / Claude Code (restart Claude once afterward); the status panel next to the switch shows every layer at a glance. See “How Claude works” on the Settings tab.
+                    The bridge is <Run Text="admin-free" FontWeight="SemiBold" />: it listens only on 127.0.0.1 (loopback) on a high port and requires a per-session token, so other apps and web pages can’t drive it. The first time you turn Claude Assist on, Transom registers its bundled connectors with Claude Code (restart Claude Code once afterward); the status panel next to the switch shows every layer at a glance. See “How Claude Code works” on the Settings tab.
                 </TextBlock>
                 <TextBlock Style="{StaticResource P}">
                     • <Run Text="Beyond schedules" FontWeight="SemiBold" /> — with Claude Assist on, Claude can also read and drive the model directly: render a view to an image, read the current selection, query and filter elements, read/set parameters, run clash checks, tag, create views/sheets/levels, export PDF/DWG/IFC, and more (ask Claude what it can do in Revit). These run through the same loopback bridge and token, so the same Settings switch governs them.

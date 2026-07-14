@@ -227,6 +227,9 @@ public sealed partial class TransomViewModel : ObservableObject
     [ObservableProperty] private string _selectionInfo = "";
     [ObservableProperty] private string _selectedProject = "";
 
+    // False at zero documents (Settings opens without a project now) — gates the Export/Import tabs.
+    [ObservableProperty] private bool _hasProject;
+
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(HasActive))]
     private ScheduleEntry? _activeSchedule;
@@ -263,7 +266,7 @@ public sealed partial class TransomViewModel : ObservableObject
     [ObservableProperty] private string _claudeStatusFooter = "";
     public ObservableCollection<ClaudeStatusRow> ClaudeStatusRows { get; } = new();
     public string ClaudeAssistHint => IsClaudeAssistEnabled
-        ? "Claude can read schedules and write parameters over the local bridge."
+        ? "Claude Code can read schedules and write parameters over the local bridge."
         : "First time on runs one-time setup (per-user, no admin).";
     // G1: the bridge port the UI binds/probes is Transom's OWN self-host bridge (BridgeSelfHostPort, 48810) —
     // NOT the retired external-pyRevit probe (48884), which Transom never listened on.
@@ -325,6 +328,7 @@ public sealed partial class TransomViewModel : ObservableObject
         _copyResetTimer.Tick += (_, _) => { Copied = false; CopiedImport = false; CopiedLog = false; _copyResetTimer.Stop(); };
 
         foreach (var p in projects) Projects.Add(p);
+        _hasProject = projects.Count > 0;
         _selectedProject = activeProjectTitle; // backing field: don't trigger a reload during construction
         SetSchedules(activeScheduleId, schedules);
         _initialized = true;
@@ -354,6 +358,7 @@ public sealed partial class TransomViewModel : ObservableObject
     {
         Projects.Clear();
         foreach (var p in projects) Projects.Add(p);
+        HasProject = projects.Count > 0;
 
         _selectedProject = activeProjectTitle; // backing field: skip OnSelectedProjectChanged's async reload
         OnPropertyChanged(nameof(SelectedProject));
@@ -1663,7 +1668,7 @@ public sealed partial class TransomViewModel : ObservableObject
                         isError: true);
                 }
                 RestartNotice = setup.NeedsClaudeRestart
-                    ? "Setup complete — restart your Claude client (Claude Code / Claude Desktop) to load Transom's tools; it connects automatically after that."
+                    ? "Setup complete — restart Claude Code to load Transom's tools; it connects automatically after that."
                     : "";
             });
         }
@@ -1753,19 +1758,7 @@ would: drive Revit's **""Edit Group"" mode** in the UI with the **Transom UI-Ass
 > Project/shared parameters on grouped elements are NOT here — Transom applies those itself (it enables
 > ""vary by group instance"" and writes them). This file is only the built-in edits, which need the UI path below.
 
-## Two phases: API vs UI (the load-bearing rule)
-You work in two tool sets, in distinct phases:
-- the **Revit API** (the `transom` bridge / `execute_revit_code`) — for selection, view setup, the RED colour
-  locator, and verification. Use it BEFORE you enter Edit Group and AFTER you Finish.
-- the **transom-ui-assist** UI tools (`revit_*`) — for everything INSIDE Edit Group mode.
-
-**Inside Edit Group mode the Revit API is DEAD** (it times out): you cannot select, read, write, or verify a
-member via the API while editing the group. So all API work happens BEFORE entering and AFTER finishing — never
-during. Everything between (enter edit mode, pick the element, open Properties, set the value, finish) is
-**screenshot + `revit_*` clicks/keys/scrolls**. **Take a `revit_screenshot(screen:true)` after almost every
-click/type/scroll, READ it, and confirm the expected state before the next action** — a wrong-element pick, a
-mis-focused field, and a missed button are all SILENT.
-
+" + GuideTwoPhasesMd + @"
 ## 1. Find the staging file
 In **this same folder**, find the file that parses as JSON with top-level `""tool"":""Transom""` and
 `""kind"":""group-edits""` (default name `transom_group_edits.json`; match by **content, not name**). This
@@ -1797,7 +1790,31 @@ pick one uniform value.
 
 ## 4. Apply each built-in group edit (per member element)
 
-### Phase A — API setup (use the Revit API via `execute_revit_code`; do this BEFORE entering Edit Group)
+" + GuidePhasesMd + @"
+## 5. Report
+Per group type / member: applied / skipped (with reason) / conflicts (per-instance divergence → point to
+option 2b). Note this changed the group **definition**, so all instances of the type share the new value.
+
+" + GuideWorksharedCloseMd;
+
+    // --- sections shared VERBATIM between the staged-edits guide (ClaudeGuideMarkdown) and the standalone
+    // Claude Assist guide (ClaudeAssistStandaloneMarkdown) so the two can't drift apart ---
+
+    private const string GuideTwoPhasesMd = @"## Two phases: API vs UI (the load-bearing rule)
+You work in two tool sets, in distinct phases:
+- the **Revit API** (the `transom` bridge / `execute_revit_code`) — for selection, view setup, the RED colour
+  locator, and verification. Use it BEFORE you enter Edit Group and AFTER you Finish.
+- the **transom-ui-assist** UI tools (`revit_*`) — for everything INSIDE Edit Group mode.
+
+**Inside Edit Group mode the Revit API is DEAD** (it times out): you cannot select, read, write, or verify a
+member via the API while editing the group. So all API work happens BEFORE entering and AFTER finishing — never
+during. Everything between (enter edit mode, pick the element, open Properties, set the value, finish) is
+**screenshot + `revit_*` clicks/keys/scrolls**. **Take a `revit_screenshot(screen:true)` after almost every
+click/type/scroll, READ it, and confirm the expected state before the next action** — a wrong-element pick, a
+mis-focused field, and a missed button are all SILENT.
+";
+
+    private const string GuidePhasesMd = @"### Phase A — API setup (use the Revit API via `execute_revit_code`; do this BEFORE entering Edit Group)
 1. **revit_tile** if Revit isn't already tiled side-by-side. The right split is **Revit at ~2/3 of the
    screen, Claude at 1/3** (user-confirmed: half/half cramps the Revit canvas; Claude only needs a chat
    column) — revit_tile does this by default; pass `revitFrac` only to deviate.
@@ -1845,16 +1862,308 @@ pick one uniform value.
 13. **Remove the red override:** `view.SetElementOverrides(id, new OverrideGraphicSettings())` in a transaction;
     `revit_screenshot(screen:true)` → red gone. If a write didn't take or the count changed, report it — never
     leave a half-applied state.
+";
 
-## 5. Report
-Per group type / member: applied / skipped (with reason) / conflicts (per-instance divergence → point to
-option 2b). Note this changed the group **definition**, so all instances of the type share the new value.
-
-## Workshared close (if you ever close the model)
+    private const string GuideWorksharedCloseMd = @"## Workshared close (if you ever close the model)
 NEVER click ""synchronize"" or ""save"" on a close dialog. LOOP on `revit_list_dialogs`: issue ONE
 `revit_click_dialog` per call, first match wins — ""do not save"" (Changes Not Saved) → ""keep ownership""
 (Editable Elements / Close Without Saving). Never bare-dismiss (it defaults to cancel/close → aborts the
 close). The user controls sync.
+";
+
+    /// <summary>Settings-tab export of the standalone Claude Assist guide — the same operating instructions
+    /// that accompany a staged edit, reframed so Claude Code can connect to and drive Revit with NO staged
+    /// edit present (the "just let me use Claude in Revit" path).</summary>
+    [RelayCommand]
+    private void ExportClaudeAssistGuide()
+    {
+        var dlg = new SaveFileDialog
+        {
+            Title = "Export the Claude Assist guide",
+            Filter = "Markdown (*.md)|*.md",
+            FileName = "Transom - Claude Assist.md",
+            InitialDirectory = Directory.Exists(ExchangeFolder) ? ExchangeFolder : "",
+        };
+        if (dlg.ShowDialog() != true) return;
+        try
+        {
+            File.WriteAllText(dlg.FileName, ClaudeAssistStandaloneMarkdown());
+        }
+        catch (Exception ex)
+        {
+            Views.ReportDialog.Show("Transom — Claude Assist",
+                "Couldn't write the guide file.", ex.Message, isError: true);
+        }
+    }
+
+    private string ClaudeAssistStandaloneMarkdown() => $@"# Transom — Connect Claude Code with Revit
+
+The user dropped this file into the session because they want to work with their **live Revit model** through
+**Transom** (a Revit add-in). There is **no staged edit** — this is the general ""drive Revit with Claude""
+path. Transom registered two local MCP servers with Claude Code when the user turned **Claude Assist** on
+(Schedule Hub → Settings tab):
+
+- **`transom`** — the data bridge (loopback only, 127.0.0.1:{BridgePort}). Read schedules and elements, set
+  parameters, create views/sheets/levels, tag, color, export images, and run arbitrary Revit API C# via
+  `execute_revit_code`. This is your primary tool set — almost everything happens here.
+- **`transom-ui-assist`** — UI automation (`revit_*` tools) for the few Revit commands that have NO API:
+  Edit Group mode, modal dialogs, and Properties-palette edits on group members. Screenshot-driven clicking —
+  slower and riskier than the API, so use it only when the API path is closed.
+
+## 1. Connect and verify (do this first)
+1. Call `mcp__transom__status`. A reply like `{{""ok"":true, …, ""doc"":""<title>""}}` means you're connected —
+   tell the user which document you're on, and offer `list_schedules` to show what's in it.
+2. If the `transom` tools are missing from this session: Claude Assist is off in Transom's Settings tab, or
+   Claude Code wasn't restarted after setup (MCP servers load only at startup). Tell the user which.
+3. If `status` errors or times out: the bridge isn't listening — the user should check the Settings status
+   panel (""Bridge listening 127.0.0.1:{BridgePort}"") and that a Revit document is open.
+
+## 2. If it isn't connecting — diagnose layer by layer
+The user may have dropped this file in precisely BECAUSE the connection isn't working. (Note one known false
+negative: Transom's status panel has a ""Claude app running"" row that is process-name based — it can show
+red while this very session is connected. Trust a working `status` call over that row, and tell the user so.)
+How the plumbing fits together, so you can test each link:
+
+- **The add-in**: Transom lives on Revit's **Transom** ribbon tab → **Schedule Hub** button. The **Claude
+  Assist** toggle, its status panel, and the bridge port (under Advanced) are on the Schedule Hub window's
+  **Settings** tab.
+- **The bridge**: while Claude Assist is ON and a document is open, Transom self-hosts HTTP inside Revit at
+  `127.0.0.1:{BridgePort}` (loopback only). `GET /status` needs no auth — probing
+  `http://127.0.0.1:{BridgePort}/status` with curl from a shell is a fair bridge test. Every other call
+  needs the per-session token, which rotates each time the bridge starts.
+- **The shim**: Claude Code never talks to the bridge directly — it spawns
+  `%LocalAppData%\Transom\mcp\Transom.McpShim.exe` (a stdio MCP server), which forwards to the bridge and
+  adds the token it reads from `%LocalAppData%\Transom\bridge.token`.
+- **Registration**: turning Claude Assist on merges two entries into the `mcpServers` section of the Claude
+  Code user config at `%UserProfile%\.claude.json`: `transom` (the shim, args `--port {BridgePort}`) and
+  `transom-ui-assist` (`Transom.ClickHelper.Mcp.exe`, the UI automation). Claude Code loads MCP servers only
+  at STARTUP — after first-time setup or a port change, Claude Code must be restarted.
+- **Claude Code settings**: nothing special is needed for bridge reads/writes. For UI-assist sequences
+  (Edit Group, below), run with bypass permissions (e.g. `claude --dangerously-skip-permissions`) so
+  approval prompts can't steal Windows focus from Revit mid-click.
+
+Walk the chain in order:
+1. **No `transom` tools in this session?** Check `%UserProfile%\.claude.json` has both entries above pointing
+   at existing exes under `%LocalAppData%\Transom\mcp\` (`claude mcp list` also shows what loaded). Missing
+   or wrong → toggle Claude Assist OFF then ON in Transom Settings, then restart Claude Code.
+2. **Tools present but `status` fails?** Confirm Revit is open with a document and the toggle is ON — the
+   status panel should show ""Bridge listening 127.0.0.1:{BridgePort}"". Probe `/status` with curl to split
+   shim problems from bridge problems: curl OK + tool failing = shim/registration side; curl dead = bridge
+   side (toggle OFF/ON restarts it). Also confirm the port in `.claude.json` matches the Settings port.
+3. **Reads work but writes return 401?** Stale session token — toggle Claude Assist OFF then ON (rewrites
+   `bridge.token`) and retry.
+4. **Still stuck?** Research is fair game: Claude Code's MCP docs (https://code.claude.com/docs, MCP
+   section), `claude mcp get transom`, and the Transom repository (github.com/Dave5264/transom-revit) for
+   README and issues. Report to the user exactly which layer failed and what you changed.
+
+## 3. Ground rules (safety)
+- **Confirm the document before any write** — `status` reports the open doc; if it isn't the model the user
+  means, STOP and ask.
+- **Verify every write** by reading the value back; report failures, never assume.
+- **If the model is workshared, NEVER Synchronize with Central and NEVER Save** — the user controls sync.
+- Wrap `execute_revit_code` model changes in a Transaction; keep one logical change per transaction so a
+  failure rolls back cleanly.
+
+" + GuideTwoPhasesMd + @"
+## Editing a built-in parameter on a GROUP member (the one write the API refuses)
+A built-in param (Comments, Finish, Mark, …) on an element inside a Revit MODEL GROUP can't be written by the
+API — the write is rejected with *""Changes to groups are allowed only in group edit mode.""* Apply it the way
+a person would, by driving Revit's **Edit Group** mode with the transom-ui-assist tools:
+
+" + GuidePhasesMd + @"
+Editing a member inside Edit Group edits the group **definition** — every instance of that group type gets the
+same value. That is correct and durable; say so in your report. Per-instance DIVERGENT built-in values are not
+possible while grouped and need an instance shared parameter instead (Transom import option 2b).
+
+" + GuideWorksharedCloseMd;
+
+    /// <summary>Settings-tab "Show me what you can do" export — a scripted demo build (a 12'x10' shed with a
+    /// gable roof, door, window, and a section-boxed 3D reveal) plus the full connection guide in one file,
+    /// so a brand-new user can watch Claude work without having to invent a first command.</summary>
+    [RelayCommand]
+    private void ExportShowcaseGuide()
+    {
+        var dlg = new SaveFileDialog
+        {
+            Title = "Export the Transom demo file",
+            Filter = "Markdown (*.md)|*.md",
+            FileName = "Transom - Show me what you can do.md",
+            InitialDirectory = Directory.Exists(ExchangeFolder) ? ExchangeFolder : "",
+        };
+        if (dlg.ShowDialog() != true) return;
+        try
+        {
+            File.WriteAllText(dlg.FileName, ShowcaseMarkdown());
+        }
+        catch (Exception ex)
+        {
+            Views.ReportDialog.Show("Transom — Show me what you can do",
+                "Couldn't write the demo file.", ex.Message, isError: true);
+        }
+    }
+
+    private string ShowcaseMarkdown() => ShowcaseIntroMd + ShowcaseExerciseMd + @"
+---
+
+*Everything below is the standard Transom connection guide — use it for the connection check above and as
+the reference for all further work in this session.*
+
+" + ClaudeAssistStandaloneMarkdown();
+
+    private const string ShowcaseIntroMd = @"# Transom — Show me what you can do (guided demo)
+
+The user exported this from Transom's Settings tab because they're new to driving Revit with Claude and want
+to SEE a capability demo instead of having to invent a first command. Follow this contract, in order:
+
+1. **Connect first.** Run the connection check from the guide at the bottom of this file (call
+   `mcp__transom__status`). If the tools or the bridge aren't up, walk the user through the guide's
+   layer-by-layer diagnosis until they are — getting them connected is part of the job.
+2. **Check the document.** This demo CREATES elements and expects a fresh throwaway project (**File ▸ New**
+   in Revit). If `status` reports what looks like a real model (a saved path, a project-like title), warn
+   the user and get an explicit OK before touching it.
+3. **Then wait.** Say, roughly: ""I'm ready to show you what I can do — just give the word."" Do NOT build
+   anything until the user says go.
+4. **On the word,** run the demo script below step by step, narrating briefly (a line per step, no
+   lectures). If a step errors, diagnose and adapt — the script is a baseline, not a cage.
+5. **Afterwards,** summarize what was built in plain terms and offer natural next steps (add a floor,
+   dimension the plan, tag the openings, steepen the pitch, export an image) so the user sees where to go
+   from here.
+
+";
+
+    private const string ShowcaseExerciseMd = @"## The demo script: a 12' × 10' shed with a gable roof
+Run each step as its own `execute_revit_code` call — separate transactions, so a late failure can't undo
+earlier steps. All lengths are in FEET (the Revit API's internal length unit). Carry forward the element
+ids each step returns; the placeholders in later steps name them.
+
+### Step 1 — four walls (two flat eave walls, two gable-profile ends)
+There is no API to attach a wall top to a roof, so the gable-end walls are created from an explicit
+pentagon profile that already rises to the ridge — no triangular gap under the roof later:
+
+```csharp
+var level = new FilteredElementCollector(doc).OfClass(typeof(Level)).Cast<Level>()
+    .OrderBy(l => l.Elevation).First();
+var wtId = doc.GetDefaultElementTypeId(ElementTypeGroup.WallType);
+double W = 12, D = 10, H = 8, ridgeZ = 10.5; // 6/12 pitch: 8 + (10/2)*0.5
+var w1 = Wall.Create(doc, Line.CreateBound(new XYZ(0,0,0), new XYZ(W,0,0)), wtId, level.Id, H, 0, false, false);
+var w2 = Wall.Create(doc, Line.CreateBound(new XYZ(0,D,0), new XYZ(W,D,0)), wtId, level.Id, H, 0, false, false);
+Wall MakeGable(double x)
+{
+    var p = new List<Curve> {
+        Line.CreateBound(new XYZ(x,0,0), new XYZ(x,D,0)),
+        Line.CreateBound(new XYZ(x,D,0), new XYZ(x,D,H)),
+        Line.CreateBound(new XYZ(x,D,H), new XYZ(x,D/2,ridgeZ)),
+        Line.CreateBound(new XYZ(x,D/2,ridgeZ), new XYZ(x,0,H)),
+        Line.CreateBound(new XYZ(x,0,H), new XYZ(x,0,0)) };
+    return Wall.Create(doc, p, wtId, level.Id, false);
+}
+var w3 = MakeGable(0); var w4 = MakeGable(W);
+return new[] { w1.Id.Value, w2.Id.Value, w3.Id.Value, w4.Id.Value };
+```
+
+### Step 2 — gable roof with a 1' overhang on all sides
+
+```csharp
+var level = new FilteredElementCollector(doc).OfClass(typeof(Level)).Cast<Level>()
+    .OrderBy(l => l.Elevation).First();
+var roofType = (RoofType)doc.GetElement(doc.GetDefaultElementTypeId(ElementTypeGroup.RoofType));
+double o = 1, W = 12, D = 10;
+var ca = new CurveArray();
+ca.Append(Line.CreateBound(new XYZ(-o,-o,0),   new XYZ(W+o,-o,0)));
+ca.Append(Line.CreateBound(new XYZ(W+o,-o,0),  new XYZ(W+o,D+o,0)));
+ca.Append(Line.CreateBound(new XYZ(W+o,D+o,0), new XYZ(-o,D+o,0)));
+ca.Append(Line.CreateBound(new XYZ(-o,D+o,0),  new XYZ(-o,-o,0)));
+ModelCurveArray mapping = new ModelCurveArray();
+var roof = doc.Create.NewFootPrintRoof(ca, level, roofType, out mapping);
+// gable: slope ONLY the two X-parallel (eave) edges -> the ridge runs along X
+foreach (ModelCurve mc in mapping)
+{
+    var ln = mc.GeometryCurve as Line;
+    bool eave = ln != null && Math.Abs(ln.Direction.Y) < 0.01;
+    roof.set_DefinesSlope(mc, eave);
+    if (eave) roof.set_SlopeAngle(mc, 0.5); // 6/12
+}
+// the base offset applies at the eave edge, which is 1' OUTBOARD of the wall line:
+// 7.5 + 0.5*1 = 8.0 at the wall tops, ridge at 7.5 + 0.5*6 = 10.5 = the gable apex
+roof.get_Parameter(BuiltInParameter.ROOF_LEVEL_OFFSET_PARAM).Set(7.5);
+return roof.Id.Value;
+```
+
+### Step 3 — door + window, hosted in the front wall
+Templates differ, so pick family symbols by category and preference — never by hardcoded id. If a category
+has no symbols at all (some blank templates ship empty), tell the user and skip that opening rather than
+failing the demo.
+
+```csharp
+var level = new FilteredElementCollector(doc).OfClass(typeof(Level)).Cast<Level>()
+    .OrderBy(l => l.Elevation).First();
+var front = (Wall)doc.GetElement(new ElementId(W1_ID)); // first id returned by step 1
+FamilySymbol Pick(BuiltInCategory cat, string prefer)
+{
+    var syms = new FilteredElementCollector(doc).OfClass(typeof(FamilySymbol)).OfCategory(cat)
+        .Cast<FamilySymbol>().ToList();
+    return syms.FirstOrDefault(s => s.Family.Name.Contains(prefer)) ?? syms.FirstOrDefault();
+}
+var doorSym = Pick(BuiltInCategory.OST_Doors, ""Exterior"");
+var winSym  = Pick(BuiltInCategory.OST_Windows, ""Double-Hung"");
+var placed = new List<long>();
+if (doorSym != null)
+{
+    if (!doorSym.IsActive) doorSym.Activate();
+    placed.Add(doc.Create.NewFamilyInstance(new XYZ(3.5,0,0), doorSym, front, level,
+        Autodesk.Revit.DB.Structure.StructuralType.NonStructural).Id.Value);
+}
+if (winSym != null)
+{
+    if (!winSym.IsActive) winSym.Activate();
+    var win = doc.Create.NewFamilyInstance(new XYZ(8.5,0,0), winSym, front, level,
+        Autodesk.Revit.DB.Structure.StructuralType.NonStructural);
+    win.get_Parameter(BuiltInParameter.INSTANCE_SILL_HEIGHT_PARAM).Set(3.0); // 3' sill
+    placed.Add(win.Id.Value);
+}
+return placed;
+```
+
+### Step 4 — a 3D view with a tight section box around the shed
+
+```csharp
+var vft = new FilteredElementCollector(doc).OfClass(typeof(ViewFamilyType)).Cast<ViewFamilyType>()
+    .First(t => t.ViewFamily == ViewFamily.ThreeDimensional);
+var v = View3D.CreateIsometric(doc, vft.Id);
+try { v.Name = ""Transom Demo 3D""; } catch { /* name taken — keep the default */ }
+v.DetailLevel = ViewDetailLevel.Fine;
+v.DisplayStyle = DisplayStyle.Shading;
+var ids = new[] { ALL_IDS_FROM_STEPS_1_TO_3 }.Select(i => new ElementId(i)).ToList();
+XYZ min = null, max = null;
+foreach (var id in ids)
+{
+    var bb = doc.GetElement(id).get_BoundingBox(null);
+    if (bb == null) continue;
+    min = min == null ? bb.Min : new XYZ(Math.Min(min.X, bb.Min.X), Math.Min(min.Y, bb.Min.Y), Math.Min(min.Z, bb.Min.Z));
+    max = max == null ? bb.Max : new XYZ(Math.Max(max.X, bb.Max.X), Math.Max(max.Y, bb.Max.Y), Math.Max(max.Z, bb.Max.Z));
+}
+v.SetSectionBox(new BoundingBoxXYZ { Min = min - new XYZ(1,1,1), Max = max + new XYZ(1,1,1) });
+return v.Id.Value;
+```
+
+### Step 5 — reveal it (run with `readOnly:true`)
+Activating a view and changing the selection must happen OUTSIDE a transaction — that's what
+`readOnly:true` gives you.
+
+```csharp
+var uidoc = uiapp.ActiveUIDocument;
+var v = (View3D)doc.GetElement(new ElementId(VIEW_ID)); // from step 4
+uidoc.ActiveView = v;
+var ids = new[] { ALL_IDS_FROM_STEPS_1_TO_3 }.Select(i => new ElementId(i)).ToList();
+uidoc.ShowElements(ids);                              // zoom to fit the shed
+uidoc.Selection.SetElementIds(new List<ElementId>()); // end clean: nothing left selected
+return ""demo revealed"";
+```
+
+### Step 6 — wrap up
+Tell the user, in a couple of sentences, what now exists (four walls, a gable roof with a 1' overhang, a
+door, a window, a section-boxed 3D view) and invite the next move — theirs or from the suggestions above.
+
 ";
 
     partial void OnExchangeFolderChanged(string value)

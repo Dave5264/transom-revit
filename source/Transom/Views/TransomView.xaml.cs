@@ -130,6 +130,21 @@ public sealed partial class TransomView
         new ClaudeAssistHelpDialog { Owner = this }.ShowDialog();
     }
 
+    /// <summary>The "?" next to a red "Claude app running" row — the process check can miss Claude Code
+    /// (terminal / VS Code / node hosts), so this dialog offers the Claude Assist guide export as the way
+    /// to let a running Claude session diagnose and finish the connection itself.</summary>
+    private void ClaudeRunningHelp_Click(object sender, System.Windows.RoutedEventArgs e)
+    {
+        new ClaudeConnectHelpDialog { Owner = this, DataContext = DataContext }.ShowDialog();
+    }
+
+    /// <summary>The "Show me what you can do" Settings button — a dialog explaining the demo export
+    /// (Claude builds a small shed in a fresh project), with the export right there.</summary>
+    private void Showcase_Click(object sender, System.Windows.RoutedEventArgs e)
+    {
+        new ShowcaseDialog { Owner = this, DataContext = DataContext }.ShowDialog();
+    }
+
     /// <summary>The "Why?" link next to the bypass-permissions advisory — explains the focus-steal failure mode
     /// in depth (user-reported: approval prompts pull focus off Revit mid-sequence and UI-assist clicks miss).</summary>
     private void BypassWhy_Click(object sender, System.Windows.RoutedEventArgs e)

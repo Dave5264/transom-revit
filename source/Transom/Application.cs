@@ -28,6 +28,27 @@ public class Application : ExternalApplication
         var settings = Core.TransomSettings.Load();
         if (settings.ClaudeAssistEnabled)
             Core.BridgeRuntime.Start(settings.BridgeSelfHostPort);
+
+        // Settings can open at zero documents (AlwaysAvailable), so the Hub must learn about documents
+        // opening/closing WHILE it's up — these rebind the open window so the Export/Import tabs
+        // enable/disable live instead of waiting for the next ribbon click.
+        Application.ControlledApplication.DocumentOpened += (s, _) => RefreshOpenHub(s);
+        Application.ControlledApplication.DocumentCreated += (s, _) => RefreshOpenHub(s);
+        Application.ControlledApplication.DocumentClosed += (s, _) => RefreshOpenHub(s);
+    }
+
+    /// <summary>Rebinds the open Schedule Hub (if any) to the current document state. Fires on Revit's main
+    /// thread (same thread as the modeless WPF window). Never throws — a refresh miss just means the tabs
+    /// update on the next ribbon click, like before.</summary>
+    private static void RefreshOpenHub(object? sender)
+    {
+        try
+        {
+            if (Views.TransomView.Instance == null) return;
+            if (sender is not Autodesk.Revit.ApplicationServices.Application app) return;
+            StartupCommand.RefreshOpenHub(new Autodesk.Revit.UI.UIApplication(app));
+        }
+        catch { /* best-effort UI refresh only */ }
     }
 
     private void CreateRibbon()
@@ -61,9 +82,13 @@ public class Application : ExternalApplication
         // Claude consolidation: the old "Claude Assist" ribbon group (Set up Claude / Claude Bridge / Bridge
         // Status) is retired — setup, the on/off switch, and the status checklist all live on the Settings tab
         // now (see docs/design-notes/claude-ui-consolidation.md). Settings is the one remaining entry point.
-        panel.AddPushButton<SettingsCommand>("Settings")
+        var settingsButton = panel.AddPushButton<SettingsCommand>("Settings")
             .SetImage("/Transom;component/Resources/Icons/Settings16.png")
             .SetLargeImage("/Transom;component/Resources/Icons/Settings32.png")
             .SetToolTip("Open Transom Settings — turn Claude Assist on/off and see its status, plus the exchange folder, bridge port, and preferences. Always available.");
+        // Usable with NO document open (Claude Assist setup/status/exports need no model); the Hub's
+        // Export/Import tabs stay disabled until a project opens.
+        if (settingsButton is Autodesk.Revit.UI.PushButton pb)
+            pb.AvailabilityClassName = typeof(AlwaysAvailable).FullName;
     }
 }

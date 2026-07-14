@@ -2,7 +2,7 @@
     x:Class="Transom.Views.ClaudeAssistHelpDialog"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-    Title="How Claude works in Transom"
+    Title="How Claude Code works in Transom"
     Width="540"
     Height="620"
     ResizeMode="CanResizeWithGrip"
@@ -39,7 +39,7 @@
 
         <TextBlock DockPanel.Dock="Top" Text="Claude Assist — how it works" FontSize="17" FontWeight="SemiBold" Foreground="{DynamicResource Text}" />
         <TextBlock DockPanel.Dock="Top" Margin="0,4,0,12" Foreground="{DynamicResource Muted}" TextWrapping="Wrap"
-                   Text="One switch in Settings brings Claude in over a local MCP connection. The first time you turn it on, Transom registers its tools with your Claude client (restart Claude once afterward). Transom never messages Claude itself; it stages files and you ask Claude to act on them." />
+                   Text="One switch in Settings brings Claude Code in over a local MCP connection. The first time you turn it on, Transom registers its tools with Claude Code (restart Claude Code once afterward). Transom never messages Claude itself; it stages files and you ask Claude to act on them." />
 
         <ScrollViewer VerticalScrollBarVisibility="Auto">
             <StackPanel>
@@ -101,7 +101,7 @@
                     <TextBlock TextWrapping="Wrap" Foreground="{DynamicResource Accent}" FontSize="12">
                         <Run Text="One switch, everything" FontWeight="SemiBold" /> — the Settings toggle starts the
                         bridge with Revit and keeps it running until you turn it off; the status panel next to it
-                        shows every layer (bridge, shim, Claude registration) at a glance. While Claude Assist is on,
+                        shows every layer (bridge, shim, Claude Code registration) at a glance. While Claude Assist is on,
                         Claude can write to the model — when you only want a check, keep your prompts to
                         review-only asks.
                     </TextBlock>
