@@ -14,7 +14,7 @@
 
 [![Latest release](https://img.shields.io/github/v/release/Dave5264/transom-revit?label=latest%20release&color=2ea44f&logo=github)](https://github.com/Dave5264/transom-revit/releases/latest)
 
-### ⬇ [Download the installer](https://github.com/Dave5264/transom-revit/releases/download/v1.9.0/Transom-1.9.0-SingleUser.msi)
+### ⬇ [Download the installer](https://github.com/Dave5264/transom-revit/releases/download/v1.9.1/Transom-1.9.1-SingleUser.msi)
 
 **One click, no admin rights** — installs into your per-user Revit add-ins folder.
 Double-click the `.msi`, then start Revit. Supports **Revit 2025, 2026 & 2027**.
@@ -42,7 +42,7 @@ Then drop the guidance file from [`claude/`](claude/) (`CLAUDE.md`) into your pr
 so Claude Code already knows the tools and the safe-write workflow. See [`claude/README.md`](claude/README.md) for
 exactly where it goes.
 
-> **Status:** v1.9.0 released (Revit 2025/2026/2027) — **easier on-ramp to Claude Assist: Settings works with no project open, standalone connection-guide exports, and a "Show me what you can do" guided demo.**
+> **Status:** v1.9.1 released (Revit 2025/2026/2027) — **easier on-ramp to Claude Assist: Settings works with no project open, standalone connection-guide exports, and a "Show me what you can do" guided demo.** (v1.9.1: the demo dialog now reminds first-time users to restart Claude Code after setup.)
 > Settings now opens from a bare Revit session (Export/Import tabs enable the moment a project opens), the
 > Claude Assist guide exports as a standalone `.md` so Claude Code can connect and drive Revit without a staged
 > edit, a **Show me what you can do** button exports a scripted first demo (Claude builds a small shed on your
