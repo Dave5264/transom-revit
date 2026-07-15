@@ -54,6 +54,14 @@ var project = new Project
 };
 
 var wixEntities = Generator.GenerateWixEntities(args[1..]);
+
+// ENGINE-PRESENT GUARD — regression guard for the v1.8.0 defect where the Excel/docx engine (Transom.Office.dll
+// + its NPOI closure) silently fell out of the MSI (it lives in a deliberately-unreferenced project, so nothing
+// builds it automatically). If the engine isn't staged next to Transom.dll in the harvested payload, FAIL THE
+// PACK — never ship an MSI that can't export (v1.8.0–v1.9.1 shipped broken this way, surfacing at runtime as a
+// mislabeled "'…xlsx' is open in Excel" error).
+AssertEngineHarvested(args[1..]);
+
 project.RemoveDialogsBetween(NativeDialogs.WelcomeDlg, NativeDialogs.CustomizeDlg);
 
 // #105 (seamless MCP, MUST-FIX): a DEFERRED, IMPERSONATED managed custom action that copies the shim trio from the
@@ -94,6 +102,31 @@ void AssertBuilt(string msiName)
             $"Installer build did NOT produce '{msiPath}'. The MSI was dropped (likely a custom-action/SfxCA pack " +
             $"failure earlier in the log) — failing the build so this is not mistaken for success.");
     Console.WriteLine($"OK: built {msiPath} ({new System.IO.FileInfo(msiPath).Length:N0} bytes)");
+}
+
+// Assert the Excel/docx engine is present next to every Transom.dll in the harvested publish payload. The engine
+// (Transom.Office.dll) loads from Transom.dll's OWN folder at run time, so it must ship right beside it; NPOI.dll
+// is checked too as a representative of the isolated closure. Missing → throw: the MSI would otherwise install an
+// add-in that cannot export. The engine is produced by Transom.Office.csproj, whose CopyIntoTransom target stages
+// it into publish/Transom/ (Transom.csproj's BuildOfficeEngine target builds Office after Transom).
+void AssertEngineHarvested(string[] publishDirs)
+{
+    string[] required = ["Transom.Office.dll", "NPOI.dll"];
+    foreach (var dir in publishDirs)
+    {
+        if (!System.IO.Directory.Exists(dir)) continue;
+        foreach (var transomDll in System.IO.Directory.GetFiles(dir, "Transom.dll", System.IO.SearchOption.AllDirectories))
+        {
+            var payloadDir = System.IO.Path.GetDirectoryName(transomDll)!;
+            var missing = required.Where(f => !System.IO.File.Exists(System.IO.Path.Combine(payloadDir, f))).ToArray();
+            if (missing.Length > 0)
+                throw new Exception(
+                    $"Excel engine MISSING from harvest: '{string.Join("', '", missing)}' is not next to '{transomDll}'. " +
+                    "The Transom.Office engine + NPOI closure were not staged into the publish payload — build " +
+                    "source/Transom.Office/Transom.Office.csproj for this config (its CopyIntoTransom target stages it), " +
+                    "then re-run the installer. Refusing to ship an MSI that cannot export (the v1.8.0 regression).");
+        }
+    }
 }
 
 void BuildSingleUserMsi()

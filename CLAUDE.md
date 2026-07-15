@@ -49,7 +49,7 @@ A plain `dotnet build source/Transom/Transom.csproj -c Debug.R2x` **is** the loc
 - Strictly, only the matching version locks (Debug.R25 ↔ Revit 2025, .R26 ↔ 2026, .R27 ↔ 2027), but the safe default is **all** Revit closed, since a deploy pass usually builds all three.
 - Revit loads the add-in at startup — after a deploy the user must **restart Revit** to pick it up; there is no hot reload.
 - Config map: `Debug/Release.R25`/`.R26` = .NET 8, `.R27` = .NET 10 → Revit 2025/2026/2027.
-- If `source/Transom.Office/` changed, also build `Transom.Office.csproj` for each config — it copies the Office engine into the output/Addins folders via its own post-build target (see the comment in `Transom.csproj`).
+- **The Office engine now builds automatically** with Transom: `Transom.csproj`'s `BuildOfficeEngine` target (AfterTargets=Build) builds `Transom.Office.csproj` (`BuildProjectReferences=false`), whose `CopyIntoTransom` target stages `Transom.Office.dll` + the NPOI closure into the output, `publish/Transom/`, and the dev Addins folder. So a plain `dotnet build source/Transom/Transom.csproj -c …` now deploys the engine too — no separate Office build needed. (Historical: it was NOT auto-built before, which dropped the engine from the v1.8.0–v1.9.1 MSIs; the installer now hard-fails if the engine is absent from the harvest — see `install/Installer.cs` `AssertEngineHarvested`.)
 
 ### Hard rules
 - **Every build auto-deploys the add-in DLL** (`DeployAddin=true`) to `%AppData%\Autodesk\Revit\Addins\<ver>\` — so **Revit MUST be CLOSED** before building, or the copy fails (locked DLL). Re-confirm Revit is closed immediately before each build. Never force-kill Revit; the user closes it.
@@ -84,7 +84,7 @@ A plain `dotnet build source/Transom/Transom.csproj -c Debug.R2x` **is** the loc
      cp source/Transom.McpShim/bin/Release/net8.0/win-x64/publish/Transom.McpShim.exe \
         "source/Transom/bin/$c/publish/Transom/Transom.McpShim.exe"; done
    ```
-   **VERIFY** each `source/Transom/bin/Release.R2x/publish/Transom/` holds all 4 files next to `Transom.dll`: `Transom.ClickHelper.exe`, `Transom.ClickHelper.Mcp.exe`, `Transom.McpShim.exe`. For a connect-fix release, confirm those exes are the **fixed** build (don't ship a stale shim).
+   **VERIFY** each `source/Transom/bin/Release.R2x/publish/Transom/` holds, next to `Transom.dll`: `Transom.ClickHelper.exe`, `Transom.ClickHelper.Mcp.exe`, `Transom.McpShim.exe`, **`Transom.Office.dll` + `NPOI.dll`** (the Excel engine — auto-built by the `BuildOfficeEngine` target; if absent, the installer's `AssertEngineHarvested` will fail the pack). For a connect-fix release, confirm those exes are the **fixed** build (don't ship a stale shim).
 5. **Build + run the installer** (produces both MSIs into `output/`):
    ```
    dotnet build install/Installer.csproj -c Release

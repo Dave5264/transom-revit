@@ -109,4 +109,21 @@
         </None>
     </ItemGroup>
 
+    <!-- BUILD-ORDER FIX (regression guard for the v1.8.0 engine drop): Transom.Office (the Excel/docx engine +
+         NPOI closure) is DELIBERATELY not referenced from here — a ProjectReference would be circular (Office
+         references US for the DTOs) and would drag the NPOI closure into Revit's shared default load context,
+         defeating the isolation. Because nothing referenced it, nothing built it, and it silently fell out of the
+         packaged MSI in v1.8.0–v1.9.1 (Export then died with a mislabeled "open in Excel" error). Build it here
+         AFTER Transom is built: BuildProjectReferences=false stops it from rebuilding (or cycling back into) us
+         and just binds our fresh output. Office's own CopyIntoTransom target (AfterTargets=Build) then stages
+         Transom.Office.dll + the closure into our output, publish/Transom/, and the dev Addins folder — so this
+         also fixes the dev-deploy gap, not just the MSI. The installer ALSO hard-fails if the engine isn't in the
+         harvest (install/Installer.cs, AssertEngineHarvested), so a missed engine can never silently ship again. -->
+    <Target Name="BuildOfficeEngine" AfterTargets="Build">
+        <MSBuild Projects="..\Transom.Office\Transom.Office.csproj"
+                 Targets="Build"
+                 Properties="Configuration=$(Configuration);BuildProjectReferences=false"
+                 BuildInParallel="false" />
+    </Target>
+
 </Project>

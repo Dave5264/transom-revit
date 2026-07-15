@@ -83,16 +83,39 @@ public sealed class ExportEventHandler : IExternalEventHandler
             }
             ReportStatus($"Exported {okCount} schedule(s) ({elems} element rows) to {OutputPath}" + failNote);
         }
-        catch (IOException)
+        catch (IOException ex) when (IsOutputFileLocked(ex))
         {
-            // The target .xlsx is almost certainly open in Excel (write share violation). Tell the user how to fix it.
+            // ONLY a genuine sharing/lock violation on the destination file gets the "close Excel" message.
+            // Do NOT blanket-catch IOException here: FileNotFoundException/FileLoadException (e.g. a missing
+            // Transom.Office.dll satellite or an unresolvable NPOI dependency) are IOException SUBCLASSES, and
+            // catching them here misreported an engine-load failure as a locked output file — the phantom
+            // "'…xlsx' is open in Excel" seen when the file didn't even exist. Those now fall through below.
             ReportStatus($"Export failed — “{Path.GetFileName(OutputPath)}” is open in Excel (or locked). "
                 + "Close it and export again.");
         }
         catch (Exception ex)
         {
-            ReportStatus("Export failed: " + ex.Message);
+            // Surface the REAL failure (message) and dump a copyable stack to the log instead of swallowing it.
+            // A missing engine reads "Transom.Office.dll is missing next to Transom.dll — reinstall Transom.",
+            // which is the actionable truth, not a made-up Excel lock.
+            var logPath = WriteErrorLog(new() { ("(export)", ex) }, DocTitle);
+            ReportStatus("Export failed: " + ex.Message
+                + (logPath != null ? $"\nFull details (copyable): {logPath}" : ""));
         }
+    }
+
+    /// <summary>
+    ///     True only for a genuine file sharing/lock violation on the output path — ERROR_SHARING_VIOLATION (32)
+    ///     or ERROR_LOCK_VIOLATION (33) raised as a BASE <see cref="IOException"/> (i.e. the destination .xlsx is
+    ///     open in Excel or otherwise locked). Excludes <see cref="FileNotFoundException"/>/<see cref="FileLoadException"/>
+    ///     and other IOException subtypes (missing satellite assemblies, path errors), whose HResults differ, so an
+    ///     engine-load failure is never misreported as a locked output file.
+    /// </summary>
+    private static bool IsOutputFileLocked(IOException ex)
+    {
+        const int sharingViolation = 32, lockViolation = 33;
+        int code = ex.HResult & 0xFFFF;
+        return (code == sharingViolation || code == lockViolation) && ex.GetType() == typeof(IOException);
     }
 
     /// <summary>
