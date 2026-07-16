@@ -14,7 +14,7 @@
 
 [![Latest release](https://img.shields.io/github/v/release/Dave5264/transom-revit?label=latest%20release&color=2ea44f&logo=github)](https://github.com/Dave5264/transom-revit/releases/latest)
 
-### ⬇ [Download the installer](https://github.com/Dave5264/transom-revit/releases/download/v1.9.1/Transom-1.9.1-SingleUser.msi)
+### ⬇ [Download the installer](https://github.com/Dave5264/transom-revit/releases/download/v1.9.2/Transom-1.9.2-SingleUser.msi)
 
 **One click, no admin rights** — installs into your per-user Revit add-ins folder.
 Double-click the `.msi`, then start Revit. Supports **Revit 2025, 2026 & 2027**.
@@ -42,15 +42,12 @@ Then drop the guidance file from [`claude/`](claude/) (`CLAUDE.md`) into your pr
 so Claude Code already knows the tools and the safe-write workflow. See [`claude/README.md`](claude/README.md) for
 exactly where it goes.
 
-> **Status:** v1.9.1 released (Revit 2025/2026/2027) — **easier on-ramp to Claude Assist: Settings works with no project open, standalone connection-guide exports, and a "Show me what you can do" guided demo.** (v1.9.1: the demo dialog now reminds first-time users to restart Claude Code after setup.)
-> Settings now opens from a bare Revit session (Export/Import tabs enable the moment a project opens), the
-> Claude Assist guide exports as a standalone `.md` so Claude Code can connect and drive Revit without a staged
-> edit, a **Show me what you can do** button exports a scripted first demo (Claude builds a small shed on your
-> go), Claude-running detection now sees Claude Code under any host via Transom's own MCP processes (with a "?"
-> helper on the status row when it can't), and settings copy consistently says **Claude Code** so nobody tries
-> the chat app.
+> **Status:** v1.9.2 released (Revit 2025/2026/2027) — **fixes schedule export: the Excel engine (Transom.Office + NPOI) had been dropped from the v1.8.0–v1.9.1 installers, so Export failed with a misleading "open in Excel" error.** The engine now builds and ships automatically, the installer refuses to pack without it, and export errors report their real cause.
 >
-> **Previously:** v1.8.0 closed the import **confirm gate** — format-mismatched edits (e.g. `2'6` for `2'-6"`)
+> **Previously:** v1.9.0–v1.9.1 eased the on-ramp to Claude Assist — Settings opens from a bare Revit session
+> (Export/Import tabs enable the moment a project opens), the Claude Assist guide exports as a standalone `.md`,
+> a **Show me what you can do** button exports a scripted first demo, and Claude-running detection sees Claude
+> Code under any host via Transom's own MCP processes. v1.8.0 closed the import **confirm gate** — format-mismatched edits (e.g. `2'6` for `2'-6"`)
 > surface as pending rows and **Apply stays greyed until each is confirmed or discarded** — and broadened the
 > option-2 "replace column with a new parameter" path (repoint other schedules to the new param, choose what
 > happens to the old values); exports now write **directly** to the chosen file. v1.7.0 consolidated every Claude
