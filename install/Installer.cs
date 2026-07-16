@@ -105,13 +105,14 @@ void AssertBuilt(string msiName)
 }
 
 // Assert the Excel/docx engine is present next to every Transom.dll in the harvested publish payload. The engine
-// (Transom.Office.dll) loads from Transom.dll's OWN folder at run time, so it must ship right beside it; NPOI.dll
-// is checked too as a representative of the isolated closure. Missing → throw: the MSI would otherwise install an
+// (Transom.Office.dll) loads from Transom.dll's OWN folder at run time, so it must ship right beside it; NPOI.Core.dll
+// is checked too as a representative of the isolated closure (NPOI 2.7.x ships split assemblies — there is NO
+// single NPOI.dll). Missing → throw: the MSI would otherwise install an
 // add-in that cannot export. The engine is produced by Transom.Office.csproj, whose CopyIntoTransom target stages
 // it into publish/Transom/ (Transom.csproj's BuildOfficeEngine target builds Office after Transom).
 void AssertEngineHarvested(string[] publishDirs)
 {
-    string[] required = ["Transom.Office.dll", "NPOI.dll"];
+    string[] required = ["Transom.Office.dll", "NPOI.Core.dll", "Transom.Office.deps.json"];
     foreach (var dir in publishDirs)
     {
         if (!System.IO.Directory.Exists(dir)) continue;

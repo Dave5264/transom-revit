@@ -84,7 +84,7 @@ A plain `dotnet build source/Transom/Transom.csproj -c Debug.R2x` **is** the loc
      cp source/Transom.McpShim/bin/Release/net8.0/win-x64/publish/Transom.McpShim.exe \
         "source/Transom/bin/$c/publish/Transom/Transom.McpShim.exe"; done
    ```
-   **VERIFY** each `source/Transom/bin/Release.R2x/publish/Transom/` holds, next to `Transom.dll`: `Transom.ClickHelper.exe`, `Transom.ClickHelper.Mcp.exe`, `Transom.McpShim.exe`, **`Transom.Office.dll` + `NPOI.dll`** (the Excel engine — auto-built by the `BuildOfficeEngine` target; if absent, the installer's `AssertEngineHarvested` will fail the pack). For a connect-fix release, confirm those exes are the **fixed** build (don't ship a stale shim).
+   **VERIFY** each `source/Transom/bin/Release.R2x/publish/Transom/` holds, next to `Transom.dll`: `Transom.ClickHelper.exe`, `Transom.ClickHelper.Mcp.exe`, `Transom.McpShim.exe`, **`Transom.Office.dll` + `NPOI.Core.dll`/`NPOI.OOXML.dll` + `Transom.Office.deps.json`** (the Excel engine — NPOI 2.7.x ships split assemblies, there is no single `NPOI.dll` — auto-built by the `BuildOfficeEngine` target; if absent, the installer's `AssertEngineHarvested` will fail the pack). For a connect-fix release, confirm those exes are the **fixed** build (don't ship a stale shim).
 5. **Build + run the installer** (produces both MSIs into `output/`):
    ```
    dotnet build install/Installer.csproj -c Release

@@ -120,6 +120,14 @@
          also fixes the dev-deploy gap, not just the MSI. The installer ALSO hard-fails if the engine isn't in the
          harvest (install/Installer.cs, AssertEngineHarvested), so a missed engine can never silently ship again. -->
     <Target Name="BuildOfficeEngine" AfterTargets="Build">
+        <!-- Restore first, in its OWN invocation: Office's TFM flips per Configuration (net8.0-windows for
+             R25/R26, net10.0-windows for R27), so its obj\project.assets.json from any other config fails the
+             build with NETSDK1005, and nothing else restores this unreferenced project. The property sets differ
+             between the two invocations, so MSBuild evaluates the Build leg fresh and sees the new assets file. -->
+        <MSBuild Projects="..\Transom.Office\Transom.Office.csproj"
+                 Targets="Restore"
+                 Properties="Configuration=$(Configuration)"
+                 BuildInParallel="false" />
         <MSBuild Projects="..\Transom.Office\Transom.Office.csproj"
                  Targets="Build"
                  Properties="Configuration=$(Configuration);BuildProjectReferences=false"
