@@ -3,7 +3,7 @@
 A tiny, self-contained **stdio MCP server** that bridges an MCP client (Claude
 Desktop / Claude Code) to the **Transom** Revit add-in's loopback HTTP bridge.
 
-This is **feature F3** of the bundled-MCP milestone â€” see
+This is **feature F3** of the bundled-MCP milestone — see
 `BUNDLED_MCP_PLAN.md (retired 2026-07-13; archived locally)`. It has **no Revit references**; it only speaks
 Model Context Protocol on stdin/stdout and HTTP to `127.0.0.1`.
 
@@ -51,7 +51,7 @@ Transom.McpShim.exe --port 48810
 ```
 
 The process reads MCP messages from **stdin** and writes responses to
-**stdout** until EOF. All diagnostics go to **stderr only** â€” stdout is the
+**stdout** until EOF. All diagnostics go to **stderr only** — stdout is the
 protocol channel and must never carry non-protocol output.
 
 You normally don't launch it by hand; the MCP client spawns it (see below).
@@ -88,5 +88,5 @@ The publish-time settings (`PublishSingleFile`, `SelfContained`,
 `InvariantGlobalization`) are baked into the `.csproj`, so the bare command
 above produces a single self-extracting `Transom.McpShim.exe` under
 `bin/Release/net8.0/win-x64/publish/`. Dependencies are limited to
-`System.Text.Json` and `System.Net.Http` (both in the shared framework) â€” no
+`System.Text.Json` and `System.Net.Http` (both in the shared framework) — no
 external NuGet packages.

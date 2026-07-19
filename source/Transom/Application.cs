@@ -23,6 +23,10 @@ public class Application : ExternalApplication
         // thread so Revit startup is never delayed by the file copy; the helper never throws.
         System.Threading.Tasks.Task.Run(Core.McpRegistration.EnsureBundledShimAndAutoRegister);
 
+        // Claude Skills library: create %LocalAppData%\Transom\skills and seed any skills shipped in the
+        // add-in payload (same first-launch pattern as the shim). The Hub's Claude Skills tab lists it.
+        System.Threading.Tasks.Task.Run(Core.SkillLibrary.EnsureSeeded);
+
         // Claude Assist is a persisted toggle: when it's ON, the bridge must come up with Revit or the
         // Settings panel would show a dead bridge after every restart. Silent, loopback-only, token-gated.
         var settings = Core.TransomSettings.Load();

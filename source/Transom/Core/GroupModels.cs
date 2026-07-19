@@ -39,12 +39,30 @@ public enum Option2Mode
 
 /// <summary>What to do with the OLD (source) parameter's values after an option-2a/2b conversion replaced its
 /// column. The old values are no longer displayed (the column now shows the new parameter) but still live on
-/// every element — the user decides their fate in the <c>Option2OldValuesDialog</c>.</summary>
+/// every element. Reworked 2026-07-18: the old param usually can't be edited in place on group members (that's
+/// why the column went through option 2 at all), so the dialog leads with a warning; Clear/SetValue are only
+/// offered as an opt-in Claude-assisted cleanup (Assist on), and the choice is ALL-OR-NOTHING for the column —
+/// Transom writes the API-writable elements directly and stages the grouped members for Claude's Edit Group
+/// pass (<c>ChangeSet.Option2OldValueStaged</c>). Never a partial "ungrouped only" write.</summary>
 public enum OldValueDisposition
 {
     Leave,    // keep the old values on the elements (default — no data touched)
     Clear,    // blank the old parameter on every affected element (string columns only)
     SetValue, // write one user-entered value into the old parameter on every affected element
+}
+
+/// <summary>One staged OLD-parameter cleanup edit produced by the option-2 old-values step: a uniform value
+/// (empty = clear) for one distinct group member (per group type) that only Claude can write via Edit Group
+/// mode. Collected by <c>Importer.ApplyNewParam</c> from VERIFIED disposition targets, written to the staging
+/// JSON by the viewmodel after apply.</summary>
+public sealed class OldValueStagedEdit
+{
+    public string Field = "";            // the OLD parameter / column name
+    public int ParameterId;              // the OLD parameter's id (negative = built-in)
+    public string GroupName = "";        // the model group (type) whose member carries the value
+    public string ElementName = "";      // the member element's name, to help Claude pick it in Edit Group
+    public string Value = "";            // uniform target value; "" = blank the parameter
+    public List<string> MemberUniqueIds = new();   // that member across every instance of the group type
 }
 
 /// <summary>One OTHER schedule (not a source of the current import) that displays the source parameter an
@@ -78,6 +96,9 @@ public sealed class Option2OldValuesPrompt
     /// <summary>False when the old column stores numbers (a length etc.) — "clear" can't blank a numeric
     /// parameter, so the dialog disables that option with a note.</summary>
     public bool AllowClear = true;
+    /// <summary>Whether Claude Assist is on in Settings. Off → the dialog is a warning only (old values stay);
+    /// on → it additionally offers the opt-in "have Claude update them" path that reveals Clear/Replace.</summary>
+    public bool AssistEnabled;
     public OldValueDisposition Choice = OldValueDisposition.Leave;
     public string NewValue = "";
 }

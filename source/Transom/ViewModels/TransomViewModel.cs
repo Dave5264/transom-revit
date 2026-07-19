@@ -292,6 +292,13 @@ public sealed partial class TransomViewModel : ObservableObject
         _importHandler.OnPreview = cs => _ui.BeginInvoke(() => ShowPreview(cs));
         _importHandler.OnApplied = s => _ui.Invoke(() =>
         {
+            // Option-2 old-values cleanup (user-directed 2026-07-18): grouped members the disposition couldn't
+            // write via the API were collected during apply (only VERIFIED targets); stage them for Claude now —
+            // after apply, because only now is it known which new-param copies actually landed. Runs before
+            // _lastChangeSet is dropped below (it supplies the doc identity for the staging payload).
+            var oldStaged = _importHandler.PendingChangeSet?.Option2OldValueStaged;
+            if (oldStaged is { Count: > 0 })
+                s += "  ·  " + StageOldValueEditsInteractive(oldStaged);
             ImportStatus = s + _pendingGroupNote;
             _pendingGroupNote = "";
             Changes.Clear();
@@ -323,6 +330,7 @@ public sealed partial class TransomViewModel : ObservableObject
         // bridge is auto-started by Application.OnStartup when the flag is on).
         _isClaudeAssistEnabled = _settings.ClaudeAssistEnabled;
         _ = RefreshClaudeStatusAsync();
+        RefreshSkills();   // populate the Claude Skills tab list (cheap folder read; re-read on tab entry)
 
         _copyResetTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1.4) };
         _copyResetTimer.Tick += (_, _) => { Copied = false; CopiedImport = false; CopiedLog = false; _copyResetTimer.Stop(); };
@@ -850,9 +858,12 @@ public sealed partial class TransomViewModel : ObservableObject
             return removed;
         }
 
-        // OPTION-2 FOLLOW-UPS (user request 2026-07-12): after a committed 2a/2b choice, (1) when the build-time
-        // scan found OTHER schedules displaying this parameter, offer them as replace-targets too (checklist);
-        // then (2) ask what happens to the OLD values — leave (default), clear, or one uniform replacement value.
+        // OPTION-2 FOLLOW-UPS (user request 2026-07-12; old-values flow reworked per user direction 2026-07-18):
+        // after a committed 2a/2b choice, (1) when the build-time scan found OTHER schedules displaying this
+        // parameter, offer them as replace-targets too (checklist); then (2) the OLD-values step — a warning that
+        // the old data stays in place (Transom can't edit it on group members and never half-applies a column),
+        // plus, when Claude Assist is on, an opt-in Claude cleanup (clear / one uniform value) that ApplyNewParam
+        // executes all-or-nothing: API-writable elements written directly, grouped members staged for Claude.
         // Both choices are stamped on every change in the column; ApplyNewParam reads them off the column's sample.
         // Closing either dialog without choosing takes the safe default (no extra schedules / leave old values).
         void ResolveOption2Extras(string columnKey, GroupResolutionPrompt p)
@@ -878,6 +889,9 @@ public sealed partial class TransomViewModel : ObservableObject
                     NewParamName = p.ChosenParamName,
                     // "Clear" can't blank a numeric parameter — only offer it for string-storage columns.
                     AllowClear = column[0].IsString,
+                    // Assist off → the dialog is a warning only (old values stay in place); on → it offers the
+                    // opt-in Claude cleanup that reveals Clear/Replace (user-directed 2026-07-18).
+                    AssistEnabled = assist,
                 };
                 var r = Option2OldValuesResolver(op);
                 if (r != null) { disp = r.Choice; dispText = r.NewValue; }
@@ -1097,8 +1111,8 @@ public sealed partial class TransomViewModel : ObservableObject
         _ => "",
     };
 
-    /// <summary>Prompts the user for where to save the Claude group-edits artifact (defaults to the exchange folder).</summary>
-    private string? ChooseArtifactPath()
+    /// <summary>Prompts the user for where to save a Claude staging artifact (defaults to the exchange folder).</summary>
+    private string? ChooseArtifactPath(string fileName = "transom_group_edits.json")
     {
         var dir = !string.IsNullOrWhiteSpace(ExchangeFolder) ? ExchangeFolder
             : Path.GetDirectoryName(WorkbookPath) ?? "";
@@ -1106,10 +1120,87 @@ public sealed partial class TransomViewModel : ObservableObject
         {
             Title = "Save Claude group-edits artifact",
             Filter = "JSON (*.json)|*.json",
-            FileName = "transom_group_edits.json",
+            FileName = fileName,
             InitialDirectory = Directory.Exists(dir) ? dir : "",
         };
         return dlg.ShowDialog() == true ? dlg.FileName : null;
+    }
+
+    /// <summary>Option-2 old-values cleanup (user-directed 2026-07-18): prompt for a path and stage the grouped
+    /// members' OLD-parameter edits for Claude. Returns the status note; on a cancelled save nothing is written
+    /// and the old values simply stay in place (they were never touched — staging is the only pending action).</summary>
+    private string StageOldValueEditsInteractive(List<OldValueStagedEdit> staged)
+    {
+        int n = staged.Sum(e => e.MemberUniqueIds.Count);
+        var path = ChooseArtifactPath("transom_old_value_edits.json");
+        if (path == null)
+            return $"{n} old-value group edit(s) not staged (no file chosen — the old values stay in place)";
+        var written = StageOldValueEdits(staged, path);
+        if (written == null)
+            return $"{n} old-value group edit(s) could not be staged (the old values stay in place)";
+        ClaudeStagedNotice?.Invoke(written);
+        return $"{n} old-value group edit(s) staged for Claude";
+    }
+
+    /// <summary>Writes the option-2 OLD-parameter cleanup edits to a JSON file Claude can act on. Same shape and
+    /// guide as <see cref="StageGroupEdits"/> — every entry here is a grouped member (the API-writable elements
+    /// were already written directly during apply), uniform value per entry, "" meaning blank the parameter.</summary>
+    private string? StageOldValueEdits(List<OldValueStagedEdit> staged, string path)
+    {
+        try
+        {
+            var dir = Path.GetDirectoryName(path);
+            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+
+            var edits = staged.Select(e => new
+            {
+                field = e.Field,
+                group = e.GroupName,
+                elementName = e.ElementName,
+                parameterId = e.ParameterId,
+                value = e.Value,
+                memberUniqueIds = e.MemberUniqueIds,
+            }).ToArray();
+
+            var payload = new
+            {
+                tool = "Transom",
+                kind = "group-edits",
+                purpose = "option2-old-values",
+                schedule = _lastChangeSet?.ScheduleName ?? "",
+                docTitle = SelectedProject,
+                docPath = _lastChangeSet?.DocPath ?? "",
+                docCreationGuid = _lastChangeSet?.DocCreationGuid ?? "",
+                project = SelectedProject,
+                note = "These are OLD-parameter CLEANUP edits after a Transom option-2a/2b column conversion: the " +
+                       "schedule column now shows a NEW parameter, and the user chose to clear or overwrite the OLD " +
+                       "parameter's leftover values. Every entry targets member elements inside Revit MODEL GROUPS " +
+                       "(Transom already wrote the ungrouped elements directly). 'value' is the uniform target for " +
+                       "every listed member; an EMPTY 'value' means BLANK the parameter. parameterId < 0 = a BUILT-IN " +
+                       "param: a direct write is rejected ('Changes to groups are allowed only in group edit mode'), " +
+                       "so apply it by driving Revit's 'Edit Group' MODE in the UI with the Transom UI-Assist " +
+                       "(ClickHelper) tools (select+zoom+red-locator via API, then enter Edit Group, pick the member, " +
+                       "set the param in Properties, Finish, then verify the value + that the group member COUNT is " +
+                       "unchanged). parameterId >= 0 = a PROJECT/SHARED param on a group member: writable via the " +
+                       "bridge set_parameter after enabling 'vary by group instance'. The write lands on the group " +
+                       "DEFINITION (every instance of the group type) — that is intended: Transom verified every " +
+                       "instance's value was already migrated to the new parameter before staging. Full step-by-step " +
+                       "is in 'Transom - Apply staged edits with Claude.md' in this same folder. Verify every write.",
+                edits,
+            };
+            File.WriteAllText(path, System.Text.Json.JsonSerializer.Serialize(payload,
+                new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
+
+            // Bundle the how-to next to the JSON, same as StageGroupEdits (the note refers to it by name).
+            if (!string.IsNullOrEmpty(dir))
+            {
+                try { File.WriteAllText(Path.Combine(dir, "Transom - Apply staged edits with Claude.md"), ClaudeGuideMarkdown()); }
+                catch { /* the JSON is the essential artifact; don't fail staging if the guide can't be written */ }
+            }
+
+            return path;
+        }
+        catch { return null; }
     }
 
     /// <summary>Writes the group-blocked edits to a JSON file Claude can act on (open groups + apply over the write bridge).</summary>
@@ -1746,6 +1837,89 @@ public sealed partial class TransomViewModel : ObservableObject
     /// <summary>The how-to markdown explaining how to apply the staged group-edits artifact with Claude.
     /// Written automatically next to the group-edits JSON whenever Claude-Assist stages built-in group edits
     /// (see <see cref="StageGroupEdits"/>).</summary>
+    // --- Claude Skills tab (user request 2026-07-18): a library of reusable Claude workflow .md files ---
+
+    /// <summary>The skill library rows (every .md in <see cref="SkillLibrary.Dir"/>).</summary>
+    public ObservableCollection<SkillEntry> Skills { get; } = new();
+
+    [ObservableProperty] private SkillEntry? _selectedSkill;
+
+    /// <summary>Transient result line for the last Stage/Import/Remove ("Copied to clipboard…").</summary>
+    [ObservableProperty] private string _skillStatus = "";
+
+    /// <summary>The detail pane under the list — the highlighted skill's frontmatter description.</summary>
+    [ObservableProperty] private string _selectedSkillDescription = "Select a skill to see its description.";
+
+    /// <summary>Shown under the list so the user knows where skill files live (Claude saves new ones here too).</summary>
+    public string SkillsFolder => SkillLibrary.Dir;
+
+    partial void OnSelectedSkillChanged(SkillEntry? value) =>
+        SelectedSkillDescription = value == null
+            ? "Select a skill to see its description."
+            : string.IsNullOrWhiteSpace(value.Description)
+                ? "(no description — add a description: line to the skill's frontmatter so it shows here)"
+                : value.Description;
+
+    /// <summary>Re-reads the library folder. Runs on tab entry and after Import/Remove; keeps the selection
+    /// when the selected file still exists.</summary>
+    [RelayCommand]
+    private void RefreshSkills()
+    {
+        var keep = SelectedSkill?.Path;
+        Skills.Clear();
+        foreach (var s in SkillLibrary.List()) Skills.Add(s);
+        SelectedSkill = Skills.FirstOrDefault(s => s.Path == keep) ?? Skills.FirstOrDefault();
+    }
+
+    /// <summary>Stage = copy the skill's full path to the clipboard, ready to paste into a Claude Code session
+    /// (Claude reads the file from disk — no copy is made).</summary>
+    [RelayCommand]
+    private void StageSkill()
+    {
+        if (SelectedSkill == null) { SkillStatus = "Select a skill first."; return; }
+        try
+        {
+            System.Windows.Clipboard.SetText(SelectedSkill.Path);
+            SkillStatus = $"Copied to clipboard: {SelectedSkill.FileName} — paste it into your Claude Code session.";
+        }
+        catch { SkillStatus = "Couldn't copy to the clipboard — try again."; }
+    }
+
+    /// <summary>Import = copy a skill .md from anywhere into the library (never overwrites; collisions get a
+    /// numbered name).</summary>
+    [RelayCommand]
+    private void ImportSkill()
+    {
+        var dlg = new OpenFileDialog { Title = "Import a Claude skill", Filter = "Skill markdown (*.md)|*.md" };
+        if (dlg.ShowDialog() != true) return;
+        try
+        {
+            var dst = SkillLibrary.Import(dlg.FileName);
+            RefreshSkills();
+            SelectedSkill = Skills.FirstOrDefault(s => s.Path == dst) ?? SelectedSkill;
+            SkillStatus = $"Imported {Path.GetFileName(dst)}.";
+        }
+        catch (Exception ex) { SkillStatus = "Import failed: " + ex.Message; }
+    }
+
+    /// <summary>Remove = delete the skill file, after a confirm (a skill may be the user's only copy).</summary>
+    [RelayCommand]
+    private void RemoveSkill()
+    {
+        if (SelectedSkill == null) { SkillStatus = "Select a skill first."; return; }
+        var res = System.Windows.MessageBox.Show(
+            $"Delete “{SelectedSkill.FileName}” from the skill library?\n\nThis deletes the file and can't be undone.",
+            "Transom — Remove skill", System.Windows.MessageBoxButton.YesNo, System.Windows.MessageBoxImage.Warning);
+        if (res != System.Windows.MessageBoxResult.Yes) return;
+        try
+        {
+            SkillLibrary.Remove(SelectedSkill.Path);
+            SkillStatus = $"Removed {SelectedSkill.FileName}.";
+            RefreshSkills();
+        }
+        catch (Exception ex) { SkillStatus = "Remove failed: " + ex.Message; }
+    }
+
     private string ClaudeGuideMarkdown() => @"# Transom — Applying staged BUILT-IN group edits with Claude
 
 This file sits **next to the staged group-edits JSON** (same folder). When you import with **Claude Assist**,
@@ -1795,7 +1969,8 @@ pick one uniform value.
 Per group type / member: applied / skipped (with reason) / conflicts (per-instance divergence → point to
 option 2b). Note this changed the group **definition**, so all instances of the type share the new value.
 
-" + GuideWorksharedCloseMd;
+" + GuideWorksharedCloseMd + @"
+" + GuideSkillsMd;
 
     // --- sections shared VERBATIM between the staged-edits guide (ClaudeGuideMarkdown) and the standalone
     // Claude Assist guide (ClaudeAssistStandaloneMarkdown) so the two can't drift apart ---
@@ -1869,6 +2044,33 @@ NEVER click ""synchronize"" or ""save"" on a close dialog. LOOP on `revit_list_d
 `revit_click_dialog` per call, first match wins — ""do not save"" (Changes Not Saved) → ""keep ownership""
 (Editable Elements / Close Without Saving). Never bare-dismiss (it defaults to cancel/close → aborts the
 close). The user controls sync.
+";
+
+    // Shared by both guides so every staging/connect file teaches the same skill format (the Claude Skills
+    // tab parses the frontmatter to show the description — user request 2026-07-18, item 6 of the brief).
+    private const string GuideSkillsMd = @"## Saving a reusable skill (Transom's Claude Skills tab)
+When the user asks you to save a workflow for reuse — or you finish a sequence worth repeating — write it as
+a **skill file** into Transom's skill library folder: `%LocalAppData%\Transom\skills\<short-kebab-name>.md`.
+The Transom window's **Claude Skills** tab lists every `.md` in that folder; the user can stage one later by
+copying its path back into a Claude Code session.
+
+**Required format** (Transom parses this to display the skill, so follow it exactly): the file starts with a
+YAML frontmatter block, then the workflow body:
+
+```
+---
+name: short-kebab-case-name
+description: One sentence saying what the skill does and when to use it.
+---
+
+(the workflow body)
+```
+
+The `description:` line is **REQUIRED** — it is what Transom shows in the tab's detail pane, so make it say
+what the skill does and when to use it. The body is the step-by-step instructions a future Claude session
+needs to repeat the workflow: which tools to call (`transom` bridge vs `transom-ui-assist` UI), in what
+order, what to verify after each step, and any safety rules. Write it self-contained — the future session
+has Transom's tools but none of today's conversation.
 ";
 
     /// <summary>Settings-tab export of the standalone Claude Assist guide — the same operating instructions
@@ -1975,7 +2177,8 @@ Editing a member inside Edit Group edits the group **definition** — every inst
 same value. That is correct and durable; say so in your report. Per-instance DIVERGENT built-in values are not
 possible while grouped and need an instance shared parameter instead (Transom import option 2b).
 
-" + GuideWorksharedCloseMd;
+" + GuideWorksharedCloseMd + @"
+" + GuideSkillsMd;
 
     /// <summary>Settings-tab "Show me what you can do" export — a scripted demo build (a 12'x10' shed with a
     /// gable roof, door, window, and a section-boxed 3D reveal) plus the full connection guide in one file,

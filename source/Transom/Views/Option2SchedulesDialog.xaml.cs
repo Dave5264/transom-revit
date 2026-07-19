@@ -26,9 +26,12 @@ public partial class Option2SchedulesDialog : Window
 
         string newName = string.IsNullOrWhiteSpace(p.NewParamName) ? $"{p.Field} (Transom)" : p.NewParamName;
         HeadingText.Text = $"Also replace “{p.Field}” in other schedules?";
-        SubText.Text = $"{p.Schedules.Count} other schedule(s) also display “{p.Field}”. Ticked schedules get the " +
-                       $"same conversion: their column is repointed to the new parameter “{newName}” and each " +
-                       "element's current value is carried over.";
+        // Wording matches the element-overlap gate (user feedback 2026-07-18): candidates aren't just any
+        // schedule with the parameter — they display elements this conversion touches.
+        SubText.Text = $"{p.Schedules.Count} other schedule(s) display “{p.Field}” for elements in this " +
+                       $"conversion. Ticked schedules get the same conversion: their column is repointed to the " +
+                       $"new parameter “{newName}” and each element's current value is carried over — so those " +
+                       "elements keep showing one consistent value everywhere.";
 
         foreach (var s in p.Schedules)
         {

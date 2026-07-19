@@ -71,14 +71,23 @@ public sealed partial class TransomView
 
     private void Close_Click(object sender, System.Windows.RoutedEventArgs e) => Close();
 
-    /// <summary>The Settings status panel re-checks its layers whenever the tab is brought up, so it's
-    /// current without the user clicking Refresh (checks are cheap file/process reads).</summary>
+    /// <summary>The Settings / Claude Skills status panels re-check their layers whenever the tab is brought
+    /// up, so they're current without the user clicking Refresh (checks are cheap file/process reads). Claude
+    /// Skills also re-reads the library folder — Claude may have saved a new skill since the window opened.</summary>
     private void Tabs_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
     {
         if (!ReferenceEquals(e.OriginalSource, Tabs)) return; // ignore bubbled child selections (DataGrid, ComboBox)
-        if (Tabs.SelectedItem is System.Windows.Controls.TabItem ti && ti.Header as string == "Settings"
-            && DataContext is TransomViewModel vm)
-            vm.RefreshClaudeStatusCommand.Execute(null);
+        if (Tabs.SelectedItem is not System.Windows.Controls.TabItem ti || DataContext is not TransomViewModel vm) return;
+        switch (ti.Header as string)
+        {
+            case "Settings":
+                vm.RefreshClaudeStatusCommand.Execute(null);
+                break;
+            case "Claude Skills":
+                vm.RefreshSkillsCommand.Execute(null);
+                vm.RefreshClaudeStatusCommand.Execute(null);
+                break;
+        }
     }
 
     // ----- Inline confirm-strip value box (DataGrid RowDetails) -----

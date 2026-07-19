@@ -80,8 +80,15 @@ as pointers, not gospel. Items marked VERIFIED-LIVE were confirmed on a real mod
   version-conditional code needed. Editing a geometry-driving built-in on a group member is only
   possible by driving the UI (Transom UI-Assist / ClickHelper), which is exactly what the
   Claude-assist staging path does.
-- **Built-in DATA params (Mark, Comments, Number, Finish) write directly on grouped instances** —
-  they vary natively and need no special handling (`GroupMode.None`).
+- **Built-in INSTANCE-IDENTITY params (Mark, door Number, room Number) write directly on grouped
+  instances** — they vary natively and need no special handling (`GroupMode.None`). **CORRECTED
+  2026-07-18:** an earlier version of this bullet also listed Comments/Finish — that is WRONG and was
+  superseded by the live-verified finding (2026-06-19, `ScheduleReader.IsInstanceIdentityBuiltin`):
+  ordinary built-in DATA params (e.g. Comments −1010106) are Revit-refused on a direct grouped write
+  ("Changes to groups are allowed only in group edit mode") and can't vary — they route to yellow /
+  option 2b / Claude-Assist. The stale claim leaked into the option-2 old-values disposition
+  ("established since v1.4.1") and was fixed there the same day. Smell test: if grouped built-in DATA
+  writes worked, option 2 wouldn't need to exist.
 - The API-side "definition-swap dance" was researched exhaustively and **retired**: `ChangeTypeId`
   repoints delete+recreate members, dangling external dimensions/constraints crash un-catchably
   (0xe0434352), group origins drift, and market analysis showed no demand for the niche. The

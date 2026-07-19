@@ -28,27 +28,48 @@
         <TextBlock x:Name="HeadingText" FontSize="14" FontWeight="Medium" Foreground="{DynamicResource Text}" TextWrapping="Wrap" />
         <TextBlock x:Name="SubText" Foreground="{DynamicResource Muted}" FontSize="12" TextWrapping="Wrap" Margin="0,6,0,12" />
 
-        <Border Background="{DynamicResource Surface}" BorderBrush="{DynamicResource Line}" BorderThickness="1" CornerRadius="6" Padding="12">
-            <StackPanel>
-                <RadioButton x:Name="LeaveRb" IsChecked="True"
-                             Content="Leave them — the values stay on the elements, just no longer displayed" />
-                <RadioButton x:Name="ClearRb"
-                             Content="Clear them — blank the old parameter on every affected element" />
-                <TextBlock x:Name="ClearNote" Foreground="{DynamicResource Muted}" FontSize="11" Margin="20,0,0,0"
-                           Visibility="Collapsed"
-                           Text="(unavailable — this column stores numeric values, which can't be blanked)" />
-                <RadioButton x:Name="SetRb"
-                             Content="Replace them — write one value into the old parameter on every affected element:" />
-                <TextBox x:Name="ValueBox" Margin="20,4,0,0" Width="240" HorizontalAlignment="Left" Height="26"
-                         VerticalContentAlignment="Center" IsEnabled="False" />
-                <TextBlock x:Name="ValueError" Foreground="{DynamicResource Error}" FontSize="11" Margin="20,4,0,0"
-                           Visibility="Collapsed" Text="Enter the value to write (or choose Leave / Clear)." />
+        <!-- Stage 1: warning (always shown). Assist off → OK only; Assist on → Close + the Claude opt-in. -->
+        <StackPanel x:Name="WarnPanel">
+            <Border Background="{DynamicResource Surface}" BorderBrush="{DynamicResource Line}" BorderThickness="1" CornerRadius="6" Padding="12">
+                <TextBlock x:Name="WarnText" FontSize="12" TextWrapping="Wrap" Foreground="{DynamicResource Text}" />
+            </Border>
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">
+                <Button x:Name="ClaudeBtn" Content="Have Claude update them…" Height="32" Padding="14,0" Margin="0,0,10,0"
+                        Visibility="Collapsed" Background="{DynamicResource Surface}" Foreground="{DynamicResource Accent}"
+                        BorderBrush="{DynamicResource Accent}" BorderThickness="1" Click="Claude_Click" />
+                <Button x:Name="OkBtn" Content="OK" Height="32" Padding="24,0" Background="{DynamicResource Accent}"
+                        Foreground="White" BorderThickness="0" Click="Ok_Click" />
             </StackPanel>
-        </Border>
+        </StackPanel>
 
-        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">
-            <Button Content="Continue" Height="32" Padding="18,0" Background="{DynamicResource Accent}" Foreground="White"
-                    BorderThickness="0" Click="Continue_Click" />
+        <!-- Stage 2: the Claude-assisted cleanup choice (opt-in only; no "Leave" radio — Cancel means leave). -->
+        <StackPanel x:Name="ChoicePanel" Visibility="Collapsed">
+            <Border Background="{DynamicResource Surface}" BorderBrush="{DynamicResource Line}" BorderThickness="1" CornerRadius="6" Padding="12">
+                <StackPanel>
+                    <RadioButton x:Name="ClearRb"
+                                 Content="Clear them — blank the old parameter on every affected element" />
+                    <TextBlock x:Name="ClearNote" Foreground="{DynamicResource Muted}" FontSize="11" Margin="20,0,0,0"
+                               Visibility="Collapsed"
+                               Text="(unavailable — this column stores numeric values, which can't be blanked)" />
+                    <RadioButton x:Name="SetRb"
+                                 Content="Replace them — write one value into the old parameter on every affected element:" />
+                    <TextBox x:Name="ValueBox" Margin="20,4,0,0" Width="240" HorizontalAlignment="Left" Height="26"
+                             VerticalContentAlignment="Center" IsEnabled="False" />
+                    <TextBlock x:Name="ValueError" Foreground="{DynamicResource Error}" FontSize="11" Margin="20,4,0,0"
+                               Visibility="Collapsed" Text="Enter the value to write (or Cancel to leave the old values in place)." />
+                    <TextBlock x:Name="ChoiceError" Foreground="{DynamicResource Error}" FontSize="11" Margin="0,6,0,0"
+                               Visibility="Collapsed" Text="Choose Clear or Replace (or Cancel to leave the old values in place)." />
+                </StackPanel>
+            </Border>
+            <TextBlock x:Name="SplitNote" Foreground="{DynamicResource Muted}" FontSize="11" TextWrapping="Wrap" Margin="0,8,0,0"
+                       Text="Applies to the whole column: Transom writes the ungrouped elements directly; the group members are staged for Claude to apply in Revit's Edit Group mode (you'll be asked where to save the staged file after Apply finishes)." />
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">
+                <Button Content="Cancel" Height="32" Padding="14,0" Margin="0,0,10,0"
+                        Background="{DynamicResource Surface}" Foreground="{DynamicResource Text}"
+                        BorderBrush="{DynamicResource Line}" BorderThickness="1" Click="Cancel_Click" />
+                <Button Content="Continue" Height="32" Padding="18,0" Background="{DynamicResource Accent}" Foreground="White"
+                        BorderThickness="0" Click="Continue_Click" />
+            </StackPanel>
         </StackPanel>
     </StackPanel>
 </Window>

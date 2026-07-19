@@ -1,6 +1,6 @@
 ﻿<?xml version="1.0" encoding="UTF-8"?>
 <!--
-  BundledMcp.wxs  â€”  F4: per-user component group for the bundled MCP shim.
+  BundledMcp.wxs  —  F4: per-user component group for the bundled MCP shim.
 
   Schema: WiX v3 ( http://schemas.microsoft.com/wix/2006/wi ).
   This matches the WiX dialect emitted by WixSharp.Core 2.14.0, which the rest of
@@ -11,13 +11,13 @@
   if the build ever moves to native WiX. Either way the authoring below is plain
   WiX3 so it is portable.
 
-  ADMIN-FREE CONTRACT (BUNDLED_MCP_PLAN.md (retired 2026-07-13; archived locally), constraint #1 â€” per-user install only):
+  ADMIN-FREE CONTRACT (BUNDLED_MCP_PLAN.md (retired 2026-07-13; archived locally), constraint #1 — per-user install only):
     * Everything lands under LocalAppDataFolder (%LocalAppData%\Transom\mcp\).
     * NO ProgramFilesFolder / ProgramFiles64Folder.
-    * NO HKLM â€” the per-component keypath is written to HKCU only.
+    * NO HKLM — the per-component keypath is written to HKCU only.
     * NO ServiceInstall / ServiceControl, NO custom action that needs elevation.
     * The whole MSI is installed perUser (see Installer.cs BuildSingleUserMsi),
-      so MSIINSTALLPERUSER=1 and ALLUSERS="" â€” Windows shows NO UAC prompt.
+      so MSIINSTALLPERUSER=1 and ALLUSERS="" — Windows shows NO UAC prompt.
 -->
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
   <Fragment>
@@ -56,7 +56,7 @@
       <Component Id="cmpTransomMcpShim"
                  Guid="9F2A7C61-3B84-4D2E-9E0A-6C1D5F8B42A7">
 
-        <!-- HKCU keypath â€” per-user, no admin, survives repair correctly. -->
+        <!-- HKCU keypath — per-user, no admin, survives repair correctly. -->
         <RegistryValue Root="HKCU"
                        Key="Software\Transom\Mcp"
                        Name="ShimInstalled"
@@ -96,7 +96,7 @@
 
 <!--
   ============================================================================
-  INTEGRATION â€” where the MAIN installer must reference this fragment
+  INTEGRATION — where the MAIN installer must reference this fragment
   ============================================================================
   The main installer is WixSharp (install/Installer.cs). Two equivalent ways to
   pull this fragment + its ComponentGroup into the SingleUser MSI:

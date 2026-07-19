@@ -94,6 +94,17 @@
          Helper projects simply skips them and the build still succeeds — run the build pipeline (or publish
          those two projects) to populate the payload. They are version-agnostic (one net8.0-windows self-contained
          exe drives Revit 2025/2026/2027), so the same files are bundled for every configuration. -->
+    <!-- Skills shipped with Transom (Claude Skills tab, user request 2026-07-18): copied into a "skills"
+         subfolder of the payload; SkillLibrary.EnsureSeeded copies them to %LocalAppData%\Transom\skills on
+         first launch (never overwriting a user-edited copy). Add new shipped skills to Resources\Skills. -->
+    <ItemGroup>
+        <None Include="Resources\Skills\*.md">
+            <Link>skills\%(Filename)%(Extension)</Link>
+            <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+            <Visible>false</Visible>
+        </None>
+    </ItemGroup>
+
     <ItemGroup>
         <None Include="..\Transom.ClickHelper\bin\Release\net8.0-windows\win-x64\publish\Transom.ClickHelper.exe"
               Condition="Exists('..\Transom.ClickHelper\bin\Release\net8.0-windows\win-x64\publish\Transom.ClickHelper.exe')">
