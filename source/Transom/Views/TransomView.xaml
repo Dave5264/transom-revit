@@ -623,6 +623,23 @@
                                 <TextBlock DockPanel.Dock="Bottom" Margin="0,4,0,0" FontSize="11" TextWrapping="Wrap"
                                            Foreground="{DynamicResource Hint}" Text="{Binding AffectedSelectionInfo}"
                                            Visibility="{Binding SomeAffectedDeselected, Converter={StaticResource BoolToVis}}" />
+                                <!-- Preview split (2026-07-19): read-only "may change" sub-section — schedules a pending
+                                     option (e.g. option 2's column replacement in other schedules) may reach. Scoped to
+                                     selected parents; rebuilt by RecomputeOptionAffected. Declared after the helper line
+                                     so this Bottom dock renders above it (below the will-change list). -->
+                                <StackPanel DockPanel.Dock="Bottom" Margin="0,6,0,0"
+                                            Visibility="{Binding HasOptionAffected, Converter={StaticResource BoolToVis}}">
+                                    <TextBlock Text="Schedules that may change based on options selected:" FontWeight="SemiBold"
+                                               FontSize="11.5" Foreground="{DynamicResource Accent}" TextWrapping="Wrap" />
+                                    <ItemsControl ItemsSource="{Binding OptionAffected}" Margin="8,2,0,0">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <TextBlock Text="{Binding Display}" FontSize="11" TextWrapping="Wrap"
+                                                           Foreground="{DynamicResource Hint}" Margin="0,1" />
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </StackPanel>
                                 <!-- Per-schedule rows: a checkbox driving the schedule's changes' Selected, with read-only
                                      dependent ("inherited-change") schedules indented underneath (Change 2).
                                      Change 1: wrap in a ScrollViewer (MaxHeight + Auto vbar) so a long affected-schedules

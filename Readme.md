@@ -14,7 +14,7 @@
 
 [![Latest release](https://img.shields.io/github/v/release/Dave5264/transom-revit?label=latest%20release&color=2ea44f&logo=github)](https://github.com/Dave5264/transom-revit/releases/latest)
 
-### ⬇ [Download the installer](https://github.com/Dave5264/transom-revit/releases/download/v1.9.2/Transom-1.9.2-SingleUser.msi)
+### ⬇ [Download the installer](https://github.com/Dave5264/transom-revit/releases/download/v1.9.3/Transom-1.9.3-SingleUser.msi)
 
 **One click, no admin rights** — installs into your per-user Revit add-ins folder.
 Double-click the `.msi`, then start Revit. Supports **Revit 2025, 2026 & 2027**.
@@ -42,9 +42,11 @@ Then drop the guidance file from [`claude/`](claude/) (`CLAUDE.md`) into your pr
 so Claude Code already knows the tools and the safe-write workflow. See [`claude/README.md`](claude/README.md) for
 exactly where it goes.
 
-> **Status:** v1.9.2 released (Revit 2025/2026/2027) — **fixes schedule export: the Excel engine (Transom.Office + NPOI) had been dropped from the v1.8.0–v1.9.1 installers, so Export failed with a misleading "open in Excel" error.** The engine now builds and ships automatically, the installer refuses to pack without it, and export errors report their real cause.
+> **Status:** v1.9.3 released (Revit 2025/2026/2027) — **honest import preview: "Schedules this import will change" now lists only schedules that will definitely change, and a new "Schedules that may change based on options selected" section shows the ones a later option choice (like option 2's column replacement) may reach.** Both lists require the schedule to display the edited elements *and* the edited parameter — schedules that merely share elements no longer appear.
 >
-> **Previously:** v1.9.0–v1.9.1 eased the on-ramp to Claude Assist — Settings opens from a bare Revit session
+> **Previously:** v1.9.2 fixed schedule export: the Excel engine (Transom.Office + NPOI) had been dropped from the v1.8.0–v1.9.1 installers, so Export failed with a misleading "open in Excel" error. The engine now builds and ships automatically, and the installer refuses to pack without it.
+>
+> v1.9.0–v1.9.1 eased the on-ramp to Claude Assist — Settings opens from a bare Revit session
 > (Export/Import tabs enable the moment a project opens), the Claude Assist guide exports as a standalone `.md`,
 > a **Show me what you can do** button exports a scripted first demo, and Claude-running detection sees Claude
 > Code under any host via Transom's own MCP processes. v1.8.0 closed the import **confirm gate** — format-mismatched edits (e.g. `2'6` for `2'-6"`)

@@ -305,6 +305,8 @@ public sealed partial class TransomViewModel : ObservableObject
             Skipped.Clear();
             Fixes.Clear();
             AffectedSchedules.Clear();
+            OptionAffected.Clear();
+            HasOptionAffected = false;
             HasAffected = false;
             HasMultipleAffected = false;
             SomeAffectedDeselected = false;
@@ -390,6 +392,15 @@ public sealed partial class TransomViewModel : ObservableObject
     public ObservableCollection<SkippedItem> Skipped { get; } = new();
     public ObservableCollection<AffectedScheduleRow> AffectedSchedules { get; } = new();
     public ObservableCollection<UnparseableFix> Fixes { get; } = new();
+
+    /// <summary>Preview split (user request 2026-07-19): flat, read-only "Schedules that may change based on options
+    /// selected" list — schedules a pending group-conflict option (e.g. option 2's column replacement) MAY reach.
+    /// Rebuilt by <see cref="RecomputeOptionAffected"/> from <see cref="ChangeSet.OptionDependents"/>, scoped to the
+    /// currently selected driving schedules.</summary>
+    public ObservableCollection<DependentRow> OptionAffected { get; } = new();
+
+    /// <summary>Gates the "may change based on options selected" sub-section (visible only when it has rows).</summary>
+    [ObservableProperty] private bool _hasOptionAffected;
 
     /// <summary>True when >1 schedule is affected — gates the "Select all · Select none" link pair (a single-schedule
     /// import doesn't need bulk controls). UX_SPEC §4b.</summary>
@@ -544,6 +555,8 @@ public sealed partial class TransomViewModel : ObservableObject
         Skipped.Clear();
         Fixes.Clear();
         AffectedSchedules.Clear();
+        OptionAffected.Clear();
+        HasOptionAffected = false;
         HasAffected = false;
         HasMultipleAffected = false;
         SomeAffectedDeselected = false;
@@ -1382,6 +1395,28 @@ public sealed partial class TransomViewModel : ObservableObject
         AffectedSelectionInfo = SomeAffectedDeselected
             ? $"{selected} of {total} schedules selected — unticked schedules won't be imported."
             : "";
+        RecomputeOptionAffected();
+    }
+
+    /// <summary>Preview split (user request 2026-07-19): rebuild the read-only "Schedules that may change based on
+    /// options selected" list from the change set's <see cref="ChangeSet.OptionDependents"/>, scoped to driving
+    /// schedules that are still selected — deselecting a parent drops the option edges it drives, mirroring the
+    /// §9.5 dependent-subtree cascade. Distinct by schedule name (a schedule can be reachable via several parents).
+    /// Piggybacks on RecomputeAffectedSelectionInfo so every selection-change path refreshes it.</summary>
+    private void RecomputeOptionAffected()
+    {
+        OptionAffected.Clear();
+        var deps = _lastChangeSet?.OptionDependents;
+        if (deps == null || deps.Count == 0) { HasOptionAffected = false; return; }
+        var names = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var row in AffectedSchedules)
+        {
+            if (row.SelectionState == false) continue;
+            if (deps.TryGetValue(row.ScheduleUid, out var list) || deps.TryGetValue(row.ScheduleName, out list))
+                foreach (var d in list) names.Add(d.ScheduleName);
+        }
+        foreach (var n in names) OptionAffected.Add(new DependentRow($"↳ {n}"));
+        HasOptionAffected = OptionAffected.Count > 0;
     }
 
     private void ShowPreview(ChangeSet cs)

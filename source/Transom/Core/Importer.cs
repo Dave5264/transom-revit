@@ -395,6 +395,14 @@ public sealed class ChangeSet
     /// when no type/instance edge is justified (grouped/shared/computed never infer an edge — §9.2).</summary>
     public Dictionary<string, List<DependentScheduleRef>> Dependents = new();
 
+    /// <summary>Preview redesign (user request 2026-07-19): schedules that MAY change depending on the options the
+    /// user picks later, keyed by driving schedule uid like <see cref="Dependents"/>. Two sources: (a) schedules
+    /// displaying the elements+parameter of a column that has a PENDING group-conflict resolution — whether/where
+    /// that column's values land depends on the option chosen (option 2 redirects even the column's ungrouped edits
+    /// into a new parameter); (b) the option-2 replace-candidates (<see cref="Option2OtherSchedules"/>) — repointed
+    /// only if ticked in the Apply-time dialog. Disjoint from <see cref="Dependents"/> (a definite edge wins).</summary>
+    public Dictionary<string, List<DependentScheduleRef>> OptionDependents = new();
+
     /// <summary>Revit warnings/errors raised during the apply commit (the ApplyFailureCollector's messages), kept so
     /// the FINAL by-uid log (rebuilt post-VerifyApplied) can still include them — see <c>FinalizeApplyReport</c>.</summary>
     public List<string> RevitApplyMessages = new();
@@ -1058,87 +1066,142 @@ public sealed class Importer
         foreach (var ch in pending) cs.Changes.Add(Mark(doc, ch, elInGroup, elGroupName));
     }
 
+    /// <summary>Per-column driving-edit summary for <see cref="ComputeDependents"/>: the parameter the column
+    /// writes, whether the write is OPTION-CONTINGENT (the column has a pending group-conflict resolution, so the
+    /// option chosen at Apply decides whether/where its values land), and the type ids / instance uids it touches.</summary>
+    private sealed class DepDriver
+    {
+        public long ParamId;
+        public bool Contingent;
+        public readonly HashSet<long> TypeIds = new();
+        public readonly HashSet<string> InstUids = new();
+    }
+
     /// <summary>
-    ///     CHANGE 2 (§9.4): for each EDITED (driving) schedule, find the OTHER project schedules that would inherit
-    ///     its edits and store them on <see cref="ChangeSet.Dependents"/> (read-only display in the selection step).
-    ///     Propagation (§9.2, evidence-based): a TYPE-bound write changes every instance of the type project-wide, so
-    ///     any schedule displaying any such instance depends; an INSTANCE/bulk write only reaches the written
-    ///     instances, so only a schedule showing one of those exact uids depends. Grouped/shared/computed writes are
-    ///     NOT type/instance-keyed → no edge inferred (never a false dependent). A driving schedule is never its own
-    ///     dependent. ONE collector pass per project schedule (templates + driving schedules excluded); cost is
-    ///     O(sum of displayed elements + driving instances) — no per-type rescan. Runs on the API thread.
+    ///     CHANGE 2 (§9.4) + preview split (user request 2026-07-19): for each EDITED (driving) schedule, find the
+    ///     OTHER project schedules its edits reach and store them on <see cref="ChangeSet.Dependents"/> (WILL
+    ///     change) or <see cref="ChangeSet.OptionDependents"/> (MAY change, depending on the options picked at
+    ///     Apply) — read-only display in the selection step. A candidate depends only when it shows the edited
+    ///     ELEMENTS *and* displays the edited PARAMETER as a schedule field (hidden fields count — they still drive
+    ///     filters/sort; combined-parameter fields count via their components): element overlap alone renders
+    ///     identically before and after the import. Propagation stays evidence-based (§9.2): a TYPE-bound write
+    ///     reaches every instance of the type project-wide; an INSTANCE/bulk write reaches only the written uids.
+    ///     DEFINITE edges come from direct (ungrouped) writes in columns with NO pending group conflict. A column
+    ///     that HAS one (an Option2Mode) yields only MAY-change edges — from its grouped AND ungrouped edits alike,
+    ///     since option 2 adopts the column's ungrouped edits into the new parameter too. The option-2
+    ///     replace-candidates (<see cref="ChangeSet.Option2OtherSchedules"/>, already element+parameter gated) fold
+    ///     into MAY-change as well — they're repointed only if ticked at Apply. A definite edge beats a may-change
+    ///     edge for the same (parent, candidate). A driving schedule is never its own dependent. ONE collector pass
+    ///     per project schedule (templates + driving schedules excluded). Runs on the API thread.
     /// </summary>
     private static void ComputeDependents(Document doc, ChangeSet cs)
     {
         try
         {
-            // 1. Driving edits keyed per source schedule: type ids (type writes) + instance uids (instance writes).
-            //    Only non-frozen, directly-applicable changes drive a dependency (a frozen/blue change writes nothing).
-            var drivingTypeIdsBySched = new Dictionary<string, HashSet<long>>();
-            var drivingInstUidsBySched = new Dictionary<string, HashSet<string>>();
+            // 1. Driving edits keyed per source schedule, one entry per edited COLUMN (parameter + contingency).
+            //    Frozen writes nothing → never drives. A grouped edit drives only its column's MAY-change edge
+            //    (not a clean direct write — §9.2 — but resolving its conflict WILL write somewhere; which
+            //    schedules show the result depends on the option chosen).
+            var driversBySched = new Dictionary<string, Dictionary<string, DepDriver>>();
             foreach (var ch in cs.Changes)
             {
-                // §9.2: drivers are ONLY ungrouped, directly-applicable changes. Skip frozen (writes nothing) AND
-                // grouped (InGroup covers ProjectVary + BuiltinDance + shared-in-group — set by Mark()): a grouped
-                // change is not a clean type/instance-keyed direct write (a BuiltinDance isn't even applied in the
-                // direct pass), so inferring a dependent from it would be a FALSE edge. (At this preview-time point
-                // no option-2 Resolution is set yet, so a grouped change can't be reclassified to a direct type
-                // write here anyway — staying conservative matches §9.2's "don't infer what we can't justify".)
-                if (ch.Frozen || ch.InGroup) continue;
+                if (ch.Frozen) continue;
                 var schedUid = !string.IsNullOrEmpty(ch.SourceScheduleUid) ? ch.SourceScheduleUid : ch.SourceScheduleName;
                 if (string.IsNullOrEmpty(schedUid)) continue;
-                // TYPE-bound write (incl. option-2 NewTypeParam) → key on the written type id.
-                bool typeKeyed = ch.Binding == "type" || ch.Resolution == GroupResolution.NewTypeParam;
-                if (typeKeyed && ch.TypeId != 0)
-                {
-                    if (!drivingTypeIdsBySched.TryGetValue(schedUid, out var set)) drivingTypeIdsBySched[schedUid] = set = new HashSet<long>();
-                    set.Add(ch.TypeId);
-                }
+                var colKey = ChangeSet.ColumnKey(ch.ParameterId, ch.Field);
+                bool contingent = cs.Option2Modes.ContainsKey(colKey);
+                if (ch.InGroup && !contingent) continue;   // §9.2: a grouped edit with no pending option is no edge
+                if (!driversBySched.TryGetValue(schedUid, out var cols)) driversBySched[schedUid] = cols = new Dictionary<string, DepDriver>();
+                if (!cols.TryGetValue(colKey, out var drv)) cols[colKey] = drv = new DepDriver { ParamId = ch.ParameterId, Contingent = contingent };
+                // TYPE-bound write → key on the written type id; INSTANCE/bulk write → the specific instance uids.
+                if (ch.Binding == "type" && ch.TypeId != 0)
+                    drv.TypeIds.Add(ch.TypeId);
                 else
                 {
-                    // INSTANCE/bulk write → the specific instance uids it touches.
                     var uids = ch.BulkInstanceIds ?? (string.IsNullOrEmpty(ch.UniqueId) ? null : new List<string> { ch.UniqueId });
-                    if (uids == null) continue;
-                    if (!drivingInstUidsBySched.TryGetValue(schedUid, out var set)) drivingInstUidsBySched[schedUid] = set = new HashSet<string>();
-                    foreach (var u in uids) if (!string.IsNullOrEmpty(u)) set.Add(u);
+                    if (uids != null) foreach (var u in uids) if (!string.IsNullOrEmpty(u)) drv.InstUids.Add(u);
                 }
             }
 
-            var drivingSchedUids = new HashSet<string>(drivingTypeIdsBySched.Keys.Concat(drivingInstUidsBySched.Keys));
-            if (drivingSchedUids.Count == 0) return;   // nothing drives anything → no dependents
-            bool anyInstanceDrivers = drivingInstUidsBySched.Count > 0;
+            bool anyInstanceDrivers = driversBySched.Values.Any(c => c.Values.Any(d => d.InstUids.Count > 0));
+            var added = new HashSet<(string parent, string cand)>();   // one edge per (parent, candidate); definite wins
 
-            // 2. One pass over project schedules (excluding templates + the driving schedules themselves). For each,
-            //    derive its displayed TYPE ids and (only if needed) displayed instance uids.
-            foreach (var vs in new FilteredElementCollector(doc).OfClass(typeof(ViewSchedule)).Cast<ViewSchedule>())
+            void AddEdge(Dictionary<string, List<DependentScheduleRef>> dict, string parentUid, string candName, string candUid)
             {
-                if (vs.IsTemplate) continue;
-                var candUid = vs.UniqueId;
-                if (drivingSchedUids.Contains(candUid)) continue;   // a driving schedule is never its own dependent
+                if (!added.Add((parentUid, candUid))) return;
+                if (!dict.TryGetValue(parentUid, out var list)) dict[parentUid] = list = new List<DependentScheduleRef>();
+                list.Add(new DependentScheduleRef { ScheduleName = candName, ScheduleUid = candUid });
+            }
 
-                HashSet<long> shownTypeIds = new();
-                HashSet<string>? shownInstUids = anyInstanceDrivers ? new HashSet<string>() : null;
-                try
+            // 2. One pass over project schedules (excluding templates + the driving schedules themselves).
+            if (driversBySched.Count > 0)
+                foreach (var vs in new FilteredElementCollector(doc).OfClass(typeof(ViewSchedule)).Cast<ViewSchedule>())
                 {
-                    foreach (var el in new FilteredElementCollector(doc, vs.Id).WhereElementIsNotElementType())
+                    if (vs.IsTemplate) continue;
+                    var candUid = vs.UniqueId;
+                    if (driversBySched.ContainsKey(candUid)) continue;   // a driving schedule is never its own dependent
+
+                    // The candidate's displayed parameters. Hidden fields included (they drive filters/sort);
+                    // combined-parameter fields contribute their component param ids.
+                    var fieldParamIds = new HashSet<long>();
+                    try
                     {
-                        var tid = el.GetTypeId();
-                        if (tid != null && tid != ElementId.InvalidElementId) shownTypeIds.Add(tid.Value);
-                        shownInstUids?.Add(el.UniqueId);
+                        var def = vs.Definition;
+                        int n = def.GetFieldCount();
+                        for (int i = 0; i < n; i++)
+                        {
+                            var f = def.GetField(i);
+                            fieldParamIds.Add(f.ParameterId.Value);
+                            try { foreach (var cp in f.GetCombinedParameters()) fieldParamIds.Add(cp.ParamId.Value); } catch { }
+                        }
+                    }
+                    catch { continue; }
+                    // Cheap pre-gate: skip the (large) element enumeration when no edited parameter is displayed.
+                    if (!driversBySched.Values.Any(cols => cols.Values.Any(d => fieldParamIds.Contains(d.ParamId)))) continue;
+
+                    HashSet<long> shownTypeIds = new();
+                    HashSet<string>? shownInstUids = anyInstanceDrivers ? new HashSet<string>() : null;
+                    try
+                    {
+                        foreach (var el in new FilteredElementCollector(doc, vs.Id).WhereElementIsNotElementType())
+                        {
+                            var tid = el.GetTypeId();
+                            if (tid != null && tid != ElementId.InvalidElementId) shownTypeIds.Add(tid.Value);
+                            shownInstUids?.Add(el.UniqueId);
+                        }
+                    }
+                    catch { continue; }   // a schedule that won't enumerate (linked / odd) → skip it as a candidate
+
+                    // 3. Attribute this candidate to each driving (parent) schedule whose edited COLUMN it both
+                    //    displays (parameter) and shows elements of (type/instance overlap). Definite beats optional.
+                    foreach (var kv in driversBySched)
+                    {
+                        bool definite = false, optional = false;
+                        foreach (var drv in kv.Value.Values)
+                        {
+                            if (!fieldParamIds.Contains(drv.ParamId)) continue;
+                            if (!shownTypeIds.Overlaps(drv.TypeIds)
+                                && !(shownInstUids != null && shownInstUids.Overlaps(drv.InstUids))) continue;
+                            if (drv.Contingent) optional = true; else definite = true;
+                        }
+                        if (definite) AddEdge(cs.Dependents, kv.Key, vs.Name, candUid);
+                        else if (optional) AddEdge(cs.OptionDependents, kv.Key, vs.Name, candUid);
                     }
                 }
-                catch { continue; }   // a schedule that won't enumerate (linked / odd) → skip it as a candidate
 
-                // 3. Attribute this candidate to each driving (parent) schedule it shares a type/instance with.
-                foreach (var parentUid in drivingSchedUids)
-                {
-                    bool depends =
-                        (drivingTypeIdsBySched.TryGetValue(parentUid, out var ptypes) && shownTypeIds.Overlaps(ptypes))
-                        || (shownInstUids != null && drivingInstUidsBySched.TryGetValue(parentUid, out var pinsts) && shownInstUids.Overlaps(pinsts));
-                    if (!depends) continue;
-                    if (!cs.Dependents.TryGetValue(parentUid, out var list)) cs.Dependents[parentUid] = list = new List<DependentScheduleRef>();
-                    list.Add(new DependentScheduleRef { ScheduleName = vs.Name, ScheduleUid = candUid });
-                }
+            // 4. Fold the option-2 replace-candidates into MAY-change (already element+parameter gated in
+            //    ComputeOption2OtherSchedules; repointed only if ticked at Apply), attributed to each source
+            //    schedule of the convertible column. AddEdge keeps a candidate that already earned a DEFINITE
+            //    edge for the same parent out of the may-change list.
+            foreach (var kv in cs.Option2OtherSchedules)
+            {
+                var parents = cs.Changes
+                    .Where(c => !c.Frozen && ChangeSet.ColumnKey(c.ParameterId, c.Field) == kv.Key)
+                    .Select(c => !string.IsNullOrEmpty(c.SourceScheduleUid) ? c.SourceScheduleUid : c.SourceScheduleName)
+                    .Where(u => !string.IsNullOrEmpty(u)).Distinct();
+                foreach (var parentUid in parents)
+                    foreach (var r in kv.Value)
+                        AddEdge(cs.OptionDependents, parentUid, r.ScheduleName, r.ScheduleUid);
             }
         }
         catch { /* dependents are an informational overlay — never block the change set on them */ }
