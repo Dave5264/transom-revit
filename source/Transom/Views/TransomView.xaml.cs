@@ -56,7 +56,8 @@ public sealed partial class TransomView
             System.Windows.MessageBox.Show(this,
                 "Built-in parameter edits on grouped elements were staged for Claude-assist.\n\n" +
                 "Files are ready for Claude:\n" + path + "\n\n" +
-                "Run Claude to perform the group definition-swap and apply them.",
+                "Run Claude to apply them — the grouped built-in edits are written through Revit's Edit Group mode " +
+                "(step-by-step is in the guide beside the file).",
                 "Ready for Claude", System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Information);
     }
 

@@ -20,7 +20,7 @@ public sealed class ExportEventHandler : IExternalEventHandler
     public string DocTitle = "";
     public string ExchangeFolder = "";
     /// <summary>When true, grouped built-in-parameter cells export as yellow (Claude can apply them via the
-    /// definition-swap); when false they export as a distinct grey (no path to apply).</summary>
+    /// Edit Group UI pass); when false they export as a distinct grey (no path to apply).</summary>
     public bool ClaudeAssistEnabled;
     public Action<string> ReportStatus = _ => { };
 

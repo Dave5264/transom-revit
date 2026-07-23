@@ -89,7 +89,7 @@ public sealed class RowMeta
     public HashSet<int>? GroupProjectCols;
 
     /// <summary>Grouped-element instance params that are BUILT-IN params in a SIMPLE (danceable) group — can't
-    /// vary, but the definition-swap dance can reproduce the group. Yellow on export.</summary>
+    /// vary, but Claude can apply them via the Edit Group UI pass. Yellow on export.</summary>
     public HashSet<int>? GroupBuiltinCols;
 
     /// <summary>Grouped-element BUILT-IN params whose model group is BROKEN (a member anchored outside the group,

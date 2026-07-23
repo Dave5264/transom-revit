@@ -47,7 +47,7 @@ public sealed class GroupSafetyResult
     /// (re-host) them and unlock option 3. Populated from <see cref="HasAnchored"/> detection (deduped by name).</summary>
     public readonly List<BrokenFamily> BrokenFamilies = new();
 
-    /// <summary>A "broken" group the definition-swap dance cannot faithfully reproduce → color RED on export
+    /// <summary>A "broken" group the grouped-edit "dance" (Claude's Edit Group pass) cannot faithfully reproduce → color RED on export
     /// (the broad HINT predicate: includes nested, which the dance actually preserves, for a conservative colour).
     /// Note: a MIRROR is deliberately NOT broken — mirror-only groups now go yellow/danceable.</summary>
     public bool IsBroken => HasAnchored || HasRotation || HasMultiLevel || HasNested;
@@ -78,7 +78,7 @@ public sealed class GroupSafetyResult
 }
 
 /// <summary>
-///   Shared detector for model groups the definition-swap "group dance" (import option 3) cannot faithfully
+///   Shared detector for model groups the grouped-edit "group dance" (import option 3, Claude's Edit Group pass) cannot faithfully
 ///   reproduce. Owner-validated criteria (the dance was over-refusing mirror-only and bystander-nested groups):
 ///   the REAL breakers that gate the dance are
 ///     * LEVEL-ANCHORED "broken families" — a member is hosted on a Level or is sketch-based (Ceiling/Floor/

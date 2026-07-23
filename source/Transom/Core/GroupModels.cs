@@ -8,7 +8,7 @@ public enum GroupMode
 {
     None,         // not in a group — write directly
     ProjectVary,  // project/shared param: Transom sets "vary by group instance" then writes per-instance (in-process)
-    BuiltinDance, // built-in param: can't vary — needs the uniform definition-swap "dance" via Claude-assist
+    BuiltinDance, // built-in param: can't vary — applied uniformly via Claude-assist driving Revit's Edit Group UI
 }
 
 /// <summary>

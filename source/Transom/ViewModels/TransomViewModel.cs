@@ -195,7 +195,9 @@ public sealed partial class TransomViewModel : ObservableObject
     /// a schedule the user DESELECTED can never apply, so it must not block the rest of the import. Raise
     /// OnPropertyChanged(nameof(CanApply)) wherever _lastChangeSet is set/nulled, a pending row is confirmed,
     /// discarded, or added (conflict resolution), the grid is refilled, OR a schedule's selection flips.</summary>
-    public bool CanApply => _lastChangeSet != null && !Changes.Any(PendingBlocksApply);
+    public bool CanApply => _lastChangeSet != null
+        && (Changes.Count > 0 || _lastChangeSet.HeaderChanges.Count > 0)   // a 0-change preview produces a change set but nothing to apply → keep Apply greyed
+        && !Changes.Any(PendingBlocksApply);
 
     /// <summary>True for a pending row whose schedule is still selected — the rows the confirm-or-discard gate
     /// counts. A pending row in a fully-deselected schedule is excluded everywhere the gate looks.</summary>
@@ -1866,6 +1868,10 @@ public sealed partial class TransomViewModel : ObservableObject
     private void MaybeEncourage()
     {
         if (!EncouragingMessages) return;
+        // Don't interrupt a Claude-Assist session: this is a MODAL TaskDialog, so while a Claude session drives
+        // Transom over the loopback bridge it blocks the call (Revit not idle) and forces an extra dismissal
+        // mid-sequence. A human running with Claude Assist off still gets the pep talk.
+        if (IsClaudeAssistEnabled) return;
         var msg = Encouragement.Maybe();
         if (msg != null)
             try { TaskDialog.Show("Transom", msg); } catch { /* never let a pep talk break anything */ }
@@ -2024,6 +2030,12 @@ during. Everything between (enter edit mode, pick the element, open Properties, 
 **screenshot + `revit_*` clicks/keys/scrolls**. **Take a `revit_screenshot(screen:true)` after almost every
 click/type/scroll, READ it, and confirm the expected state before the next action** — a wrong-element pick, a
 mis-focused field, and a missed button are all SILENT.
+
+**Run Claude Code with bypass permissions** for the whole UI phase (e.g. `claude --dangerously-skip-permissions`,
+or the client's session-wide ""don't ask again"" approval). A tool-approval prompt popping in the Claude window
+mid-sequence steals Windows focus from Revit, so the next `revit_*` click lands on the wrong window and misses
+SILENTLY — leaving a half-finished Edit Group. Bypass only relaxes Claude's own tool prompts on this machine; the
+loopback bridge is unchanged (loopback-only, per-user, session-token gated).
 ";
 
     private const string GuidePhasesMd = @"### Phase A — API setup (use the Revit API via `execute_revit_code`; do this BEFORE entering Edit Group)
