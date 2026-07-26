@@ -6,12 +6,19 @@ using System.Linq;
 namespace Transom.Core;
 
 /// <summary>One skill file in the library — a list row on the Claude Skills tab.</summary>
+/// <remarks>These MUST stay auto-properties, not fields: the tab's ListBox ItemTemplate binds Name and
+/// FileName, and WPF data binding cannot bind to a field — it resolves to nothing and the rows render
+/// blank (the 2026-07-18 tab shipped with fields and showed an empty-looking list).</remarks>
 public sealed class SkillEntry
 {
-    public string Name = "";        // frontmatter `name:` when present, else the file name without extension
-    public string FileName = "";    // the .md file name (shown as the row hint; what Stage copies refers to)
-    public string Path = "";        // full path inside the library folder
-    public string Description = ""; // frontmatter `description:` (the tab's detail pane); body fallback
+    /// <summary>Frontmatter `name:` when present, else the file name without extension.</summary>
+    public string Name { get; set; } = "";
+    /// <summary>The .md file name (shown as the row hint; what Stage copies refers to).</summary>
+    public string FileName { get; set; } = "";
+    /// <summary>Full path inside the library folder.</summary>
+    public string Path { get; set; } = "";
+    /// <summary>Frontmatter `description:` (the tab's detail pane); body fallback.</summary>
+    public string Description { get; set; } = "";
 }
 
 /// <summary>

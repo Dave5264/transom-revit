@@ -1480,7 +1480,9 @@ public sealed partial class TransomViewModel : ObservableObject
         AffectedSchedules.Clear();
         foreach (var s in cs.SheetSummaries.Where(s => s.Changes > 0 || s.Conflicts > 0))
         {
-            cs.Dependents.TryGetValue(s.ScheduleUid, out var deps);
+            // Dependents are keyed by the changes' SourceScheduleUid with a name FALLBACK when the workbook
+            // carried no uid — look up both ways, same as RecomputeOptionAffected, or those edges never show.
+            if (!cs.Dependents.TryGetValue(s.ScheduleUid, out var deps)) cs.Dependents.TryGetValue(s.ScheduleName, out deps);
             AffectedSchedules.Add(new AffectedScheduleRow(s, ChangesForSchedule, OnAffectedSelectionChanged, deps));
         }
         HasAffected = AffectedSchedules.Count > 0;

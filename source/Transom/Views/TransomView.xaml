@@ -631,14 +631,18 @@
                                             Visibility="{Binding HasOptionAffected, Converter={StaticResource BoolToVis}}">
                                     <TextBlock Text="Schedules that may change based on options selected:" FontWeight="SemiBold"
                                                FontSize="11.5" Foreground="{DynamicResource Accent}" TextWrapping="Wrap" />
-                                    <ItemsControl ItemsSource="{Binding OptionAffected}" Margin="8,2,0,0">
-                                        <ItemsControl.ItemTemplate>
-                                            <DataTemplate>
-                                                <TextBlock Text="{Binding Display}" FontSize="11" TextWrapping="Wrap"
-                                                           Foreground="{DynamicResource Hint}" Margin="0,1" />
-                                            </DataTemplate>
-                                        </ItemsControl.ItemTemplate>
-                                    </ItemsControl>
+                                    <!-- Same scroll cap as the will-change list above: a widely-displayed parameter
+                                         (e.g. Comments) can reach dozens of schedules — scroll, don't grow the window. -->
+                                    <ScrollViewer MaxHeight="120" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                                        <ItemsControl ItemsSource="{Binding OptionAffected}" Margin="8,2,0,0">
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate>
+                                                    <TextBlock Text="{Binding Display}" FontSize="11" TextWrapping="Wrap"
+                                                               Foreground="{DynamicResource Hint}" Margin="0,1" />
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                    </ScrollViewer>
                                 </StackPanel>
                                 <!-- Per-schedule rows: a checkbox driving the schedule's changes' Selected, with read-only
                                      dependent ("inherited-change") schedules indented underneath (Change 2).
