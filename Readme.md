@@ -89,15 +89,22 @@ straight to your clipboard to paste into Claude Code. Two ship with the add-in: 
 inventory** (a safe first thing to try) and **elevation door/window tagging** that recognises visible openings
 optically, so openings hidden behind the facade never get tagged.
 
-<p><img src="docs/images/hub-claude-skills.jpg" alt="Transom Schedule Hub, Claude Skills tab: the skill library listing elevation-door-window-tags and schedule-inventory, with Stage, Import and Remove buttons, the selected skill's description, and the live bridge status checklist" width="560"></p>
-
 Turning it on, once:
 
 1. Turn **Claude Assist** on in Transom Settings (Schedule Hub → Settings tab) — the first ON registers
    Transom's MCP servers and starts the bridge; a status panel shows every layer at a glance.
 2. Restart Claude Code so it launches the shim and picks up the new servers.
 
-<p><img src="docs/images/hub-settings-claude-assist.jpg" alt="Transom Schedule Hub, Settings tab: the Claude Assist toggle switched on, with a status checklist showing the bridge listening on 127.0.0.1:48810, the session token, the deployed MCP shim, both servers registered with Claude Code, and Claude connected" width="560"></p>
+<table>
+<tr>
+<td width="50%"><img src="docs/images/hub-settings-claude-assist.jpg" alt="Transom Schedule Hub, Settings tab: the Claude Assist toggle switched on, with a status checklist showing the bridge listening on 127.0.0.1:48810, the session token, the deployed MCP shim, both servers registered with Claude Code, and Claude connected" width="100%"></td>
+<td width="50%"><img src="docs/images/hub-claude-skills.jpg" alt="Transom Schedule Hub, Claude Skills tab: the skill library listing elevation-door-window-tags and schedule-inventory, with Stage, Import and Remove buttons, the selected skill's description, and the live bridge status checklist" width="100%"></td>
+</tr>
+<tr>
+<td><em><b>Settings</b> — one <b>Claude Assist</b> toggle, and a status checklist that shows every layer between Revit and Claude Code so a broken connection names itself.</em></td>
+<td><em><b>Claude Skills</b> — the skill library: import your own, keep the ones Claude writes, and <b>Stage</b> one to paste straight into Claude Code.</em></td>
+</tr>
+</table>
 
 Then drop the guidance file from [`claude/`](claude/) (`CLAUDE.md`) into your project root (or `~/.claude/CLAUDE.md`)
 so Claude Code already knows the tools and the safe-write workflow. See [`claude/README.md`](claude/README.md) for
