@@ -58,6 +58,17 @@ Ungrouped elements never show blue, yellow, or red — those three exist only be
 members. A model with no groups is all white, green, and grey. The Export tab carries the same legend, with a
 **More information…** dialog explaining each color and each import option in full.
 
+<table>
+<tr>
+<td width="50%"><img src="docs/images/hub-export.jpg" alt="Transom Schedule Hub, Export tab: the cell-color legend above a checklist of the model's schedules" width="100%"></td>
+<td width="50%"><img src="docs/images/hub-import-preview.jpg" alt="Transom Schedule Hub, Import tab: a preview listing 11 changes with element, field, old value, new value and scope, plus the schedules the import will change" width="100%"></td>
+</tr>
+<tr>
+<td><em><b>Export</b> — tick the schedules to write out; the legend is the same one above.</em></td>
+<td><em><b>Import → Preview</b> — every change with its old and new value, the scope it will reach, and which schedules it touches. Rows on group members are flagged for a decision before anything is written.</em></td>
+</tr>
+</table>
+
 ### Claude Code integration
 
 The Claude Code integration layer connects the live Revit model to Claude through a **local bridge** —
@@ -78,11 +89,15 @@ straight to your clipboard to paste into Claude Code. Two ship with the add-in: 
 inventory** (a safe first thing to try) and **elevation door/window tagging** that recognises visible openings
 optically, so openings hidden behind the facade never get tagged.
 
+<p><img src="docs/images/hub-claude-skills.jpg" alt="Transom Schedule Hub, Claude Skills tab: the skill library listing elevation-door-window-tags and schedule-inventory, with Stage, Import and Remove buttons, the selected skill's description, and the live bridge status checklist" width="560"></p>
+
 Turning it on, once:
 
 1. Turn **Claude Assist** on in Transom Settings (Schedule Hub → Settings tab) — the first ON registers
    Transom's MCP servers and starts the bridge; a status panel shows every layer at a glance.
 2. Restart Claude Code so it launches the shim and picks up the new servers.
+
+<p><img src="docs/images/hub-settings-claude-assist.jpg" alt="Transom Schedule Hub, Settings tab: the Claude Assist toggle switched on, with a status checklist showing the bridge listening on 127.0.0.1:48810, the session token, the deployed MCP shim, both servers registered with Claude Code, and Claude connected" width="560"></p>
 
 Then drop the guidance file from [`claude/`](claude/) (`CLAUDE.md`) into your project root (or `~/.claude/CLAUDE.md`)
 so Claude Code already knows the tools and the safe-write workflow. See [`claude/README.md`](claude/README.md) for
@@ -198,5 +213,5 @@ all-versions build run through the `build/` ModularPipelines project (`cd build;
 | `source/Transom/` | the add-in (commands, views, view-models, core logic) |
 | `build/`, `install/` | ModularPipelines build + WiX installer |
 | `branding/` | ribbon icon + generator |
-| `docs/` | design docs: `design-notes/` (shipped-fix rationale + consolidated Revit-API research notes) and `parity-tool-status.md` (bridge-tool review state) |
+| `docs/` | design docs: `design-notes/` (shipped-fix rationale + consolidated Revit-API research notes), `parity-tool-status.md` (bridge-tool review state), `images/` (screenshots used on this page) |
 | `tools/` | standalone dev tools (`transom_verify.py`) |
