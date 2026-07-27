@@ -14,7 +14,7 @@
 
 [![Latest release](https://img.shields.io/github/v/release/Dave5264/transom-revit?label=latest%20release&color=2ea44f&logo=github)](https://github.com/Dave5264/transom-revit/releases/latest)
 
-### ⬇ [Download the installer](https://github.com/Dave5264/transom-revit/releases/download/v1.9.4/Transom-1.9.4-SingleUser.msi)
+### ⬇ [Download the installer](https://github.com/Dave5264/transom-revit/releases/download/v1.9.5/Transom-1.9.5-SingleUser.msi)
 
 **One click, no admin rights** — installs into your per-user Revit add-ins folder.
 Double-click the `.msi`, then start Revit. Supports **Revit 2025, 2026 & 2027**.
@@ -42,9 +42,9 @@ Then drop the guidance file from [`claude/`](claude/) (`CLAUDE.md`) into your pr
 so Claude Code already knows the tools and the safe-write workflow. See [`claude/README.md`](claude/README.md) for
 exactly where it goes.
 
-> **Status:** v1.9.4 released (Revit 2025/2026/2027) — **the Claude Skills tab is readable again, and ships a second skill.** The skill list rendered blank rows since the tab shipped (WPF cannot bind to fields, and the row model exposed fields); it now shows each skill's name and file. Added a shipped **elevation door/window tagging** skill that tags the openings on A300-series elevations, recognising visible openings optically so ones hidden behind the facade are never tagged.
+> **Status:** v1.9.5 released (Revit 2025/2026/2027) — **five fixes from live option-2 UI testing.** "Apply selected" no longer stays enabled after a preview that found nothing to change, and the modal encouragement pop-up is suppressed while Claude Assist is on so it can't block the bridge mid-automation. The staged-handoff guide now spells out the bypass-permissions/focus caveat for the Edit Group pass.
 >
-> **Previously:** v1.9.3 delivered an honest import preview: "Schedules this import will change" lists only schedules that will definitely change, and a "Schedules that may change based on options selected" section shows the ones a later option choice may reach.
+> **Previously:** v1.9.4 made the Claude Skills tab readable (the list rendered blank rows since the tab shipped) and added a shipped **elevation door/window tagging** skill that recognises visible openings optically, so ones hidden behind the facade are never tagged.
 >
 > **Previously:** v1.9.2 fixed schedule export: the Excel engine (Transom.Office + NPOI) had been dropped from the v1.8.0–v1.9.1 installers, so Export failed with a misleading "open in Excel" error. The engine now builds and ships automatically, and the installer refuses to pack without it.
 >
