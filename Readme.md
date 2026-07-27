@@ -42,28 +42,21 @@ and which schedules are affected; format-mismatched edits (`2'6` for `2'-6"`) ho
 confirm or discard them. What you apply is written in a **single transaction** — type parameters included —
 and each value is re-read to verify. Cells Transom can't write are listed and skipped, never half-applied.
 
-**Cell colors** are painted at export time from the live model, so they always reflect its current state:
-
-| color | means |
-|---|---|
-| **white** | writable instance parameter — the edit touches exactly the element(s) in that row |
-| **green** | a shared value: a type parameter or an editable group-header cell — the edit reaches every element it covers, and the preview counts them first |
-| **blue** | project/shared instance parameter **inside a model group** — imports fine; Transom enables "vary by group instance" and each element keeps its own value |
-| **yellow** | **built-in** parameter (Comments, Finish…) on a group member — Revit forbids the write from outside group-edit mode, so import asks how to apply it |
-| **red** | a **geometry-driving** parameter on a group member — only Edit Group mode can honestly change it (Claude-Assist automates that; grey text means Claude Assist is off) |
-| **grey** | not importable — Revit computes or locks the value (calculated and combined fields, counts, read-only family/type-driven parameters) |
-
-Ungrouped elements never show blue, yellow or red — those exist only because Revit locks group members. The
-Export tab carries the same legend, with a **More information…** dialog covering every color and import
-option in full.
+Every cell is colored by **what an edit to it will actually touch**, classified at export time from the live
+model. White and green import directly — green meaning the value is shared beyond the row, like a type
+parameter. Blue, yellow and red mark elements inside **model groups**, which Revit locks down: blue imports
+cleanly, yellow and red need a decision first ([see below](#grouped-parameters--claude-assist)). Grey can't be
+written at all — Revit computes or locks it. A model with no groups is only ever white, green and grey. The
+legend below is on the Export tab itself, and its **More information…** dialog covers every color and every
+import option in full.
 
 <table>
 <tr>
-<td width="50%"><img src="docs/images/hub-export.jpg" alt="Transom Schedule Hub, Export tab: the cell-color legend above a checklist of the model's schedules" width="100%"></td>
+<td width="50%"><img src="docs/images/hub-export.jpg" alt="Transom Schedule Hub, Export tab. The cell-color legend reads: normal — instance parameter, edits the element(s) in that row, nothing else; green — type parameter (shared value), edits every element of the type or under the header; blue — project parameter in a model group, imports fine, each element keeps its own value; yellow — built-in data parameter in a model group, Transom asks how to apply it on import; red — geometry-driving parameter, may only be changed through group edit mode, requires Claude-Assist to automate; grey — not importable, Revit computes it or locks it. Below the legend is a checklist of the model's schedules." width="100%"></td>
 <td width="50%"><img src="docs/images/hub-import-preview.jpg" alt="Transom Schedule Hub, Import tab: a preview listing 11 changes with element, field, old value, new value and scope, plus the schedules the import will change" width="100%"></td>
 </tr>
 <tr>
-<td><em><b>Export</b> — tick the schedules to write out; the legend is the same one above.</em></td>
+<td><em><b>Export</b> — tick the schedules to write out; the color legend sits above the list.</em></td>
 <td><em><b>Import → Preview</b> — every change with its old and new value, the scope it will reach, and which schedules it touches. Rows on group members are flagged for a decision before anything is written.</em></td>
 </tr>
 </table>
