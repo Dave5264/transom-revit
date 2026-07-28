@@ -48,7 +48,10 @@ var project = new Project
     Version = versioning.VersionPrefix,
     ControlPanelInfo =
     {
-        Manufacturer = Environment.UserName,
+        // Fixed product name, NOT Environment.UserName — that put the building account's Windows
+        // username in the MSI's Manufacturer, so every installer showed a personal username as the
+        // Publisher in Add/Remove Programs, and it changed depending on who cut the release.
+        Manufacturer = projectName,
         ProductIcon = @"install\Resources\Icons\ShellIcon.ico"
     }
 };
