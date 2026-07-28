@@ -12,9 +12,9 @@ namespace Transom.Core;
 ///     Stand-alone (no Claude/MCP) builder for a Revision Narrative. Given a selected revision it collects
 ///     every revision cloud, reads each cloud's <c>Comments</c> field, resolves the sheet(s) the cloud
 ///     appears on plus the view's detail number on each sheet, groups by discipline (sheet-number prefix)
-///     then by sheet, orders the notes, and normalizes the text into the firm's narrative style.
+///     then by sheet, orders the notes, and normalizes the text into a consistent narrative style.
 ///
-///     Data-model findings it must tolerate (validated live on SAMPLE PROJECT, Addendum A, 67 clouds):
+///     Data-model findings it must tolerate (validated live on a real addendum, 67 clouds):
 ///       • clouds live inside views (46) OR directly on sheets (21) — both resolved via GetSheetIds();
 ///       • a cloud can appear on MORE THAN ONE sheet (dependent views) — the note is listed under each (#5);
 ///       • a cloud can appear on NO sheet (legend/working view) — skipped and reported, never dropped silently;
@@ -32,8 +32,9 @@ public static class RevisionNarrative
         /// <summary>Override for the boilerplate "dated …" reference. Empty = computed (previous revision's
         /// date, or Project Issue Date for the first revision).</summary>
         public string PlanSetDate = "";
-        /// <summary>Firm name prefixing the project number line, e.g. "Sample Firm".</summary>
-        public string FirmName = "Sample Firm";
+        /// <summary>Optional firm name prefixing the project number line, e.g. "Acme Architects" →
+        /// "Acme Architects Project Number: 12345". Empty (the default) omits the prefix entirely.</summary>
+        public string FirmName = "";
         /// <summary>Normalize comment text to house style (sentence case + trailing period). Answer #4 = yes.</summary>
         public bool Normalize = true;
     }
@@ -67,8 +68,8 @@ public static class RevisionNarrative
         public readonly List<string> Warnings = new();
     }
 
-    // Sheet-number prefix -> discipline name. G (general) is filed under Architectural to match the firm's
-    // existing narratives. Order of this list is the discipline order in the document.
+    // Sheet-number prefix -> discipline name. G (general) is filed under Architectural, which matches common
+    // narrative practice. Order of this list is the discipline order in the document.
     private static readonly (string Prefix, string Name)[] DisciplineMap =
     {
         ("A", "Architectural"), ("G", "Architectural"),
@@ -100,7 +101,9 @@ public static class RevisionNarrative
         foreach (var line in SafeStr(() => pinfo?.Address).Replace("\r", "").Split('\n'))
             if (!string.IsNullOrWhiteSpace(line)) data.AddressLines.Add(TitleCaseSmart(line.Trim()));
         var projNo = SafeStr(() => pinfo?.Number);
-        data.ProjectNumberLine = $"{opts.FirmName} Project Number: {projNo}";
+        data.ProjectNumberLine = string.IsNullOrWhiteSpace(opts.FirmName)
+            ? $"Project Number: {projNo}"
+            : $"{opts.FirmName} Project Number: {projNo}";
 
         data.AddendumLabel = TitleCaseSmart(SafeStr(() => rev.Description));
         data.IssueDate = FormatDate(SafeStr(() => rev.RevisionDate));
@@ -443,7 +446,7 @@ public static class RevisionNarrative
                 if (!string.IsNullOrWhiteSpace(v)) return v!;
             }
 
-            // (b) built-in Project Information "Building Name" (what this firm's title block labels).
+            // (b) built-in Project Information "Building Name" (what a title block typically labels).
             if (titleBlockOnSheet)
             {
                 var builtIn = doc.ProjectInformation?.BuildingName;

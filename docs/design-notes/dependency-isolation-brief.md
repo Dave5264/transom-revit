@@ -158,8 +158,8 @@ The premise "Revit loads every add-in into one shared default ALC" holds for R25
 - `IsolatedAssembly.SatelliteLoadContext` resolves `Transom*`/`RevitAPI*` through the context that
   loaded Transom.dll (`HostContext`), not the null→Default fallback (Default has no Transom on R27).
 
-R27 smoke test after the fix (doc springfield_test_R27, .NET 10.0.8): one Transom.dll in ALC "TRANSOM",
-cross-boundary `is IOfficeEngine` check true, xlsx round-trip (PARTITION TYPE F) + docx smoke pass,
+R27 smoke test after the fix (an R27 test model, .NET 10.0.8): one Transom.dll in ALC "TRANSOM",
+cross-boundary `is IOfficeEngine` check true, xlsx round-trip (a partition-type schedule) + docx smoke pass,
 NPOI family only in the Transom.Office ALC. Contexts: TRANSOM / Transom.Roslyn / Transom.Office.
 
 ## Status checklist (update as you go)
@@ -176,7 +176,7 @@ NPOI family only in the Transom.Office ALC. Contexts: TRANSOM / Transom.Roslyn /
 - [x] Live test pass (2026-07-12, doc "test test test_doblackMR4M2", Transom 1.7.0 new build):
   `execute_revit_code` works (Roslyn ALC alive) · engine loads as `Transom.Office.OfficeEngine` in
   ALC "Transom.Office" · ALC audit: NPOI/SharpZipLib/SixLabors live ONLY in that context, default
-  context NPOI-free · WriteWorkbooks round-trip on DOOR SCHEDULE - UNIT DOORS (13.7 KB xlsx, hidden
+  context NPOI-free · WriteWorkbooks round-trip on a grouped door schedule (13.7 KB xlsx, hidden
   uid anchor intact, ReadSheetNames tuple correct, ReadWorkbook 1 sheet / 17 cols / 11 rows) ·
   WriteRevisionNarrative smoke test (4.2 KB docx). NOT yet exercised: WriteMany outcomes/attempted
   overlays, WriteDiagnostics, CSV/.xls branches, UI-driven import apply — same engine/ALC path,

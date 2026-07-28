@@ -145,7 +145,7 @@ for the pre-write idempotency test:
   is correct (no dialog should fire for a no-op column).
 
 ### How to verify
-1. UNIT DOORS (or WINDOW) blue column → edit one grouped value → import → Preview → Apply → option-1
+1. A grouped door (or window) schedule, blue column → edit one grouped value → import → Preview → Apply → option-1
    Vary (writes all instances; confirm a sample instance holds the new value).
 2. **Without re-exporting**, click **Preview** again on the SAME xlsx. Expect: that column now shows
    **0 changes** (optionally a yellow "changed since export / model already set"), and **no**

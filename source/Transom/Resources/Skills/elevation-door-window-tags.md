@@ -1,12 +1,13 @@
 ---
 name: elevation-door-window-tags
-description: Tags the doors and windows on A300-series building elevations, using a colour-coded image pass to recognise only the openings actually visible in each view — occluded ones are never tagged — and skipping any already tagged. Use it when a set of elevations needs its openings tagged.
+description: Tags the doors and windows on exterior building elevations, using a colour-coded image pass to recognise only the openings actually visible in each view — occluded ones are never tagged — and skipping any already tagged. Use it when a set of elevations needs its openings tagged.
 ---
 
 # Tag doors and windows on elevation views
 
-Place door and window tags on the elevation views of the A300-series sheets, tagging **only the openings
-actually visible** in each view.
+Place door and window tags on the exterior building elevation views in the project, tagging **only the
+openings actually visible** in each view. The elevation sheets are discovered from the model (Step 3), not
+assumed from a sheet-numbering convention.
 
 Visibility is the hard part, and it is decided **optically**. A view-scoped `FilteredElementCollector`
 returns every opening inside the elevation's clip depth, including interior doors sitting behind the
@@ -73,28 +74,48 @@ foreach (var t in new FilteredElementCollector(doc).OfCategory(bic)
 - If **no** tags exist in any elevation view, or a category has none, **stop and ask the user which tag
   type to use for that category**, listing the available types. Do not guess or fall back to a default.
 
-## Step 3 — Find the qualifying elevation views
+## Step 3 — Discover which sheets actually carry elevation views
+
+**Do not assume a sheet-numbering convention.** Sheet numbering is per-firm and per-project — there is no
+standard prefix for elevation sheets. Find them by content: a sheet qualifies if it carries at least one
+placed view whose `ViewType` is `Elevation`.
 
 ```csharp
-foreach (var s in new FilteredElementCollector(doc).OfClass(typeof(ViewSheet)).Cast<ViewSheet>()
-                      .OrderBy(s => s.SheetNumber))
+var bySheet = new SortedDictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+foreach (var s in new FilteredElementCollector(doc).OfClass(typeof(ViewSheet)).Cast<ViewSheet>())
 {
-    if (!s.SheetNumber.StartsWith("A3")) continue;
     foreach (var vpId in s.GetAllViewports())
     {
         var vp = doc.GetElement(vpId) as Viewport; if (vp == null) continue;
         var v = doc.GetElement(vp.ViewId) as View;
         if (v == null || v.IsTemplate) continue;
         if (v.ViewType != ViewType.Elevation) continue;
-        if (v.Scale > 96) continue;                       // 96 = 1/8"; bigger number = smaller scale
-        Print($"{s.SheetNumber} | {v.Name} | id={v.Id.Value} | 1:{v.Scale}");
+
+        // The view family type name is usually where a template distinguishes exterior from interior
+        // elevations (e.g. "Exterior Elevation" vs "Interior Elevation") — report it, don't parse it.
+        var vft = doc.GetElement(v.GetTypeId()) as ElementType;
+        var key = $"{s.SheetNumber} | {s.Name}";
+        if (!bySheet.TryGetValue(key, out var rows)) bySheet[key] = rows = new List<string>();
+        var coarse = v.Scale > 96 ? "  <-- coarse scale, confirm" : "";
+        rows.Add($"    {v.Name} | id={v.Id.Value} | 1:{v.Scale} | type={vft?.Name ?? "(unknown)"}{coarse}");
     }
 }
+if (bySheet.Count == 0) Print("NO sheet in this project carries a placed elevation view.");
+foreach (var kv in bySheet) { Print(kv.Key); foreach (var r in kv.Value) Print(r); }
 ```
 
-The scale filter excludes whole-building elevations drawn at 1:192 (1/16"), which are typically not
-opening-tagged. Say so when showing the list and let the user opt them in. **Get confirmation before
-modifying anything.**
+Then, before touching anything:
+
+- **Report what you found** — the sheets, their views, the view family types, and the scales. Note the
+  sheet-number prefixes actually present so the user can see how their set is organised.
+- **This skill is for exterior building elevations.** Nothing in the API reliably separates exterior from
+  interior elevations, so *ask*. Use the view family type names and view names as evidence for a
+  suggestion, and let the user correct it — never infer it from the sheet number.
+- Views at a scale coarser than 1:96 (1/8") are flagged, not dropped: whole-building elevations at 1:192
+  (1/16") are often left untagged, but that is a convention, not a rule. Let the user opt them in or out.
+- If no sheet carries an elevation view, stop and say so.
+
+**Get explicit confirmation of the final view list before modifying anything.**
 
 ## Step 4 — Force a light canvas, and remember to put it back
 
@@ -336,7 +357,7 @@ If the model is workshared, remind the user to sync with central.
 
 ## Why optical
 
-Verified 2026-07-26 on `FRONT ENTRY ELEVATION` (A303), 22 windows and 26 doors in view:
+Verified 2026-07-26 on a test model's exterior entry elevation, 22 windows and 26 doors in view:
 
 - The optical pass recognised **3 doors** — exactly the three hosted in exterior walls. The other 7 doors
   that face the viewer and sit inside the crop are interior doors behind the facade; they produced **zero
@@ -356,6 +377,7 @@ Verified 2026-07-26 on `FRONT ENTRY ELEVATION` (A303), 22 windows and 26 doors i
 - Never `color_splash` for this workflow — it is not view-scoped.
 - Always clear overrides and restore the theme, including on the failure path.
 - Confirm the view list with the user before the first write.
-- **Scoped to exterior building elevations** (A300 series). Do not run on interior elevations.
+- **Scoped to exterior building elevations.** Discover them per Step 3 and confirm with the user; do not
+  infer them from sheet numbers, and do not run on interior elevations.
 - If tags come out visually blank, the tag family is reading a parameter the openings do not carry (e.g. a
   Type Mark tag against doors with no Type Mark). That is model data, not placement — report it.
