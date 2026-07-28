@@ -12,7 +12,7 @@ using Autodesk.Revit.UI;
 namespace Transom.Core;
 
 /// <summary>
-///     extended creation / MEP / interop tools, ported from the IronPython handlers in
+///     Extended creation / MEP / interop tools, ported from the IronPython handlers in
 ///     revit_mcp (building.py, structure.py, rooms.py, mep.py, documentation.py, interop.py, document.py).
 ///     Response field names and defaults mirror the Python; all wire lengths are MILLIMETERS.
 /// </summary>

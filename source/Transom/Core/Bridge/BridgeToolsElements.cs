@@ -11,7 +11,7 @@ using Autodesk.Revit.UI;
 namespace Transom.Core;
 
 /// <summary>
-///     extended element/analysis tools: model info, family listing/loading/placement, levels,
+///     Extended element/analysis tools: model info, family listing/loading/placement, levels,
 ///     element properties/editing/deletion/transforms, filtering, statistics, rooms, materials, clash
 ///     detection and colour splash. Behaviour and response field names ported from the IronPython
 ///     handlers in revit-mcp-server.extension/revit_mcp (model_info, placement, editing, parameters,

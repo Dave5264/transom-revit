@@ -9,7 +9,7 @@ using Autodesk.Revit.UI;
 namespace Transom.Core;
 
 // ============================================================================================
-//  extended ports — VIEW / ANNOTATION tools.
+//  Extended tool ports — VIEW / ANNOTATION tools.
 //  C# ports of the IronPython pyRevit Routes handlers in revit-mcp-server.extension/revit_mcp/
 //  (views.py, view_management.py, documentation.py, detail.py, tags.py, annotation.py).
 //  Wire contract: all lengths/points cross in MILLIMETERS; responses mirror the Python field

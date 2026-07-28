@@ -296,7 +296,7 @@ internal static class Program
                 }),
         };
 
-        // Append the extended tools (views, elements, creation, MEP, interop) — declarative only;
+        // Append the extended model tools (views, elements, creation, MEP, interop) — declarative only;
         // the shim forwards every tools/call generically to the in-Revit bridge.
         ParityTools.AddTo(tools);
 
