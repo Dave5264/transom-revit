@@ -14,7 +14,7 @@
 
 [![Latest release](https://img.shields.io/github/v/release/Dave5264/transom-revit?label=latest%20release&color=2ea44f&logo=github)](https://github.com/Dave5264/transom-revit/releases/latest)
 
-### ⬇ [Download the installer](https://github.com/Dave5264/transom-revit/releases/download/v1.9.5/Transom-1.9.5-SingleUser.msi)
+### ⬇ [Download the installer](https://github.com/Dave5264/transom-revit/releases/download/v1.9.6/Transom-1.9.6-SingleUser.msi)
 
 **One click, no admin rights** — installs into your per-user Revit add-ins folder.
 Double-click the `.msi`, then start Revit. Supports **Revit 2025, 2026 & 2027**. Free.
@@ -103,12 +103,13 @@ can run in a fresh project while you watch. The supported client is **Claude Cod
 VM that can't reach a host-side bridge), and it should run with bypass permissions on — otherwise its
 permission prompts steal focus from Revit and UI-assist clicks silently miss.
 
-> **Status:** v1.9.5 (Revit 2025/2026/2027) — five fixes from live option-2 UI testing: "Apply selected" no
-> longer stays enabled after a preview that found nothing to change, the modal encouragement pop-up is
-> suppressed while Claude Assist is on so it can't block the bridge mid-automation, and the staged-handoff
-> guide now spells out the bypass-permissions caveat. Before that, v1.9.4 made the Claude Skills tab readable
-> and shipped the elevation-tagging skill, and v1.9.2 restored the Excel engine that had been dropped from the
-> v1.8.0–v1.9.1 installers. Full history on the [releases page](https://github.com/Dave5264/transom-revit/releases).
+> **Status:** v1.9.6 (Revit 2025/2026/2027) — a housekeeping release. The installer now lists **Transom** as
+> the Publisher in Add/Remove Programs instead of the Windows username of whoever cut the build, the revision
+> narrative no longer hard-codes a firm name into the project-number line (edit it in the confirm dialog), and
+> the elevation-tagging skill discovers elevation sheets from the model instead of assuming an A300-series
+> numbering convention. Before that, v1.9.5 shipped five fixes from live option-2 UI testing, and v1.9.2
+> restored the Excel engine that had been dropped from the v1.8.0–v1.9.1 installers. Full history on the
+> [releases page](https://github.com/Dave5264/transom-revit/releases).
 
 ### Grouped parameters — Claude-Assist
 
