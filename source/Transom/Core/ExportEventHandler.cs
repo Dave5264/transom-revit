@@ -65,7 +65,10 @@ public sealed class ExportEventHandler : IExternalEventHandler
                 return;
             }
 
-            int elems = tables.Sum(t => t.ElementRowCount);
+            // Count BOTH itemized and type-anchored data rows. ElementRowCount alone is zero for any non-itemized
+            // schedule, so a perfectly good export of e.g. a door schedule grouped by Type Mark used to report
+            // "(0 element rows)" and read as a silent failure.
+            int rows = tables.Sum(t => t.DataRowCount);
             string failNote = failures.Count == 0 ? "" :
                 $"\n\n⚠ {failures.Count} schedule(s) could not be exported: " +
                 string.Join(", ", failures.Select(f => f.Name)) +
@@ -81,7 +84,7 @@ public sealed class ExportEventHandler : IExternalEventHandler
                 try { Directory.CreateDirectory(ExchangeFolder); RunLog.WriteExport(ExchangeFolder, tables, OutputPath); }
                 catch { /* the run-log is a review convenience — never fail the export over it */ }
             }
-            ReportStatus($"Exported {okCount} schedule(s) ({elems} element rows) to {OutputPath}" + failNote);
+            ReportStatus($"Exported {okCount} schedule(s) ({rows} data rows) to {OutputPath}" + failNote);
         }
         catch (IOException ex) when (IsOutputFileLocked(ex))
         {

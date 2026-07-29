@@ -154,4 +154,10 @@ public sealed class ScheduleTable
     public List<RowMeta> Rows = new();
 
     public int ElementRowCount => Rows.Count(r => r.Kind == "element");
+
+    /// <summary>Every row carrying real schedule data, i.e. both itemized instance rows AND the type-anchored rows
+    /// a non-itemized schedule collapses to. Use this (not <see cref="ElementRowCount"/>) for anything the USER
+    /// reads: a type-anchored schedule — a door schedule grouped by Type Mark, say — has zero "element" rows but
+    /// still exports a full table, and reporting "0 element rows" reads as if the export came back empty.</summary>
+    public int DataRowCount => Rows.Count(r => r.Kind == "element" || r.Kind == "type");
 }

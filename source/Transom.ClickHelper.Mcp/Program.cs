@@ -118,7 +118,33 @@ internal static class Program
         "the Properties palette. Pair them with the Revit API (the Transom 'transom' bridge / " +
         "execute_revit_code) for selection and verification.\n\n" +
         "ALWAYS FIRST: revit_tile, so Revit is visible side-by-side. Clicks land by screen coordinate and " +
-        "keystrokes go to the foreground window, so an occluded Revit can't be driven.\n\n" +
+        "keystrokes go to the foreground window, so an occluded Revit can't be driven. The split is Revit " +
+        "~2/3 of the screen, Claude ~1/3 (revit_tile's default; pass revitFrac only to deviate). READ THE " +
+        "GEOMETRY IN THE REPLY (e.g. revit=0,0,1280,1032 on a 1920px screen). This is not cosmetic: Revit's " +
+        "ribbon reflows to window width, and at ~50/50 the tab strip OVERFLOWS and silently hides the " +
+        "right-hand tabs — including the Transom tab itself — behind a '>>' chevron. A missing tab or ribbon " +
+        "button is far more often a too-narrow window than a broken add-in, so re-check the width BEFORE " +
+        "reporting anything as broken. If a tool that should default to 2/3 returns a 50/50 split, the " +
+        "helper exe in %LocalAppData%\\Transom\\mcp\\ is STALE (older than the installed add-in) — say so " +
+        "rather than trusting its behaviour.\n\n" +
+        "STARTUP TRAPS (things that look like failures but are not):\n" +
+        "  - After ANY add-in rebuild/upgrade, Revit shows a 'Security - Unsigned Add-In' dialog at startup " +
+        "and THE ADD-IN DOES NOT LOAD until it is answered. Clear it first: revit_find('Always Load') then " +
+        "revit_click_by_id on the returned AutomationId. revit_list_dialogs can return a button list " +
+        "polluted with main-window controls here, so revit_find is the reliable path.\n" +
+        "  - 'timed out waiting for Revit (request not applied)' while a large model is still opening is NOT " +
+        "a failure — the bridge socket accepts before Revit's API thread is free. Poll status and retry.\n" +
+        "  - Revit's Home screen is INVISIBLE to UI Automation and MainWindowTitle is empty until a document " +
+        "is open. That is not a crash.\n" +
+        "  - A screenshot that returns a tiny image rooted onto a TOOLTIP window under the cursor; re-tile " +
+        "or re-foreground Revit and retake it.\n\n" +
+        "DON'T DESTROY THE USER'S DATA: never open an older .rvt in a newer Revit — it upgrades the file " +
+        "IRREVERSIBLY. Test a newer Revit against a copy or a throwaway Ctrl+N project, and answer 'do not " +
+        "save' on close. Never force-kill Revit.\n\n" +
+        "TRUST THE ARTIFACT, NOT THE STATUS LINE: a status message is a claim. Verify the file that was " +
+        "written (.xlsx/.docx are zips — check for the 'PK' magic bytes, then read xl/worksheets/sheet1.xml " +
+        "or word/document.xml and count rows against the model). Status text has been wrong while the file " +
+        "was right.\n\n" +
         "LOAD-BEARING RULE: inside Edit Group mode the Revit API is DEAD (it times out). Do ALL selection / " +
         "reads / writes / verification via the API BEFORE entering and AFTER finishing — never during. " +
         "Inside the group, only these revit_* tools work.\n\n" +

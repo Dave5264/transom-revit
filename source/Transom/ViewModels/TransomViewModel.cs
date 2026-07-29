@@ -2042,6 +2042,12 @@ loopback bridge is unchanged (loopback-only, per-user, session-token gated).
 1. **revit_tile** if Revit isn't already tiled side-by-side. The right split is **Revit at ~2/3 of the
    screen, Claude at 1/3** (user-confirmed: half/half cramps the Revit canvas; Claude only needs a chat
    column) — revit_tile does this by default; pass `revitFrac` only to deviate.
+   **Confirm the geometry in revit_tile's reply** (e.g. `revit=0,0,1280,1032` on a 1920px screen). Half/half
+   is not merely cramped: Revit's ribbon reflows to window width, and at ~960px the tab strip **overflows and
+   silently hides the right-hand tabs, including `Transom` itself** — the add-in then looks like it failed to
+   load when it is only off-screen behind the `>>` chevron. If a tab or ribbon button seems missing, re-check
+   the width BEFORE concluding anything is broken. A 50/50 split coming back from a tool that should default
+   to 2/3 means the `%LocalAppData%\Transom\mcp\` helper copy is **stale** — see the trap note below.
 2. **Open a view where the member is visible** — if the active view doesn't contain it, activate/open one that
    does (a plan/elevation/section that shows it).
 3. **Select + zoom via API:** `Selection.SetElementIds([id])`, `ShowElements([id])`. `revit_screenshot(screen:true)`;

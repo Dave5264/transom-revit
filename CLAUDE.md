@@ -109,6 +109,34 @@ A plain `dotnet build source/Transom/Transom.csproj -c Debug.R2x` **is** the loc
 
 ---
 
+## 3b. VERIFYING A BUILD IN THE REAL REVIT UI
+
+Bridge/MCP calls prove the add-in **loaded**. They do not prove the UI works — they can't catch a wrong status
+string, a dialog that never opens, or a disabled button. Before calling a release verified, click through
+Schedule Hub for real. Lessons paid for the hard way:
+
+- **Tile Revit ~2/3 of the screen, Claude ~1/3 — never 50/50.** Revit's ribbon reflows to window width, and at
+  960px on a 1920px screen the tab strip **overflows and silently hides the right-hand tabs, including
+  `Transom`**. It looks exactly like the add-in failed to load. `Transom.ClickHelper tile` already splits
+  2/3–1/3; the `revit_tile` MCP tool may be served by a **stale ClickHelper in `%LocalAppData%\Transom\mcp\`**
+  that still does 50/50 — check the geometry in the reply before diagnosing anything.
+- **Every rebuild re-triggers the "Security - Unsigned Add-In" dialog** (new DLL = new signature check) and the
+  add-in does not load until it's answered. Clear it first: `revit_find "Always Load"` → click that
+  `automationId`. `revit_list_dialogs` can return a polluted button list here; `revit_find` is reliable.
+- **`timed out waiting for Revit (request not applied)` during a large model open is not a failure** — the
+  bridge socket accepts before Revit's API thread frees up. Poll `status` and retry.
+- **Revit's Home screen is invisible to UI Automation** — empty `MainWindowTitle` until a document is open.
+- **Never open an older `.rvt` in a newer Revit** (irreversible upgrade). Test a newer Revit against a **copy**
+  or a throwaway `Ctrl+N` project, and close with "do not save".
+- **To replace text in a pre-filled field** (e.g. a Save As path): click it, `ctrl+a`, then type — `revit_type`
+  alone appends.
+- **Verify the artifact, not the status line.** `.xlsx`/`.docx` are zips: check for `50 4B`, then unzip and
+  count rows in `xl/worksheets/sheet1.xml` against what the model holds. That is exactly how the
+  "(0 element rows)" mislabel was found — a type-anchored schedule exported 11 correct rows while reporting
+  zero, because the counter only counted itemized instance rows (see `ScheduleTable.DataRowCount`).
+
+---
+
 ## 4. Conventions & safety
 - **Commit to `main`, no feature branches** (maintainer preference). Don't `--no-verify`. End commit messages with the standard `Co-Authored-By` trailer.
 - **Multi-line commit messages: write the message to a temp file and `git commit -F <file>`.** A PowerShell 5.1 here-string (`@'…'@`) passed to `git commit -m` has broken in practice here (line-ending mangling splits it into bogus pathspec args). `-F` sidesteps quoting entirely and is also the reliable path for `gh release create --notes-file`.

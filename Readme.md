@@ -14,7 +14,7 @@
 
 [![Latest release](https://img.shields.io/github/v/release/Dave5264/transom-revit?label=latest%20release&color=2ea44f&logo=github)](https://github.com/Dave5264/transom-revit/releases/latest)
 
-### ⬇ [Download the installer](https://github.com/Dave5264/transom-revit/releases/download/v1.9.7/Transom-1.9.7-SingleUser.msi)
+### ⬇ [Download the installer](https://github.com/Dave5264/transom-revit/releases/download/v1.9.8/Transom-1.9.8-SingleUser.msi)
 
 **One click, no admin rights** — installs into your per-user Revit add-ins folder.
 Double-click the `.msi`, then start Revit. Supports **Revit 2025, 2026 & 2027**. Free.
@@ -103,7 +103,11 @@ can run in a fresh project while you watch. The supported client is **Claude Cod
 VM that can't reach a host-side bridge), and it should run with bypass permissions on — otherwise its
 permission prompts steal focus from Revit and UI-assist clicks silently miss.
 
-> **Status:** v1.9.7 (Revit 2025/2026/2027) — roughly **half the size on disk**. The three bundled helper
+> **Status:** v1.9.8 (Revit 2025/2026/2027) — export now reports **data rows** instead of "element rows", so a
+> type-anchored schedule (a door schedule grouped by Type Mark, say) no longer says "0 element rows" after a
+> perfectly good export. The UI-Assist MCP server also ships expanded operating instructions, so every Claude
+> session that drives Revit's interface starts knowing the window-size, unsigned-add-in and model-load pitfalls.
+> Before that, v1.9.7 made Transom roughly **half the size on disk**. The three bundled helper
 > executables each carried an uncompressed copy of the .NET runtime, and Roslyn's compiler messages shipped
 > translated into 13 languages that nothing reads; compressing the single-file bundles and dropping the unused
 > translations takes the payload from ~318 MB to ~163 MB per Revit version, with no functional change. Before
