@@ -46,6 +46,11 @@
         <SelfContained>true</SelfContained>
         <RuntimeIdentifier>win-x64</RuntimeIdentifier>
         <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+        <!-- UseWPF+UseWindowsForms bundles the whole WindowsDesktop framework, so this exe is by far the
+             largest thing Transom ships (154 MB uncompressed, and it ships once per Revit year). Compressing
+             the single-file bundle takes it to ~68 MB. The runtime extracts to a per-user cache on first
+             launch and reuses it, so only the very first click after an install pays the decompression. -->
+        <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
     </PropertyGroup>
 
 </Project>

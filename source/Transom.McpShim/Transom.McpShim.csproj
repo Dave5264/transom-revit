@@ -16,6 +16,9 @@
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
     <InvariantGlobalization>true</InvariantGlobalization>
+    <!-- Halves the bundled runtime on disk (64 MB -> ~34 MB). The shim is a long-lived stdio server started
+         once per Claude session, so the one-time extract to the per-user cache is not on any hot path. -->
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
   </PropertyGroup>
 
   <!-- Dependencies: only System.Text.Json + System.Net.Http, both part of the

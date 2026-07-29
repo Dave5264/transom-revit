@@ -6,6 +6,9 @@
         <LaunchRevit>false</LaunchRevit>
         <IsRepackable>false</IsRepackable>
         <EnableDynamicLoading>true</EnableDynamicLoading>
+        <!-- Roslyn ships its compiler diagnostics translated into 13 languages; those satellite assemblies
+             are ~7 MB per Revit year and Transom's own UI is English-only, so nothing reads them. -->
+        <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
         <!-- Transom targets Revit 2025 & 2026 (.NET 8) and 2027 (.NET 10) -->
         <Configurations>Debug.R25;Debug.R26;Debug.R27</Configurations>
         <Configurations>$(Configurations);Release.R25;Release.R26;Release.R27</Configurations>

@@ -18,6 +18,11 @@
         <!-- Emits Transom.Scripting.deps.json describing the Roslyn dependency closure, which
              ScriptIsolation's AssemblyDependencyResolver uses when present (prefix matching is the fallback). -->
         <EnableDynamicLoading>true</EnableDynamicLoading>
+        <!-- Roslyn ships its compiler diagnostics translated into 13 languages (52 satellite assemblies,
+             ~7 MB per Revit year). Transom's UI is English-only and nothing surfaces those strings, so the
+             translations are dead weight in every payload. Must be set HERE — the satellites arrive with
+             this project's PackageReference, so setting it on Transom.csproj alone has no effect. -->
+        <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
     </PropertyGroup>
 
     <ItemGroup>
