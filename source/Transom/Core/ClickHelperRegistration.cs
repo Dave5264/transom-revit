@@ -97,19 +97,10 @@ public static class ClickHelperRegistration
         });
     }
 
-    private static void CopyIfNewer(string src, string dest)
-    {
-        if (!File.Exists(src)) return; // nothing bundled to copy from; leave whatever is already installed
-        bool needCopy;
-        try
-        {
-            needCopy = !File.Exists(dest)
-                       || new FileInfo(src).Length != new FileInfo(dest).Length
-                       || File.GetLastWriteTimeUtc(src) > File.GetLastWriteTimeUtc(dest);
-        }
-        catch { needCopy = !File.Exists(dest); }
-        if (needCopy) File.Copy(src, dest, true);
-    }
+    /// <summary>Delegates to <see cref="DeployFile"/>, which can replace a destination that is a RUNNING
+    /// process — the normal case here, since Transom.ClickHelper.Mcp.exe is a long-lived MCP server and a
+    /// plain overwrite throws for as long as Claude Code is open.</summary>
+    private static void CopyIfNewer(string src, string dest) => DeployFile.CopyIfNewer(src, dest);
 
     /// <summary>Directory-enumeration presence check (more reliable than File.Exists in Revit's add-in runtime).</summary>
     private static bool FilePresent(string path)

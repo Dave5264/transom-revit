@@ -24,6 +24,18 @@ public class Application : ExternalApplication
         // thread so Revit startup is never delayed by the file copy; the helper never throws.
         System.Threading.Tasks.Task.Run(Core.McpRegistration.EnsureBundledShimAndAutoRegister);
 
+        // The UI-Assist pair (ClickHelper engine + its MCP server) needs the SAME startup refresh. Without
+        // this it was only copied when ClaudeSetup.EnsureAll ran — i.e. when the Claude Assist toggle flipped
+        // or the bridge port changed — so after an upgrade the per-user copies stayed at the OLD version
+        // indefinitely, and UI-Assist silently behaved like the previous build (missing response fields,
+        // superseded window-targeting), which reads as "the fix didn't work" rather than "stale binary".
+        // EnsureInstalled only copies files (CopyIfNewer, never throws); registration stays with
+        // ClaudeSetup, which is gated on the user actually wanting Claude wired up.
+        // NOTE: Transom.ClickHelper.Mcp.exe is the long-running MCP SERVER process — a refreshed copy on
+        // disk only takes effect after the MCP client restarts. The engine exe is spawned per call, so it
+        // picks the new build up immediately.
+        System.Threading.Tasks.Task.Run(() => Core.ClickHelperRegistration.EnsureInstalled());
+
         // Claude Skills library: create %LocalAppData%\Transom\skills and seed any skills shipped in the
         // add-in payload (same first-launch pattern as the shim). The Hub's Claude Skills tab lists it.
         System.Threading.Tasks.Task.Run(Core.SkillLibrary.EnsureSeeded);

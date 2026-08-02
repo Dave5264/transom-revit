@@ -76,17 +76,10 @@ public static class McpRegistration
             var src = BundledShimPath;
             if (!File.Exists(src)) return ShimPresent(); // nothing bundled to copy from; report current state
 
-            Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
-            bool needCopy;
-            try
-            {
-                needCopy = !File.Exists(dest)
-                           || new FileInfo(src).Length != new FileInfo(dest).Length
-                           || File.GetLastWriteTimeUtc(src) > File.GetLastWriteTimeUtc(dest);
-            }
-            catch { needCopy = !File.Exists(dest); }
-
-            if (needCopy) File.Copy(src, dest, true);
+            // DeployFile handles the case a plain File.Copy cannot: the shim is a long-running MCP server
+            // process, so while Claude Code is open the destination is locked and an overwrite throws — which
+            // this method used to swallow, leaving the user on the previous build indefinitely.
+            DeployFile.CopyIfNewer(src, dest);
             return ShimPresent();
         }
         catch { return ShimPresent(); }

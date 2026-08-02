@@ -14,7 +14,7 @@
 
 [![Latest release](https://img.shields.io/github/v/release/Dave5264/transom-revit?label=latest%20release&color=2ea44f&logo=github)](https://github.com/Dave5264/transom-revit/releases/latest)
 
-### ⬇ [Download the installer](https://github.com/Dave5264/transom-revit/releases/download/v1.9.9/Transom-1.9.9-SingleUser.msi)
+### ⬇ [Download the installer](https://github.com/Dave5264/transom-revit/releases/download/v1.9.10/Transom-1.9.10-SingleUser.msi)
 
 **One click, no admin rights** — installs into your per-user Revit add-ins folder.
 Double-click the `.msi`, then start Revit. Supports **Revit 2025, 2026 & 2027**. Free.
@@ -105,14 +105,22 @@ can run in a fresh project while you watch. The supported client is **Claude Cod
 VM that can't reach a host-side bridge), and it should run with bypass permissions on — otherwise its
 permission prompts steal focus from Revit and UI-assist clicks silently miss.
 
-> **Status:** v1.9.9 (Revit 2025/2026/2027) — a **correctness and honesty release** from a full line-by-line
+> **Status:** v1.9.10 (Revit 2025/2026/2027) — two deployment/robustness fixes on top of v1.9.9. The bundled
+> helper executables are now refreshed on every Revit start **even while Claude Code holds them open** (they
+> are running processes, so the old plain-overwrite silently failed and left you on the previous build's
+> helpers indefinitely). And AIRE now retries a request that OpenAI rejected as rate-limited or that failed
+> server-side — the stand-alone AIRE.exe got that free from the OpenAI SDK, and the port had lost it, so one
+> transient blip could permanently fail an image mid-batch. Timeouts are deliberately **not** retried, since
+> the image may already have been generated and billed.
+>
+> v1.9.9 was a **correctness and honesty release** from a full line-by-line
 > audit of the codebase, plus a new tool: **AI Render Enhancer (AIRE)** batch-enhances architectural renders
 > through OpenAI's image models, with model/resolution/quality control, an estimated cost you confirm before
 > anything is spent, and a CSV log per batch. It needs your own OpenAI API key (there is a built-in
 > walkthrough for creating one; the key is DPAPI-encrypted per user and goes nowhere but OpenAI), works on
 > image files with or without a model open, and Claude can drive it over the bridge. AIRE is new in this
 > release and has had far less mileage than the schedule round-trip — treat the first batches as a trial.
-> The most important audit fixes: a multi-row schedule split by a hidden group field (a window
+> The most important v1.9.9 audit fixes: a multi-row schedule split by a hidden group field (a window
 > schedule grouped by Level, say) could write your edits to a *different* row's instances when the level names
 > sorted "1, 10, 2" — that ordering is now numeric, direction-aware, and refuses to guess rather than writing to
 > the wrong elements. Applying an import while a re-preview was still running could silently discard your typed

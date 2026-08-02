@@ -134,10 +134,53 @@ public static class AireEngine
     private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(600) };
 
     /// <summary>
+    ///     Retries for transient failures. The stand-alone AIRE.exe called the OpenAI Python SDK with only
+    ///     an api_key, so it inherited that SDK's automatic retry; this hand-rolled HTTP client has to
+    ///     reproduce it or a single 429 in a long batch permanently fails an image the .exe would have
+    ///     recovered. DELIBERATELY NARROWER than the SDK: only statuses that mean the request never ran
+    ///     (429 / 5xx) and pre-response connection faults are retried, because those cannot have been
+    ///     billed. A request that TIMES OUT is not retried — at a 600 s ceiling the image may well have
+    ///     been generated and charged, and silently paying twice is worse than reporting one failure.
+    /// </summary>
+    private const int MaxTransientRetries = 2;
+
+    private static bool IsRetryableStatus(int status) => status == 429 || status >= 500;
+
+    /// <summary>
     ///     One OpenAI <c>POST /v1/images/edits</c> call: sends the source image + prompt, returns the
     ///     decoded PNG bytes. Throws with the API's error message on any failure (caller logs per image).
+    ///     Transient failures are retried per <see cref="MaxTransientRetries"/>.
     /// </summary>
     public static async Task<byte[]> EditImageAsync(string apiKey, string model, string imagePath,
+        string prompt, string size, string quality, CancellationToken ct)
+    {
+        for (int attempt = 0; ; attempt++)
+        {
+            try
+            {
+                return await SendEditAsync(apiKey, model, imagePath, prompt, size, quality, ct)
+                    .ConfigureAwait(false);
+            }
+            catch (TransientApiException) when (attempt < MaxTransientRetries)
+            {
+                // 0.5 s, then 1 s. Cancellation propagates out of Delay, so a cancelled job stops here.
+                await Task.Delay(TimeSpan.FromSeconds(0.5 * Math.Pow(2, attempt)), ct).ConfigureAwait(false);
+            }
+            catch (TransientApiException ex)
+            {
+                // Retries exhausted — surface the underlying API message, not the wrapper.
+                throw new InvalidOperationException(ex.Message);
+            }
+        }
+    }
+
+    /// <summary>Marks a failure that is safe to retry because the request cannot have been billed.</summary>
+    private sealed class TransientApiException : Exception
+    {
+        public TransientApiException(string message) : base(message) { }
+    }
+
+    private static async Task<byte[]> SendEditAsync(string apiKey, string model, string imagePath,
         string prompt, string size, string quality, CancellationToken ct)
     {
         using var form = new MultipartFormDataContent();
@@ -156,19 +199,37 @@ public static class AireEngine
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
         request.Content = form;
 
-        using var response = await Http.SendAsync(request, HttpCompletionOption.ResponseContentRead, ct).ConfigureAwait(false);
-        var body = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+        HttpResponseMessage response;
+        try
+        {
+            response = await Http.SendAsync(request, HttpCompletionOption.ResponseContentRead, ct).ConfigureAwait(false);
+        }
+        catch (HttpRequestException ex)
+        {
+            // Failed before any response — connection reset / DNS / TLS. Nothing ran, so nothing was billed.
+            throw new TransientApiException($"Could not reach the OpenAI API: {ex.Message}");
+        }
 
-        if (!response.IsSuccessStatusCode)
-            throw new InvalidOperationException(ApiErrorMessage(body, (int)response.StatusCode));
+        using (response)
+        {
+            var body = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
 
-        using var json = JsonDocument.Parse(body);
-        if (json.RootElement.TryGetProperty("data", out var data)
-            && data.ValueKind == JsonValueKind.Array && data.GetArrayLength() > 0
-            && data[0].TryGetProperty("b64_json", out var b64))
-            return Convert.FromBase64String(b64.GetString() ?? "");
+            if (!response.IsSuccessStatusCode)
+            {
+                var message = ApiErrorMessage(body, (int)response.StatusCode);
+                throw IsRetryableStatus((int)response.StatusCode)
+                    ? new TransientApiException(message)
+                    : new InvalidOperationException(message);
+            }
 
-        throw new InvalidOperationException("OpenAI returned no image data (unexpected response shape).");
+            using var json = JsonDocument.Parse(body);
+            if (json.RootElement.TryGetProperty("data", out var data)
+                && data.ValueKind == JsonValueKind.Array && data.GetArrayLength() > 0
+                && data[0].TryGetProperty("b64_json", out var b64))
+                return Convert.FromBase64String(b64.GetString() ?? "");
+
+            throw new InvalidOperationException("OpenAI returned no image data (unexpected response shape).");
+        }
     }
 
     private static string MimeFor(string path) => Path.GetExtension(path).ToLowerInvariant() switch
