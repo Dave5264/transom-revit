@@ -5,7 +5,9 @@
     Title="Resolve type-parameter conflict"
     SizeToContent="Height"
     Width="440"
-    ResizeMode="NoResize"
+    MinWidth="380"
+    MaxHeight="720"
+    ResizeMode="CanResize"
     ShowInTaskbar="False"
     WindowStartupLocation="CenterOwner"
     Background="{DynamicResource Bg}"
@@ -28,8 +30,12 @@
         <TextBlock x:Name="HeadingText" FontSize="14" FontWeight="Medium" Foreground="{DynamicResource Text}" TextWrapping="Wrap" />
         <TextBlock x:Name="SubText" Foreground="{DynamicResource Muted}" FontSize="12" TextWrapping="Wrap" Margin="0,6,0,12" />
 
+        <!-- Options are user cell values and can be long; with wrapping they can also be many. Scroll rather than
+             grow the window past the screen (MaxHeight on the Window caps the total). -->
         <Border Background="{DynamicResource Surface}" BorderBrush="{DynamicResource Line}" BorderThickness="1" CornerRadius="6" Padding="12">
-            <StackPanel x:Name="OptionsPanel" />
+            <ScrollViewer MaxHeight="420" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                <StackPanel x:Name="OptionsPanel" />
+            </ScrollViewer>
         </Border>
 
         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">

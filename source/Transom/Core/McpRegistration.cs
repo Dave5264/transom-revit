@@ -11,7 +11,7 @@ namespace Transom.Core;
 ///     MCP clients by merging a single <c>mcpServers.transom</c> entry into their user-level config files.
 ///     Admin-free (everything lives under the user profile), idempotent, non-clobbering, atomic, and
 ///     fail-safe: a config that doesn't parse is left untouched rather than overwritten. See
-///     install/MCP_CONFIG_MERGE.md (Option A).
+///     the F4 config-merge design, Option A (note archived locally, not in this repo).
 /// </summary>
 public static class McpRegistration
 {

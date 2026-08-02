@@ -46,6 +46,15 @@ public sealed class ScheduleReader
         || parameterId == (int)BuiltInParameter.DOOR_NUMBER     // doors "Mark"/Number (== ALL_MODEL_MARK on doors)
         || parameterId == (int)BuiltInParameter.ROOM_NUMBER;    // room "Number" (identity, varies per instance)
 
+    /// <summary>
+    ///     Field separator for composite group keys. U+0001 is used because it cannot occur in a Revit
+    ///     parameter value, so it can never collide with real data. It is INVISIBLE in an editor and does
+    ///     not survive a copy/paste or a re-encode — so it must only ever be referenced through this
+    ///     constant, never typed as a literal (a literal that loses the byte silently joins every field
+    ///     into one key and every group compares equal).
+    /// </summary>
+    internal const char KeySep = '';
+
     private readonly Document _doc;
 
     /// <summary>Set by the export handler so the rolled-back anchor pass can auto-dismiss side-effect dialogs
@@ -75,6 +84,7 @@ public sealed class ScheduleReader
             Category = (int)def.CategoryId.Value,
             SourceModelGuid = _doc.CreationGUID.ToString(),
             SourceModelTitle = _doc.Title,
+            SourceModelPath = DocUtil.StablePath(_doc),
             // Itemized schedules anchor per instance; grouped (non-itemized) schedules anchor per type
             // (one row = one type). Material takeoffs are computed quantities — never round-trippable.
             // The anchor pass downgrades this to false if no row can actually be anchored.
@@ -351,10 +361,11 @@ public sealed class ScheduleReader
         // types (a type edit fans out to each). Only when grouped by visible field(s), so the row's group key is
         // readable from its cells.
         var sgParams = new List<int>();
+        var sgAscending = new List<bool>();   // per sort/group field, parallel to sgParams
         foreach (var sg in def.GetSortGroupFields())
         {
             var sgf = def.GetField(sg.FieldId);
-            if (sgf != null) sgParams.Add((int)sgf.ParameterId.Value);
+            if (sgf != null) { sgParams.Add((int)sgf.ParameterId.Value); sgAscending.Add(sg.SortOrder == ScheduleSortOrder.Ascending); }
         }
         var sgCols = sgParams.Select(pid => table.Columns.FirstOrDefault(c => c.ParameterId == pid)?.Col ?? -1).ToList();
         bool canMulti = grouped && !fieldGrouped && sgParams.Count > 0 && sgCols.All(c => c >= 0);
@@ -366,7 +377,7 @@ public sealed class ScheduleReader
                 if (!typesByGroupKey.TryGetValue(gkey, out var lst)) { lst = new List<string>(); typesByGroupKey[gkey] = lst; }
                 lst.Add(kv.Key);
             }
-        string RowKey(int rr) => string.Join("", sgCols.Select(c => c < table.ColCount ? table.Cells[rr][c].Text : ""));
+        string RowKey(int rr) => string.Join(KeySep, sgCols.Select(c => c < table.ColCount ? table.Cells[rr][c].Text : ""));
         bool RowKeyPresent(int rr) => sgCols.Any(c => c < table.ColCount && !string.IsNullOrEmpty(table.Cells[rr][c].Text));
         bool HasDataBeyondKey(int rr) => table.Columns.Any(c => c.Writable && !sgCols.Contains(c.Col)
             && c.Col < table.ColCount && !string.IsNullOrEmpty(table.Cells[rr][c.Col].Text));
@@ -423,14 +434,45 @@ public sealed class ScheduleReader
                         lst.Add(uid);
                     }
                     rowInstanceByVisible[kv.Key] = map;
+
+                    // ORDER FALLBACK for the same type. The map's keys come from parameter values
+                    // (AsValueString → PROJECT units) while the row lookup uses rendered cell text
+                    // (GetCellText → the FIELD's own format override). When a group column carries an
+                    // override the two never match, and without a fallback every row of the type ended up
+                    // with null InstanceIds — i.e. multi-row types silently became uneditable. Same
+                    // partitions, ordered the same way as the hidden-split path.
+                    if (map.Count == kv.Value)
+                    {
+                        var fbKeys = new Dictionary<string, List<string>>();
+                        foreach (var uid in members)
+                        {
+                            var el = uidToElement.TryGetValue(uid, out var e2) ? e2 : _doc.GetElement(uid);
+                            if (el == null) continue;
+                            var gkey = GroupKeyOf(el, sgParams);
+                            if (!fbKeys.TryGetValue(gkey, out var lst)) { lst = new List<string>(); fbKeys[gkey] = lst; }
+                            lst.Add(uid);
+                        }
+                        if (fbKeys.Count == kv.Value)
+                        {
+                            var fbOrdered = fbKeys.Keys.ToList();
+                            fbOrdered.Sort((a, b) => CompareGroupKeys(a, b, sgAscending));
+                            var fq = new Queue<List<string>>();
+                            foreach (var k in fbOrdered) fq.Enqueue(fbKeys[k]);
+                            rowInstanceQueues[kv.Key] = fq;
+                        }
+                    }
                 }
                 else
                 {
-                    // splitting field is fully HIDDEN → order-based fallback: partition by full group key, order the
-                    // partitions ordinal-ascending (the common grouped row order). LIVE-VERIFY caveat: descending sort
-                    // or numeric/elevation collation of a hidden field could mis-order; confirm the WINDOW F3T case
-                    // maps right (1st-floor 8 vs 2nd-floor 1) before trusting writes here.
-                    var byKey = new SortedDictionary<string, List<string>>(System.StringComparer.Ordinal);
+                    // Splitting field is fully HIDDEN → order-based fallback: partition by full group key and
+                    // order the partitions the way Revit renders them. A plain ORDINAL ascending sort was
+                    // deterministically wrong for the common cases: a hidden Level field yields "Level 1",
+                    // "Level 10", "Level 2" (ordinal orders 1, 10, 2 — Revit renders 1, 2, 10), and a
+                    // DESCENDING group field inverted every partition. These lists are the bulk-WRITE targets
+                    // for the row, so a mis-order writes the user's edits to a different row's instances.
+                    // Now: compare field-by-field, numerically where both sides are numeric, honouring each
+                    // field's ascending/descending flag.
+                    var byKey = new Dictionary<string, List<string>>();
                     foreach (var uid in members)
                     {
                         var el = uidToElement.TryGetValue(uid, out var e) ? e : _doc.GetElement(uid);
@@ -439,11 +481,38 @@ public sealed class ScheduleReader
                         if (!byKey.TryGetValue(gkey, out var lst)) { lst = new List<string>(); byKey[gkey] = lst; }
                         lst.Add(uid);
                     }
+
+                    // FAIL CLOSED: if the partition count doesn't match the number of rendered rows for this
+                    // type, the row→partition mapping is a guess. Supply no write targets rather than write to
+                    // the wrong elements — those cells stay display-only, which is recoverable; a wrong write
+                    // is not.
+                    if (byKey.Count != kv.Value) continue;
+
+                    var ordered = byKey.Keys.ToList();
+                    ordered.Sort((a, b) => CompareGroupKeys(a, b, sgAscending));
                     var q = new Queue<List<string>>();
-                    foreach (var part in byKey.Values) q.Enqueue(part);
+                    foreach (var key in ordered) q.Enqueue(byKey[key]);
                     rowInstanceQueues[kv.Key] = q;
                 }
             }
+
+        // All-or-nothing per type: the value map and the order queue must never BOTH serve rows of the same
+        // type, or the queue's dequeues fall out of step with the rows the map already answered. If any
+        // rendered row of a type fails to match the value map (the field-format-override case), drop the map
+        // for that type so every one of its rows is answered from the ordered queue instead.
+        if (rowInstanceByVisible.Count > 0)
+        {
+            var dropVisible = new List<string>();
+            foreach (var entry in rowInstanceByVisible)
+            {
+                for (int rr = 0; rr < table.RowCount; rr++)
+                {
+                    if (anchors[rr] != entry.Key) continue;
+                    if (!entry.Value.ContainsKey(RowKey(rr))) { dropVisible.Add(entry.Key); break; }
+                }
+            }
+            foreach (var k in dropVisible) rowInstanceByVisible.Remove(k);
+        }
 
         // Cache GroupSafety verdicts per group-TYPE for this pass: built-in group-member cells in a BROKEN group
         // (anchored/sketch members, nested, or mixed orientation) color RED (option 2 / Claude-Assist) instead
@@ -581,6 +650,45 @@ public sealed class ScheduleReader
     }
 
     /// <summary>The sort/group key of an element: its sort/group field values joined (matches a rendered row's key).</summary>
+    /// <summary>
+    ///     Orders two composite group keys the way Revit renders grouped rows: field by field (the key is the
+    ///     per-field values joined by <see cref="KeySep"/>), numerically when both values are numeric or share
+    ///     a "prefix + number" shape ("Level 2" &lt; "Level 10"), else ordinal — each field honouring its own
+    ///     ascending/descending flag.
+    /// </summary>
+    private static int CompareGroupKeys(string a, string b, List<bool> ascending)
+    {
+        var pa = a.Split(KeySep);
+        var pb = b.Split(KeySep);
+        int n = Math.Min(pa.Length, pb.Length);
+        for (int i = 0; i < n; i++)
+        {
+            int cmp = CompareGroupValue(pa[i], pb[i]);
+            if (cmp != 0) return i < ascending.Count && !ascending[i] ? -cmp : cmp;
+        }
+        return pa.Length.CompareTo(pb.Length);
+    }
+
+    /// <summary>Numeric-aware comparison of one group-field value: pure numbers compare numerically, a shared
+    /// non-numeric prefix followed by numbers compares on those numbers, everything else ordinal.</summary>
+    private static int CompareGroupValue(string a, string b)
+    {
+        if (double.TryParse(a, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out double da)
+            && double.TryParse(b, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out double db))
+            return da.CompareTo(db);
+
+        // Trailing-number form: "Level 2" vs "Level 10", "L2" vs "L10".
+        int ia = a.Length, ib = b.Length;
+        while (ia > 0 && char.IsDigit(a[ia - 1])) ia--;
+        while (ib > 0 && char.IsDigit(b[ib - 1])) ib--;
+        if (ia < a.Length && ib < b.Length
+            && string.Equals(a.Substring(0, ia), b.Substring(0, ib), StringComparison.Ordinal)
+            && long.TryParse(a.Substring(ia), out long na) && long.TryParse(b.Substring(ib), out long nb))
+            return na.CompareTo(nb);
+
+        return string.CompareOrdinal(a, b);
+    }
+
     private string GroupKeyOf(Element e, List<int> paramIds)
     {
         var parts = new string[paramIds.Count];
@@ -589,7 +697,7 @@ public sealed class ScheduleReader
             var p = GetParamOn(e, paramIds[i]);
             parts[i] = p == null ? "" : p.StorageType == StorageType.String ? p.AsString() ?? "" : p.AsValueString() ?? "";
         }
-        return string.Join("", parts);
+        return string.Join(KeySep, parts);
     }
 
     /// <summary>#3: turns a multi-type row (a Type Mark shared by 2+ types) into an editable "type" row anchored to
@@ -983,7 +1091,7 @@ public sealed class ScheduleReader
         int cpid = carrier.Value;
 
         var stamped = new List<(string uid, string? original)>();   // what the stamp touched + each pre-stamp value
-        var tx = new Transaction(_doc, "Transom: read row anchors (rolled back)");
+        using var tx = new Transaction(_doc, "Transom: read row anchors (rolled back)");
         tx.Start();
 
         // The stamp can trigger Revit side-effect prompts (e.g. stamping a Level name -> "rename corresponding
@@ -1048,11 +1156,17 @@ public sealed class ScheduleReader
         }
         finally
         {
-            tx.RollBack();
+            // Guarded: an unguarded RollBack in a finally throws when the tx isn't Started, which would
+            // DISCARD any in-flight exception and skip the verification below.
+            try { if (tx.GetStatus() == TransactionStatus.Started) tx.RollBack(); } catch { /* already closed */ }
             if (UiApp != null && dlg != null) UiApp.DialogBoxShowing -= dlg;
-        }
 
-        VerifyAnchorRollback(cpid, stamped);
+            // MUST run inside the finally: this is the repair path for "the rollback didn't take", so it
+            // has to execute on the exception path too — that is exactly when stamps can persist. Sitting
+            // after the try/finally made it reachable only on the happy path, i.e. never when needed.
+            try { VerifyAnchorRollback(cpid, stamped); }
+            catch { /* verification/repair is best-effort — never mask the original failure */ }
+        }
     }
 
     /// <summary>
@@ -1080,7 +1194,7 @@ public sealed class ScheduleReader
         int restored = 0;
         try
         {
-            var fix = new Transaction(_doc, "Transom: restore anchor carrier values");
+            using var fix = new Transaction(_doc, "Transom: restore anchor carrier values");
             fix.Start();
             foreach (var (uid, original) in stuck)
             {
@@ -1211,7 +1325,7 @@ public sealed class ScheduleReader
         string?[] anchors, Dictionary<string, Element> uidToElement,
         Dictionary<string, List<string>> groupToInstances, Dictionary<string, Element> representative)
     {
-        const string sep = "";
+        const string sep = "\u0001";   // KeySep — see ScheduleReader.KeySep
         var def = vs.Definition;
 
         var gpids = new List<int>();

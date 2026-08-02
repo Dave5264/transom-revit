@@ -113,5 +113,9 @@ public sealed class ImportWorkbook
 {
     public string Path = "";
     public string SourceModelGuid = "";
+    /// <summary>Stable path of the exporting model (empty in workbooks from older exports). The
+    /// cross-model tiebreaker: two models can share a CreationGUID via Save-As, so the GUID alone
+    /// can miss a cross-model import.</summary>
+    public string SourceModelPath = "";
     public List<ImportSheet> Sheets = new();
 }

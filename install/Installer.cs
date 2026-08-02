@@ -149,9 +149,18 @@ void BuildMultiUserUserMsi()
 {
     project.Scope = InstallScope.perMachine;
     project.OutFileName = $"{outputName}-{versioning.Version}-MultiUser";
+    // Install root for the per-machine MSI. This was a ternary on `versioning.VersionPrefix.Major >= 2027`
+    // — but VersionPrefix is the TRANSOM product version (semver: 1.9.x), not a Revit year, so Major is 1
+    // and the %ProgramFiles% branch could never be taken. Removed rather than repaired: the effective
+    // behaviour is unchanged (every MultiUser MSI has always installed here), and inventing a
+    // Revit-2027-specific root without confirming Revit 2027 actually scans it would risk deploying
+    // firm-wide to a path Revit never reads. The per-year subdirectory still comes from Generator's
+    // Dir ids, so year separation is preserved either way — only the root is at issue.
+    // If Revit 2027 does require %ProgramFiles%, key the choice off the harvested feature year
+    // ("2025"/"2026"/"2027" from Generator.TryParseVersion), never off the product version.
     project.Dirs =
     [
-        new InstallDir(versioning.VersionPrefix.Major >= 2027 ? @"%ProgramFiles%\Autodesk\Revit\Addins" : @"%CommonAppDataFolder%\Autodesk\Revit\Addins", wixEntities)
+        new InstallDir(@"%CommonAppDataFolder%\Autodesk\Revit\Addins", wixEntities)
     ];
     project.Actions = []; // #105: NOT on the per-machine MSI (runs as SYSTEM — can't write each user's %LocalAppData%)
     project.BuildMsi();

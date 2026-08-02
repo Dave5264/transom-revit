@@ -3,7 +3,8 @@
     <!--
       Transom.ClickHelper.Mcp — the MCP server for Transom's optional Claude UI-Assist feature.
 
-      A minimal stdio MCP server (JSON-RPC 2.0, Content-Length framed) that exposes Revit UI-clicking
+      A minimal stdio MCP server (JSON-RPC 2.0, NEWLINE-DELIMITED — one line of JSON per message, NOT
+      Content-Length framed; that framing was the bug that disabled Assist in v1.4.7) that exposes Revit UI-clicking
       tools to Claude. It does NOT touch Revit itself — it shells out to the Transom.ClickHelper engine
       exe, which performs UI Automation against the live Revit window from its own process. Running the
       click out-of-process is load-bearing (Revit's message pump stays free).

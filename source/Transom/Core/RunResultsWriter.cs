@@ -28,18 +28,50 @@ public static class RunResultsWriter
             if (!cs.Changes.Any(c => c.Outcome is ApplyOutcome.Failed or ApplyOutcome.Unverified))
                 return null;
 
-            // Re-read each imported schedule (by name) from the now-applied model. Skip any that won't read.
-            var byName = new FilteredElementCollector(doc).OfClass(typeof(ViewSchedule)).Cast<ViewSchedule>()
-                .Where(v => !v.IsTemplate)
-                .GroupBy(v => v.Name)
-                .ToDictionary(g => g.Key, g => g.First());
+            // Re-read each imported schedule from the now-applied model. UID FIRST (survives renames — an
+            // Option-2 conversion or any rename during/after the apply changes the name), name as fallback.
+            // A miss used to be a bare `continue`, so that schedule's failed cells vanished from the report —
+            // and since a zero-table result returns null, the ABSENCE of the file reads as "nothing to review".
+            var all = new FilteredElementCollector(doc).OfClass(typeof(ViewSchedule)).Cast<ViewSchedule>()
+                .Where(v => !v.IsTemplate).ToList();
+            var byUid = new Dictionary<string, ViewSchedule>(StringComparer.Ordinal);
+            foreach (var v in all) { try { byUid[v.UniqueId] = v; } catch { /* skip */ } }
+            var byName = all.GroupBy(v => v.Name).ToDictionary(g => g.Key, g => g.First());
+
+            // Every schedule the change set touched, uid → last-known name.
+            var wanted = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (var ch in cs.Changes)
+                if (!string.IsNullOrEmpty(ch.SourceScheduleUid))
+                    wanted[ch.SourceScheduleUid] = ch.SourceScheduleName ?? "";
 
             var tables = new List<ScheduleTable>();
+            var resolved = new HashSet<string>(StringComparer.Ordinal);   // element ids already read
+            var missing = new List<string>();
+
+            foreach (var kv in wanted)
+            {
+                ViewSchedule? vs = byUid.TryGetValue(kv.Key, out var byU) ? byU
+                    : !string.IsNullOrEmpty(kv.Value) && byName.TryGetValue(kv.Value, out var byN) ? byN : null;
+                if (vs == null) { missing.Add(string.IsNullOrEmpty(kv.Value) ? kv.Key : kv.Value); continue; }
+                if (!resolved.Add(vs.UniqueId)) continue;
+                try { tables.Add(new ScheduleReader(doc) { UiApp = app }.Read(vs)); }
+                catch { try { missing.Add(vs.Name); } catch { missing.Add(kv.Key); } }
+            }
+
+            // Names-only fallback for changes that carry no uid (older change sets).
             foreach (var schedName in cs.ImportedScheduleNames.Distinct())
             {
-                if (!byName.TryGetValue(schedName, out var vs)) continue;
+                if (!byName.TryGetValue(schedName, out var vs)) { missing.Add(schedName); continue; }
+                if (!resolved.Add(vs.UniqueId)) continue;
                 try { tables.Add(new ScheduleReader(doc) { UiApp = app }.Read(vs)); }
-                catch { /* a schedule that won't read — skip it */ }
+                catch { missing.Add(schedName); }
+            }
+
+            if (missing.Count > 0)
+            {
+                // Never let an unreadable schedule silently shrink the failure report.
+                cs.DiagnosticLog += "\n\n== Run-results report: schedules that could not be re-read ==\n  - "
+                                    + string.Join("\n  - ", missing.Distinct());
             }
             if (tables.Count == 0) return null;
 

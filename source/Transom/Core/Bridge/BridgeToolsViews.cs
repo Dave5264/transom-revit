@@ -37,7 +37,7 @@ public static partial class BridgeTools
 
         // Unique temp dir per call: Revit appends " - <type> - <name>" to the file prefix, so the
         // only reliable way to find the output is to own the whole directory.
-        var dir = Path.Combine(Path.GetTempPath(), "RevitMCPExports", Guid.NewGuid().ToString("N"));
+        var dir = Path.Combine(Path.GetTempPath(), "TransomExports", Guid.NewGuid().ToString("N"));
         try
         {
             Directory.CreateDirectory(dir);
@@ -158,20 +158,30 @@ public static partial class BridgeTools
     // --- get_current_view_elements ----------------------------------------------
 
     /// <summary>
-    ///     Every element visible in the active view with id/name/type/category/level/location, grouped
-    ///     by category with per-category counts. Port of views.py get_current_view_elements; unlike the
-    ///     Python (which leaked internal feet), location coordinates are reported in mm per the wire contract.
+    ///     Every element visible in the active view with id/name/type/category/level/location, plus
+    ///     per-category counts and per-category ID lists. Port of views.py get_current_view_elements; unlike
+    ///     the Python (which leaked internal feet), location coordinates are reported in mm per the wire
+    ///     contract. Capped by max_elements (default 500) with a `truncated` flag — a populated floor plan
+    ///     is easily tens of thousands of elements and the whole response crosses the stdio transport as ONE
+    ///     newline-delimited line.
     /// </summary>
     internal static string GetCurrentViewElements(UIApplication app, Document doc, JsonElement args)
     {
         var view = app.ActiveUIDocument?.ActiveView;
         if (view == null) return Err("No active view found");
 
+        int maxElements = (int)DblOf(args, "max_elements", 500);
+        if (maxElements <= 0) maxElements = 500;
+
         try
         {
             var elements = new List<Dictionary<string, object?>>();
+            int totalInView = 0;
+            bool truncated = false;
             foreach (var el in new FilteredElementCollector(doc, view.Id).WhereElementIsNotElementType())
             {
+                totalInView++;
+                if (elements.Count >= maxElements) { truncated = true; continue; }
                 try
                 {
                     var info = new Dictionary<string, object?>
@@ -222,11 +232,14 @@ public static partial class BridgeTools
                 catch { /* skip elements that reject property access */ }
             }
 
-            var byCategory = new Dictionary<string, object?>();
+            // IDs per category, not the full records: elements_by_category previously held references to
+            // the same dictionaries already in `elements`, and System.Text.Json has no reference handling
+            // configured — so every element was serialized twice, doubling the payload for no new data.
+            var idsByCategory = new Dictionary<string, object?>();
             var counts = new Dictionary<string, object?>();
             foreach (var group in elements.GroupBy(e => (string)e["category"]!))
             {
-                byCategory[group.Key] = group.Cast<object?>().ToList();
+                idsByCategory[group.Key] = group.Select(e => e["element_id"]).ToList();
                 counts[group.Key] = group.Count();
             }
 
@@ -235,9 +248,11 @@ public static partial class BridgeTools
                 ["ok"] = true,
                 ["view_name"] = ElemName(view),
                 ["view_id"] = view.Id.Value,
-                ["total_elements"] = elements.Count,
+                ["total_elements"] = totalInView,
+                ["returned_elements"] = elements.Count,
+                ["truncated"] = truncated,
                 ["elements"] = elements.Cast<object?>().ToList(),
-                ["elements_by_category"] = byCategory,
+                ["element_ids_by_category"] = idsByCategory,
                 ["category_counts"] = counts,
             });
         }
@@ -260,9 +275,13 @@ public static partial class BridgeTools
             return Err("view_type is required (floor_plan, ceiling_plan, section, elevation, 3d)");
         if (string.IsNullOrEmpty(name)) return Err("name is required");
 
-        return InTransaction(doc, "Create View via MCP", () =>
+        return InTransaction(doc, "Create View via Transom", () =>
         {
             View? newView;
+            // GEN-08: a section's width/height/depth each default to 10 m — a reasonable guess for a building
+            // interior and an arbitrary one anywhere else. The response used to say nothing about them, so a
+            // caller who omitted a dimension could not tell what it got. Record what was actually applied.
+            Dictionary<string, object?>? sectionBoxApplied = null;
             switch (viewType)
             {
                 case "floor_plan":
@@ -293,9 +312,21 @@ public static partial class BridgeTools
                     // direction/up are unit vectors — no mm conversion (matches the Python).
                     var dir = UnitVecOf(box, "direction", new XYZ(0, 1, 0));
                     var up = UnitVecOf(box, "up", new XYZ(0, 0, 1));
-                    var width = MmToFt(DblOf(box, "width", 10000));
-                    var height = MmToFt(DblOf(box, "height", 10000));
-                    var depth = MmToFt(DblOf(box, "depth", 10000));
+                    const double defaultExtentMm = 10000;   // 10 m
+                    double widthMm = DblOf(box, "width", defaultExtentMm);
+                    double heightMm = DblOf(box, "height", defaultExtentMm);
+                    double depthMm = DblOf(box, "depth", defaultExtentMm);
+                    var width = MmToFt(widthMm);
+                    var height = MmToFt(heightMm);
+                    var depth = MmToFt(depthMm);
+                    sectionBoxApplied = new Dictionary<string, object?>
+                    {
+                        ["width_mm"] = widthMm, ["height_mm"] = heightMm, ["depth_mm"] = depthMm,
+                        ["defaulted"] = new List<string>(
+                            new[] { ("width", widthMm), ("height", heightMm), ("depth", depthMm) }
+                                .Where(d => !box.TryGetProperty(d.Item1, out _))
+                                .Select(d => d.Item1)),
+                    };
 
                     var right = dir.CrossProduct(up).Normalize();
                     var tf = Transform.Identity;
@@ -337,8 +368,16 @@ public static partial class BridgeTools
                     host ??= plans.FirstOrDefault();
                     if (host == null) return Err("No floor plan view found to host the elevation marker");
 
-                    var marker = ElevationMarker.CreateElevationMarker(doc, vft.Id, XYZ.Zero, 1);
-                    newView = marker.CreateElevation(doc, host.Id, 0);
+                    // The marker position and facing direction used to be hardcoded to the project origin
+                    // and index 0, so every elevation looked at whatever sat at 0,0,0 — usually nothing —
+                    // and reported ok with a correctly-named empty view.
+                    var markerPt = PointArg(args, "marker_position") ?? XYZ.Zero;
+                    int dirIndex = (int)DblOf(args, "direction_index", 0);
+                    if (dirIndex is < 0 or > 3)
+                        return Err("direction_index must be 0 (north), 1 (east), 2 (south) or 3 (west)");
+
+                    var marker = ElevationMarker.CreateElevationMarker(doc, vft.Id, markerPt, 1);
+                    newView = marker.CreateElevation(doc, host.Id, dirIndex);
                     break;
                 }
                 default:
@@ -352,14 +391,16 @@ public static partial class BridgeTools
             string actualType;
             try { actualType = newView.ViewType.ToString(); } catch { actualType = viewType!; }
 
-            return Json(new Dictionary<string, object?>
+            var created = new Dictionary<string, object?>
             {
                 ["ok"] = true,
                 ["view_id"] = newView.Id.Value,
                 ["name"] = name,
                 ["view_type"] = actualType,
                 ["message"] = $"Created {viewType} view '{name}'",
-            });
+            };
+            if (sectionBoxApplied != null) created["section_box_applied"] = sectionBoxApplied;
+            return Json(created);
         });
     }
 
@@ -421,7 +462,7 @@ public static partial class BridgeTools
                 .Any(s => string.Equals(s.SheetNumber, sheetNumber, StringComparison.OrdinalIgnoreCase)))
             return Err($"Sheet number '{sheetNumber}' already exists in the project");
 
-        return InTransaction(doc, "Create Sheet via MCP", () =>
+        return InTransaction(doc, "Create Sheet via Transom", () =>
         {
             if (!tb.IsActive) { tb.Activate(); doc.Regenerate(); }
             var sheet = ViewSheet.Create(doc, tb.Id);
@@ -446,7 +487,7 @@ public static partial class BridgeTools
     // --- export_document ---------------------------------------------------------
 
     /// <summary>
-    ///     Exports a view (named, else active) to pdf / png / jpg / dwg under Documents\RevitMCPExport.
+    ///     Exports a view (named, else active) to pdf / png / jpg / dwg under Documents\TransomExport.
     ///     Port of documentation.py export_document. Runs without a transaction (exports don't mutate the
     ///     model); the output path is located by scanning for the freshly written file, since Revit
     ///     decorates image file names.
@@ -472,7 +513,7 @@ public static partial class BridgeTools
         var actualViewName = ElemName(view);
         var safeName = SafeExportFileName(actualViewName);
         var exportDir = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "RevitMCPExport");
+            Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "TransomExport");
 
         try
         {
@@ -561,7 +602,7 @@ public static partial class BridgeTools
 
         var lineStyle = StrArg(args, "line_style");
 
-        return InTransaction(doc, "Create Detail Line via MCP", () =>
+        return InTransaction(doc, "Create Detail Line via Transom", () =>
         {
             var curve = doc.Create.NewDetailCurve(view, line);
             if (curve == null) return Err("Failed to create detail line");
@@ -614,10 +655,19 @@ public static partial class BridgeTools
         if (tagSymbols.Count == 0)
             return Err("No wall tag types found — load wall tag families into the project");
 
-        var tagSymbol = !string.IsNullOrEmpty(tagTypeName)
-            ? tagSymbols.FirstOrDefault(s =>
-                string.Equals(ElemName(s), tagTypeName, StringComparison.OrdinalIgnoreCase)) ?? tagSymbols[0]
-            : tagSymbols[0];
+        // A misspelled tag_type_name used to fall back to an arbitrary type silently — fail instead, and
+        // name the available types so the caller can correct itself.
+        FamilySymbol tagSymbol;
+        if (!string.IsNullOrEmpty(tagTypeName))
+        {
+            var match = tagSymbols.FirstOrDefault(s =>
+                string.Equals(ElemName(s), tagTypeName, StringComparison.OrdinalIgnoreCase));
+            if (match == null)
+                return Err($"Wall tag type '{tagTypeName}' not found. Available: "
+                           + string.Join(", ", tagSymbols.Select(ElemName).OrderBy(n => n)));
+            tagSymbol = match;
+        }
+        else tagSymbol = tagSymbols[0];
 
         var walls = new FilteredElementCollector(doc, view.Id)
             .OfCategory(BuiltInCategory.OST_Walls).WhereElementIsNotElementType().ToList();
@@ -635,7 +685,7 @@ public static partial class BridgeTools
             catch { /* multi-doc tags can reject this */ }
         }
 
-        return InTransaction(doc, "Tag Walls via MCP", () =>
+        return InTransaction(doc, "Tag Walls via Transom", () =>
         {
             int placed = 0, alreadyTagged = 0;
             var skipped = new List<object?>();
@@ -657,8 +707,10 @@ public static partial class BridgeTools
                     }
 
                     var mid = lc.Curve.Evaluate(0.5, true);
-                    var tag = IndependentTag.Create(doc, view.Id, new Reference(wall), useLeader,
-                        TagMode.TM_ADDBY_CATEGORY, TagOrientation.Horizontal, mid);
+                    // Type-taking overload: the older TagMode one ignores the resolved symbol entirely and
+                    // uses Revit's default wall-tag type, so tag_type_name had no effect on the result.
+                    var tag = IndependentTag.Create(doc, tagSymbol.Id, view.Id, new Reference(wall), useLeader,
+                        TagOrientation.Horizontal, mid);
                     if (tag != null) placed++;
                     else skipped.Add(new Dictionary<string, object?>
                     { ["wall_id"] = wallId, ["reason"] = "IndependentTag.Create returned no tag" });
@@ -673,6 +725,7 @@ public static partial class BridgeTools
             {
                 ["ok"] = true,
                 ["tags_placed"] = placed,
+                ["tag_type_used"] = ElemName(tagSymbol),
                 ["walls_already_tagged"] = alreadyTagged,
                 ["walls_total"] = walls.Count,
                 ["message"] = $"Tagged {placed} wall{(placed != 1 ? "s" : "")} ({alreadyTagged} already tagged, "
@@ -688,7 +741,7 @@ public static partial class BridgeTools
     /// <summary>
     ///     Tags specific elements (element_ids) in a named or active view, mapping each element's
     ///     category to its tag category (walls/doors/windows/rooms/floors/structural framing+columns);
-    ///     optional leader, horizontal/vertical orientation, {x,y} mm offset, and tag_type_name.
+    ///     optional leader, horizontal/vertical orientation, {x,y,z} mm offset, and tag_type_name.
     ///     Port of tags.py tag_elements — untaggable elements land in skipped[], never fail the call.
     /// </summary>
     internal static string TagElements(UIApplication app, Document doc, JsonElement args)
@@ -704,15 +757,16 @@ public static partial class BridgeTools
             ? TagOrientation.Vertical : TagOrientation.Horizontal;
         var tagTypeName = StrArg(args, "tag_type_name");
 
-        double offX = 0, offY = 0;
+        double offX = 0, offY = 0, offZ = 0;
         if (args.ValueKind == JsonValueKind.Object && args.TryGetProperty("offset", out var off)
             && off.ValueKind == JsonValueKind.Object)
         {
             offX = MmToFt(DblOf(off, "x"));
             offY = MmToFt(DblOf(off, "y"));
+            offZ = MmToFt(DblOf(off, "z"));   // world Z = the on-screen vertical in elevations/sections
         }
 
-        return InTransaction(doc, "Tag Elements via MCP", () =>
+        return InTransaction(doc, "Tag Elements via Transom", () =>
         {
             var tagIds = new List<object?>();
             var skipped = new List<object?>();
@@ -735,7 +789,7 @@ public static partial class BridgeTools
 
                 if (!tagType.IsActive) { tagType.Activate(); doc.Regenerate(); }
 
-                var point = TagAnchorPoint(el, view, offX, offY);
+                var point = TagAnchorPoint(el, view, offX, offY, offZ);
                 if (point == null) { Skip(id.Value, "Cannot determine element location"); continue; }
 
                 try
@@ -773,7 +827,11 @@ public static partial class BridgeTools
     {
         var ids = IdListArg(args, "element_ids");
         if (ids.Count == 0) return Err("No element_ids provided");
-        _ = StrArg(args, "dimension_type"); // accepted for parity; only linear is implemented (as in the Python)
+        // Only linear is implemented (as in the Python). Refuse the other advertised values rather than
+        // silently producing a linear dimension and reporting success for an "angular" request.
+        var dimType = StrArg(args, "dimension_type");
+        if (!string.IsNullOrEmpty(dimType) && !string.Equals(dimType, "linear", StringComparison.OrdinalIgnoreCase))
+            return Err($"dimension_type '{dimType}' is not supported — only 'linear' dimensions are implemented");
 
         var view = app.ActiveUIDocument?.ActiveView;
         if (view == null) return Err("No active view");
@@ -822,7 +880,7 @@ public static partial class BridgeTools
         if (refs.Size < 2)
             return Err("Need at least 2 elements with valid geometry references to create a dimension");
 
-        return InTransaction(doc, "Create Dimensions via MCP", () =>
+        return InTransaction(doc, "Create Dimensions via Transom", () =>
         {
             Line dimLine;
             if (points.Count >= 2)
@@ -833,7 +891,12 @@ public static partial class BridgeTools
                 double len = Math.Sqrt(dx * dx + dy * dy);
                 if (len > 0.001)
                 {
-                    const double offsetDist = 3.0; // feet, as in the Python
+                    // GEN-08: this was `const double offsetDist = 3.0; // feet, as in the Python` — a fixed
+                    // 914.4 mm model-space offset regardless of view scale, so on paper it measured 18 mm at
+                    // 1:50 and 1.8 mm at 1:500 (sitting on top of the geometry it dimensions). Offsets belong in
+                    // PAPER space: hold ~10 mm on the sheet and let the view's scale convert it to model units.
+                    // Falls back to the historical 3 ft when the view reports no usable scale.
+                    double offsetDist = DimensionOffsetFt(view);
                     double nx = -dy / len, ny = dx / len;
                     dimLine = Line.CreateBound(
                         new XYZ(p1.X + nx * offsetDist, p1.Y + ny * offsetDist, p1.Z),
@@ -841,7 +904,12 @@ public static partial class BridgeTools
                 }
                 else dimLine = Line.CreateBound(p1, p2);
             }
-            else dimLine = Line.CreateBound(new XYZ(0, 10, 0), new XYZ(100, 10, 0));
+            // DEAD-03: this branch used to fall back to a dimension line at hardcoded internal-unit coordinates
+            // — Line.CreateBound(new XYZ(0, 10, 0), new XYZ(100, 10, 0)) — i.e. a 100-FOOT line 10 feet from the
+            // project origin, unrelated to anything being measured. The `refs.Size < 2` guard above means fewer
+            // than two points should be unreachable, but if it ever is reached, saying so beats silently drawing
+            // a dimension in the wrong place and reporting success.
+            else return Err("Could not determine a dimension line — fewer than 2 located points were resolved");
 
             var created = new List<object?>();
             var dim = doc.Create.NewDimension(view, dimLine, refs);
@@ -895,6 +963,29 @@ public static partial class BridgeTools
         return active != null ? (active, "") : (null, "No active view");
     }
 
+    /// <summary>Dimension-line offset in FEET, held at roughly this many millimetres on the printed sheet.</summary>
+    private const double DimensionPaperOffsetMm = 10.0;
+
+    /// <summary>
+    ///     GEN-08: the offset a dimension line is placed at, converted from paper space to model space through
+    ///     the view's scale. Revit's <c>View.Scale</c> is the scale DENOMINATOR (96 for 1:96), so model distance
+    ///     = paper distance × scale. At the common 1:96 plan scale this lands on 960 mm — within a hair of the
+    ///     fixed 3 ft (914.4 mm) it replaces, so existing plan output barely moves — while a 1:500 site plan now
+    ///     gets an offset a reader can actually see, and a 1:10 detail stops being pushed a metre off its
+    ///     geometry. Falls back to the historical 3 ft when the view reports no usable scale (perspective views
+    ///     return 0).
+    /// </summary>
+    private static double DimensionOffsetFt(View? view)
+    {
+        try
+        {
+            int scale = view?.Scale ?? 0;
+            if (scale > 0) return MmToFt(DimensionPaperOffsetMm * scale);
+        }
+        catch { /* fall through to the historical constant */ }
+        return 3.0;
+    }
+
     /// <summary>First ViewFamilyType of the given family, or null.</summary>
     private static ViewFamilyType? ViewFamilyTypeOf(Document doc, ViewFamily family)
         => new FilteredElementCollector(doc).OfClass(typeof(ViewFamilyType)).Cast<ViewFamilyType>()
@@ -938,18 +1029,37 @@ public static partial class BridgeTools
         catch { return null; }
     }
 
-    /// <summary>Tag anchor: location point / curve midpoint / view bbox center, plus an {x,y} offset (feet).</summary>
-    private static XYZ? TagAnchorPoint(Element el, View view, double offX, double offY)
+    /// <summary>
+    ///     Tag anchor: location point / curve midpoint / view bbox center, plus an {x,y,z} offset (feet).
+    ///     In an ELEVATION or SECTION the on-screen vertical is world Z, and an opening's LocationPoint sits
+    ///     at its BASE — so anchoring there hangs the tag low with no way to raise it. For those view types
+    ///     the bounding-box centre is used instead (centre-of-opening, what hand drafting does), which is
+    ///     exactly what the shipped elevation-tagging skill hand-rolls because this tool could not express it.
+    /// </summary>
+    private static XYZ? TagAnchorPoint(Element el, View view, double offX, double offY, double offZ)
     {
+        bool verticalView = view.ViewType is ViewType.Elevation or ViewType.Section;
+        if (verticalView)
+        {
+            try
+            {
+                var vbb = el.get_BoundingBox(view);
+                if (vbb != null)
+                    return new XYZ((vbb.Min.X + vbb.Max.X) / 2.0 + offX,
+                        (vbb.Min.Y + vbb.Max.Y) / 2.0 + offY,
+                        (vbb.Min.Z + vbb.Max.Z) / 2.0 + offZ);
+            }
+            catch { /* fall through to the location-based anchors */ }
+        }
         try
         {
             switch (el.Location)
             {
                 case LocationPoint lp:
-                    return new XYZ(lp.Point.X + offX, lp.Point.Y + offY, lp.Point.Z);
+                    return new XYZ(lp.Point.X + offX, lp.Point.Y + offY, lp.Point.Z + offZ);
                 case LocationCurve lc:
                     var mid = lc.Curve.Evaluate(0.5, true);
-                    return new XYZ(mid.X + offX, mid.Y + offY, mid.Z);
+                    return new XYZ(mid.X + offX, mid.Y + offY, mid.Z + offZ);
             }
         }
         catch { /* fall through to bbox */ }
@@ -959,7 +1069,7 @@ public static partial class BridgeTools
             if (bb != null)
                 return new XYZ((bb.Min.X + bb.Max.X) / 2.0 + offX,
                     (bb.Min.Y + bb.Max.Y) / 2.0 + offY,
-                    (bb.Min.Z + bb.Max.Z) / 2.0);
+                    (bb.Min.Z + bb.Max.Z) / 2.0 + offZ);
         }
         catch { }
         return null;

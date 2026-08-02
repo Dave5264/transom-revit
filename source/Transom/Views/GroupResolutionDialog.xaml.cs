@@ -124,10 +124,16 @@ public partial class GroupResolutionDialog : Window
 
         // Option 3 — only when Claude-assist is on.
         if (p.AssistEnabled)
+            // UI-15: the cons line used to describe a fully automated outcome and never mentioned that the FIRST
+            // thing that happens is a Save dialog (ChooseArtifactPath), nor that cancelling it drops this column's
+            // grouped edits while its ungrouped rows still apply (RescueUngroupedStaged) — the one path that
+            // produces a partial column. Both facts were already disclosed in ClaudeAssistHelpDialog.xaml:84 and
+            // export-legend-copy.md; the dialog the user actually reads at the moment of decision was the only
+            // surface that omitted them.
             AddOption(GroupResolution.ClaudeAssist,
                 "3.  Claude-Assist: update manually the old-fashioned way",
                 "No BIM configuration or strategy changes.",
-                "Slow.  Transom launches ClickHelper; Claude opens each group, edits, verifies, finishes, and hands back a report.");
+                "Slow.  Transom first asks where to save the staged edits (transom_group_edits.json), then Claude opens each group, edits, verifies, finishes, and hands back a report.  Cancel that save and the grouped edits in this column are dropped (any ungrouped rows still apply).");
         else
             unavailable.Add("• Option 3 (Claude-Assist) is unavailable: turn Claude Assist on in Settings to enable it.");
 
@@ -152,6 +158,22 @@ public partial class GroupResolutionDialog : Window
         {
             UnavailableNote.Text = string.Join("\n", unavailable);
             UnavailableNote.Visibility = System.Windows.Visibility.Visible;
+        }
+
+        // UI-01: the option NUMBERS are a stable published vocabulary — the export legend, ExportLegendDialog and
+        // docs/design-notes/export-legend-copy.md all name "option 1", "option 2a/2b" and "option 3" — so they are
+        // deliberately NOT renumbered at render time when an option is suppressed; the unavailable note above says
+        // which are missing and why. What was genuinely broken is the degenerate case: a grouped built-in with
+        // Option2Mode.None and Assist off suppressed 1, 2 and 3 and left a dialog whose entire content was a single
+        // radio button labelled "4. Skip". A radio group of one is not a choice. Present that case as an
+        // acknowledgement instead — Apply_Click already defaults to Skip, so hiding the list changes no behaviour.
+        if (_map.Count == 1 && _map[0].res == GroupResolution.Skip)
+        {
+            OptionsBorder.Visibility = System.Windows.Visibility.Collapsed;
+            SubText.Text = $"{p.InstanceCount} edit(s) to “{p.Field}” target {kind} parameters on members of " +
+                           $"group(s): {groups}. None of Transom's resolution paths are available for this column, " +
+                           "so it can only be left unchanged:";
+            ApplyButton.Content = "Skip this column";
         }
     }
 

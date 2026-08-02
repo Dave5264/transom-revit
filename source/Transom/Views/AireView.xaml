@@ -1,0 +1,631 @@
+<Window x:Class="Transom.Views.AireView"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="AIRE — AI Render Enhancer"
+        Width="1240" Height="860" MinWidth="1060" MinHeight="680"
+        WindowStartupLocation="CenterScreen"
+        FontFamily="Segoe UI" FontSize="14"
+        Background="{DynamicResource AppBg}"
+        Foreground="{DynamicResource TextPrimary}">
+
+    <!-- Ported from AIRE.exe (PySide6): the light/dark palettes below are the app's own Qt stylesheets,
+         re-expressed as WPF brushes. AireView.xaml.cs::ApplyTheme swaps every brush at runtime, which is
+         why ALL color references are DynamicResource. -->
+    <Window.Resources>
+
+        <!-- Palette (initial values = Light; ApplyTheme overwrites) -->
+        <SolidColorBrush x:Key="AppBg" Color="#f3f4f6"/>
+        <SolidColorBrush x:Key="TextPrimary" Color="#111827"/>
+        <SolidColorBrush x:Key="TitleFg" Color="#0f172a"/>
+        <SolidColorBrush x:Key="SubtitleFg" Color="#64748b"/>
+        <SolidColorBrush x:Key="MutedFg" Color="#64748b"/>
+        <SolidColorBrush x:Key="CostFg" Color="#2563eb"/>
+        <SolidColorBrush x:Key="CardBg" Color="#ffffff"/>
+        <SolidColorBrush x:Key="CardBorder" Color="#d1d5db"/>
+        <SolidColorBrush x:Key="HeroBorder" Color="#d1d5db"/>
+        <SolidColorBrush x:Key="InputBg" Color="#ffffff"/>
+        <SolidColorBrush x:Key="InputBorder" Color="#cbd5e1"/>
+        <SolidColorBrush x:Key="InputFocusBorder" Color="#2563eb"/>
+        <SolidColorBrush x:Key="SelectionBg" Color="#93c5fd"/>
+        <SolidColorBrush x:Key="BtnBg" Color="#e5e7eb"/>
+        <SolidColorBrush x:Key="BtnHoverBg" Color="#d1d5db"/>
+        <SolidColorBrush x:Key="BtnHoverBorder" Color="#94a3b8"/>
+        <SolidColorBrush x:Key="BtnPressedBg" Color="#cbd5e1"/>
+        <SolidColorBrush x:Key="BtnFg" Color="#111827"/>
+        <SolidColorBrush x:Key="PrimaryBg" Color="#2563eb"/>
+        <SolidColorBrush x:Key="PrimaryHoverBg" Color="#1d4ed8"/>
+        <SolidColorBrush x:Key="PrimaryBorder" Color="#3b82f6"/>
+        <SolidColorBrush x:Key="PrimaryFg" Color="#ffffff"/>
+        <SolidColorBrush x:Key="DangerBg" Color="#fee2e2"/>
+        <SolidColorBrush x:Key="DangerHoverBg" Color="#fecaca"/>
+        <SolidColorBrush x:Key="DangerBorder" Color="#fecaca"/>
+        <SolidColorBrush x:Key="DangerFg" Color="#991b1b"/>
+        <SolidColorBrush x:Key="LinkBg" Color="#dbeafe"/>
+        <SolidColorBrush x:Key="LinkHoverBg" Color="#bfdbfe"/>
+        <SolidColorBrush x:Key="LinkBorder" Color="#93c5fd"/>
+        <SolidColorBrush x:Key="LinkFg" Color="#1d4ed8"/>
+        <SolidColorBrush x:Key="ListBg" Color="#ffffff"/>
+        <SolidColorBrush x:Key="ListItemHoverBg" Color="#e0f2fe"/>
+        <SolidColorBrush x:Key="ListItemSelectedBg" Color="#93c5fd"/>
+        <SolidColorBrush x:Key="ProgressBg" Color="#e5e7eb"/>
+        <SolidColorBrush x:Key="ProgressChunk" Color="#2563eb"/>
+
+        <!-- Cards -->
+        <Style x:Key="Card" TargetType="Border">
+            <Setter Property="Background" Value="{DynamicResource CardBg}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource CardBorder}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="CornerRadius" Value="16"/>
+            <Setter Property="Padding" Value="18"/>
+        </Style>
+        <Style x:Key="HeroCard" TargetType="Border" BasedOn="{StaticResource Card}">
+            <Setter Property="BorderBrush" Value="{DynamicResource HeroBorder}"/>
+            <Setter Property="CornerRadius" Value="18"/>
+            <Setter Property="Padding" Value="22,18"/>
+        </Style>
+
+        <!-- Text -->
+        <Style x:Key="TitleLabel" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="32"/>
+            <Setter Property="FontWeight" Value="Bold"/>
+            <Setter Property="Foreground" Value="{DynamicResource TitleFg}"/>
+        </Style>
+        <Style x:Key="SubtitleLabel" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="{DynamicResource SubtitleFg}"/>
+            <Setter Property="TextWrapping" Value="Wrap"/>
+        </Style>
+        <Style x:Key="SectionTitle" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="16"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Foreground" Value="{DynamicResource TitleFg}"/>
+        </Style>
+        <Style x:Key="SmallMuted" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="12.5"/>
+            <Setter Property="Foreground" Value="{DynamicResource MutedFg}"/>
+            <Setter Property="TextWrapping" Value="Wrap"/>
+        </Style>
+        <Style x:Key="FieldLabel" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="{DynamicResource TextPrimary}"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Margin" Value="0,0,10,0"/>
+        </Style>
+        <Style x:Key="CostLabel" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="20"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Foreground" Value="{DynamicResource CostFg}"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+        </Style>
+
+        <!-- Buttons: one rounded template, four palettes -->
+        <Style x:Key="AireButton" TargetType="Button">
+            <Setter Property="Background" Value="{DynamicResource BtnBg}"/>
+            <Setter Property="BorderBrush" Value="Transparent"/>
+            <Setter Property="Foreground" Value="{DynamicResource BtnFg}"/>
+            <Setter Property="Padding" Value="14,8"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Bd" Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="1"
+                                CornerRadius="10" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource BtnHoverBg}"/>
+                                <Setter TargetName="Bd" Property="BorderBrush" Value="{DynamicResource BtnHoverBorder}"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource BtnPressedBg}"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.45"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="PrimaryButton" TargetType="Button" BasedOn="{StaticResource AireButton}">
+            <Setter Property="Background" Value="{DynamicResource PrimaryBg}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource PrimaryBorder}"/>
+            <Setter Property="Foreground" Value="{DynamicResource PrimaryFg}"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Bd" Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="1"
+                                CornerRadius="10" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource PrimaryHoverBg}"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.45"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="DangerButton" TargetType="Button" BasedOn="{StaticResource AireButton}">
+            <Setter Property="Background" Value="{DynamicResource DangerBg}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource DangerBorder}"/>
+            <Setter Property="Foreground" Value="{DynamicResource DangerFg}"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Bd" Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="1"
+                                CornerRadius="10" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource DangerHoverBg}"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.45"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="LinkButton" TargetType="Button" BasedOn="{StaticResource AireButton}">
+            <Setter Property="Background" Value="{DynamicResource LinkBg}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource LinkBorder}"/>
+            <Setter Property="Foreground" Value="{DynamicResource LinkFg}"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Bd" Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="1"
+                                CornerRadius="10" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource LinkHoverBg}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- Inputs -->
+        <Style x:Key="AireTextBox" TargetType="TextBox">
+            <Setter Property="Background" Value="{DynamicResource InputBg}"/>
+            <Setter Property="Foreground" Value="{DynamicResource TextPrimary}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource InputBorder}"/>
+            <Setter Property="CaretBrush" Value="{DynamicResource TextPrimary}"/>
+            <Setter Property="SelectionBrush" Value="{DynamicResource SelectionBg}"/>
+            <Setter Property="Padding" Value="9,7"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="TextBox">
+                        <Border x:Name="Bd" Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="1"
+                                CornerRadius="10">
+                            <ScrollViewer x:Name="PART_ContentHost" Margin="{TemplateBinding Padding}"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                                <Setter TargetName="Bd" Property="BorderBrush" Value="{DynamicResource InputFocusBorder}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="AirePasswordBox" TargetType="PasswordBox">
+            <Setter Property="Background" Value="{DynamicResource InputBg}"/>
+            <Setter Property="Foreground" Value="{DynamicResource TextPrimary}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource InputBorder}"/>
+            <Setter Property="CaretBrush" Value="{DynamicResource TextPrimary}"/>
+            <Setter Property="SelectionBrush" Value="{DynamicResource SelectionBg}"/>
+            <Setter Property="Padding" Value="9,7"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="PasswordBox">
+                        <Border x:Name="Bd" Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="1"
+                                CornerRadius="10">
+                            <ScrollViewer x:Name="PART_ContentHost" Margin="{TemplateBinding Padding}"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                                <Setter TargetName="Bd" Property="BorderBrush" Value="{DynamicResource InputFocusBorder}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- ComboBox: retemplated so the dropdown follows the dark palette too -->
+        <Style x:Key="AireComboItem" TargetType="ComboBoxItem">
+            <Setter Property="Foreground" Value="{DynamicResource TextPrimary}"/>
+            <Setter Property="Padding" Value="9,6"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ComboBoxItem">
+                        <Border x:Name="Bd" Background="Transparent" CornerRadius="6" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsHighlighted" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource ListItemHoverBg}"/>
+                            </Trigger>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource ListItemSelectedBg}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="AireCombo" TargetType="ComboBox">
+            <Setter Property="Background" Value="{DynamicResource InputBg}"/>
+            <Setter Property="Foreground" Value="{DynamicResource TextPrimary}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource InputBorder}"/>
+            <Setter Property="Padding" Value="9,7"/>
+            <Setter Property="ItemContainerStyle" Value="{StaticResource AireComboItem}"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ComboBox">
+                        <Grid>
+                            <ToggleButton x:Name="Toggle" Focusable="False" ClickMode="Press"
+                                          IsChecked="{Binding IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}">
+                                <ToggleButton.Template>
+                                    <ControlTemplate TargetType="ToggleButton">
+                                        <Border x:Name="Bd" Background="{DynamicResource InputBg}"
+                                                BorderBrush="{DynamicResource InputBorder}" BorderThickness="1"
+                                                CornerRadius="10">
+                                            <Path HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,12,0"
+                                                  Data="M 0 0 L 4 4 L 8 0" Stroke="{DynamicResource SubtitleFg}"
+                                                  StrokeThickness="1.6"/>
+                                        </Border>
+                                        <ControlTemplate.Triggers>
+                                            <Trigger Property="IsMouseOver" Value="True">
+                                                <Setter TargetName="Bd" Property="BorderBrush" Value="{DynamicResource InputFocusBorder}"/>
+                                            </Trigger>
+                                        </ControlTemplate.Triggers>
+                                    </ControlTemplate>
+                                </ToggleButton.Template>
+                            </ToggleButton>
+                            <ContentPresenter Margin="11,0,30,0" VerticalAlignment="Center" IsHitTestVisible="False"
+                                              Content="{TemplateBinding SelectionBoxItem}"
+                                              ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}"/>
+                            <Popup x:Name="PART_Popup" Placement="Bottom" AllowsTransparency="True"
+                                   IsOpen="{TemplateBinding IsDropDownOpen}" StaysOpen="False"
+                                   MinWidth="{TemplateBinding ActualWidth}">
+                                <Border Background="{DynamicResource CardBg}" BorderBrush="{DynamicResource InputBorder}"
+                                        BorderThickness="1" CornerRadius="10" Margin="0,4,0,0" Padding="4"
+                                        MaxHeight="320">
+                                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                                        <ItemsPresenter/>
+                                    </ScrollViewer>
+                                </Border>
+                            </Popup>
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- Image queue list -->
+        <Style x:Key="AireList" TargetType="ListBox">
+            <Setter Property="Background" Value="{DynamicResource ListBg}"/>
+            <Setter Property="Foreground" Value="{DynamicResource TextPrimary}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource InputBorder}"/>
+            <Setter Property="Padding" Value="8"/>
+            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+            <Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Disabled"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ListBox">
+                        <Border Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="1" CornerRadius="14" Padding="{TemplateBinding Padding}">
+                            <ScrollViewer VerticalScrollBarVisibility="Auto">
+                                <ItemsPresenter/>
+                            </ScrollViewer>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="AireListItem" TargetType="ListBoxItem">
+            <Setter Property="Padding" Value="8,6"/>
+            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ListBoxItem">
+                        <Border x:Name="Bd" Background="Transparent" CornerRadius="8" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource ListItemHoverBg}"/>
+                            </Trigger>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource ListItemSelectedBg}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- Progress bar: rounded track + accent chunk + centered percentage -->
+        <Style x:Key="AireProgress" TargetType="ProgressBar">
+            <Setter Property="Height" Value="18"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ProgressBar">
+                        <Grid>
+                            <Border x:Name="PART_Track" Background="{DynamicResource ProgressBg}" CornerRadius="9"/>
+                            <Border x:Name="PART_Indicator" Background="{DynamicResource ProgressChunk}" CornerRadius="9"
+                                    HorizontalAlignment="Left"/>
+                            <TextBlock HorizontalAlignment="Center" VerticalAlignment="Center" FontSize="11"
+                                       Foreground="{DynamicResource TextPrimary}"
+                                       Text="{Binding Value, RelativeSource={RelativeSource TemplatedParent}, StringFormat={}{0:0}%}"/>
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- Queue item content -->
+        <DataTemplate x:Key="QueueItemTemplate">
+            <CheckBox IsChecked="{Binding IsChecked, Mode=TwoWay}"
+                      Foreground="{DynamicResource TextPrimary}"
+                      VerticalContentAlignment="Center"
+                      ToolTip="{Binding FullPath}">
+                <TextBlock TextTrimming="CharacterEllipsis">
+                    <Run Text="{Binding FileName, Mode=OneWay}"/>
+                    <Run Text="    "/><Run Text="{Binding ResolutionText, Mode=OneWay}" Foreground="{DynamicResource MutedFg}"/>
+                </TextBlock>
+            </CheckBox>
+        </DataTemplate>
+    </Window.Resources>
+
+    <Grid Margin="22">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <!-- Header hero card -->
+        <Border Grid.Row="0" Style="{StaticResource HeroCard}" Margin="0,0,0,16">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <StackPanel Grid.Column="0">
+                    <TextBlock Style="{StaticResource TitleLabel}" Text="AI Render Enhancer"/>
+                    <TextBlock Style="{StaticResource SubtitleLabel}"
+                               Text="Batch-enhance architectural renders with controlled model, resolution, quality, and cost confirmation."/>
+                </StackPanel>
+                <TextBlock Grid.Column="1" x:Name="CostLabel" Style="{StaticResource CostLabel}"
+                           Text="Estimated checked cost: $0.0000"/>
+            </Grid>
+        </Border>
+
+        <!-- Two columns: settings/prompt | queue/progress -->
+        <Grid Grid.Row="1">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="430" MinWidth="360"/>
+                <ColumnDefinition Width="14"/>
+                <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+
+            <!-- LEFT: Settings + Prompt -->
+            <Grid Grid.Column="0">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="14"/>
+                    <RowDefinition Height="*"/>
+                </Grid.RowDefinitions>
+
+                <Border Grid.Row="0" Style="{StaticResource Card}">
+                    <StackPanel>
+                        <TextBlock Style="{StaticResource SectionTitle}" Text="Settings" Margin="0,0,0,10"/>
+
+                        <!-- Label-beside-field rows, like the original app — keeps the card short enough
+                             that the Prompt card below gets real editing space at the default height. -->
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="102"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="8"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="8"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="12"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="8"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="8"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="8"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+
+                            <TextBlock Grid.Row="0" Grid.Column="0" Style="{StaticResource FieldLabel}" Text="API Key"/>
+                            <PasswordBox Grid.Row="0" Grid.Column="1" Grid.ColumnSpan="2" x:Name="ApiKeyBox"
+                                         Style="{StaticResource AirePasswordBox}"/>
+
+                            <TextBlock Grid.Row="2" Grid.Column="0" Style="{StaticResource FieldLabel}" Text="Input Folder"/>
+                            <TextBox Grid.Row="2" Grid.Column="1" x:Name="InputFolderBox" Style="{StaticResource AireTextBox}"
+                                     ToolTip="Optional if using drag/drop."/>
+                            <Button Grid.Row="2" Grid.Column="2" x:Name="InputBrowseButton" Style="{StaticResource AireButton}"
+                                    Content="Browse" Margin="8,0,0,0"/>
+
+                            <TextBlock Grid.Row="4" Grid.Column="0" Style="{StaticResource FieldLabel}" Text="Output Folder"/>
+                            <TextBox Grid.Row="4" Grid.Column="1" x:Name="OutputFolderBox" Style="{StaticResource AireTextBox}"/>
+                            <Button Grid.Row="4" Grid.Column="2" x:Name="OutputBrowseButton" Style="{StaticResource AireButton}"
+                                    Content="Browse" Margin="8,0,0,0"/>
+
+                            <TextBlock Grid.Row="6" Grid.Column="0" Style="{StaticResource FieldLabel}" Text="Model"/>
+                            <ComboBox  Grid.Row="6" Grid.Column="1" Grid.ColumnSpan="2" x:Name="ModelCombo"
+                                       Style="{StaticResource AireCombo}" Height="36"/>
+                            <TextBlock Grid.Row="8" Grid.Column="0" Style="{StaticResource FieldLabel}" Text="Resolution"/>
+                            <ComboBox  Grid.Row="8" Grid.Column="1" Grid.ColumnSpan="2" x:Name="SizeCombo"
+                                       Style="{StaticResource AireCombo}" Height="36"/>
+                            <TextBlock Grid.Row="10" Grid.Column="0" Style="{StaticResource FieldLabel}" Text="Quality"/>
+                            <ComboBox  Grid.Row="10" Grid.Column="1" Grid.ColumnSpan="2" x:Name="QualityCombo"
+                                       Style="{StaticResource AireCombo}" Height="36"/>
+                            <TextBlock Grid.Row="12" Grid.Column="0" Style="{StaticResource FieldLabel}" Text="Theme"/>
+                            <ComboBox  Grid.Row="12" Grid.Column="1" Grid.ColumnSpan="2" x:Name="ThemeCombo"
+                                       Style="{StaticResource AireCombo}" Height="36"/>
+                        </Grid>
+
+                        <StackPanel Orientation="Horizontal" Margin="0,14,0,0" HorizontalAlignment="Left">
+                            <Button x:Name="ApiKeyHelpButton" Style="{StaticResource LinkButton}"
+                                    Content="How do I get an API key?"/>
+                            <Button x:Name="BillingButton" Style="{StaticResource LinkButton}"
+                                    Content="Open OpenAI Billing" Margin="8,0,0,0"/>
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+
+                <Border Grid.Row="2" Style="{StaticResource Card}">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                        </Grid.RowDefinitions>
+                        <TextBlock Grid.Row="0" Style="{StaticResource SectionTitle}" Text="Prompt"/>
+                        <TextBlock Grid.Row="1" Style="{StaticResource SmallMuted}" Margin="0,4,0,8"
+                                   Text="This prompt is applied to every checked image in the queue."/>
+                        <TextBox Grid.Row="2" x:Name="PromptBox" Style="{StaticResource AireTextBox}"
+                                 TextWrapping="Wrap" AcceptsReturn="True"
+                                 VerticalScrollBarVisibility="Auto" VerticalContentAlignment="Top"/>
+                    </Grid>
+                </Border>
+            </Grid>
+
+            <!-- RIGHT: Image Queue + Processing Status -->
+            <Grid Grid.Column="2">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="*"/>
+                    <RowDefinition Height="14"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+
+                <Border Grid.Row="0" Style="{StaticResource Card}">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+
+                        <Grid Grid.Row="0" Margin="0,0,0,4">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Style="{StaticResource SectionTitle}" Text="Image Queue" VerticalAlignment="Center"/>
+                            <Button Grid.Column="1" x:Name="ScanButton" Style="{StaticResource AireButton}"
+                                    Content="Scan Folder" Margin="0,0,8,0"/>
+                            <Button Grid.Column="2" x:Name="ProcessButton" Style="{StaticResource PrimaryButton}"
+                                    Content="Process Checked"/>
+                        </Grid>
+                        <TextBlock Grid.Row="1" Style="{StaticResource SmallMuted}" Margin="0,0,0,8"
+                                   Text="Drag images or folders here. Nothing runs until you click Process Checked and confirm."/>
+
+                        <ListBox Grid.Row="2" x:Name="QueueList" Style="{StaticResource AireList}"
+                                 ItemContainerStyle="{StaticResource AireListItem}"
+                                 ItemTemplate="{StaticResource QueueItemTemplate}"
+                                 AllowDrop="True"/>
+
+                        <StackPanel Grid.Row="3" Orientation="Horizontal" Margin="0,10,0,0">
+                            <Button x:Name="RemoveButton" Style="{StaticResource AireButton}" Content="Remove Checked" Margin="0,0,8,0"/>
+                            <Button x:Name="ClearButton" Style="{StaticResource DangerButton}" Content="Clear List" Margin="0,0,8,0"/>
+                            <Button x:Name="OpenOutputButton" Style="{StaticResource AireButton}" Content="Open Output Folder"/>
+                        </StackPanel>
+                    </Grid>
+                </Border>
+
+                <Border Grid.Row="2" Style="{StaticResource Card}">
+                    <StackPanel>
+                        <TextBlock Style="{StaticResource SectionTitle}" Text="Processing Status" Margin="0,0,0,8"/>
+                        <ProgressBar x:Name="JobProgressBar" Style="{StaticResource AireProgress}" Minimum="0" Maximum="100"/>
+                        <TextBlock x:Name="ProgressLabel" Style="{StaticResource SmallMuted}" Margin="0,8,0,0"
+                                   Text="Ready." TextWrapping="Wrap"/>
+                    </StackPanel>
+                </Border>
+            </Grid>
+        </Grid>
+
+        <!-- API-key instructions. An in-window overlay rather than a second Window: every colour here is a
+             DynamicResource that ApplyTheme rewrites on THIS window's Resources, so a separate window would
+             need its own copy of the palette and would not follow the Light/Dark combo. RowSpan+negative
+             margin cancel the root Grid's 22px inset so the scrim reaches the window edges. -->
+        <Border x:Name="ApiKeyHelpOverlay" Grid.Row="0" Grid.RowSpan="2" Margin="-22"
+                Background="#B0000000" Visibility="Collapsed" Panel.ZIndex="10">
+            <Border Style="{StaticResource Card}" MaxWidth="660" MaxHeight="600"
+                    VerticalAlignment="Center" HorizontalAlignment="Center" Margin="24">
+                <DockPanel>
+                    <TextBlock DockPanel.Dock="Top" Style="{StaticResource TitleLabel}"
+                               Text="Getting an OpenAI API key"/>
+                    <TextBlock DockPanel.Dock="Top" Style="{StaticResource SubtitleLabel}" Margin="0,4,0,12"
+                               TextWrapping="Wrap"
+                               Text="AIRE sends your images to OpenAI for enhancement, so it needs your own API key. The key is stored encrypted on this machine (Windows DPAPI, current user) and is never sent anywhere except OpenAI."/>
+
+                    <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Margin="0,14,0,0">
+                        <Button x:Name="ApiKeyHelpOpenButton" Style="{StaticResource PrimaryButton}"
+                                Content="Open the API keys page"/>
+                        <Button x:Name="ApiKeyHelpCloseButton" Style="{StaticResource AireButton}"
+                                Content="Close" Margin="8,0,0,0"/>
+                    </StackPanel>
+
+                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                        <StackPanel>
+                            <TextBlock Style="{StaticResource FieldLabel}" Text="1. Create an OpenAI account"/>
+                            <TextBlock Style="{StaticResource SmallMuted}" TextWrapping="Wrap" Margin="0,2,0,10"
+                                       Text="Go to platform.openai.com and sign up (or sign in). This is the API platform — it is a separate account area from ChatGPT, and a ChatGPT Plus subscription does NOT include API credit."/>
+
+                            <TextBlock Style="{StaticResource FieldLabel}" Text="2. Add billing credit"/>
+                            <TextBlock Style="{StaticResource SmallMuted}" TextWrapping="Wrap" Margin="0,2,0,10"
+                                       Text="Under Settings → Billing, add a payment method and buy credit. Image generation is pay-as-you-go and will fail with an insufficient-quota error until the account has credit. Use the 'Open OpenAI Billing' button on the main window to go straight there."/>
+
+                            <TextBlock Style="{StaticResource FieldLabel}" Text="3. Create the key"/>
+                            <TextBlock Style="{StaticResource SmallMuted}" TextWrapping="Wrap" Margin="0,2,0,10"
+                                       Text="Go to API keys (the button below opens it), choose 'Create new secret key', give it a name such as 'AIRE', and create it. Make sure the key is allowed to use image generation — a project-scoped key with restricted permissions may not be."/>
+
+                            <TextBlock Style="{StaticResource FieldLabel}" Text="4. Copy it once"/>
+                            <TextBlock Style="{StaticResource SmallMuted}" TextWrapping="Wrap" Margin="0,2,0,10"
+                                       Text="OpenAI shows the full key (it starts with 'sk-') only at creation time. Copy it now — if you lose it you cannot view it again and will have to create another."/>
+
+                            <TextBlock Style="{StaticResource FieldLabel}" Text="5. Paste it into AIRE"/>
+                            <TextBlock Style="{StaticResource SmallMuted}" TextWrapping="Wrap" Margin="0,2,0,10"
+                                       Text="Paste the key into the API Key box on this window. It is saved automatically when the window closes, so you only do this once per machine."/>
+
+                            <TextBlock Style="{StaticResource FieldLabel}" Text="Keep it private"/>
+                            <TextBlock Style="{StaticResource SmallMuted}" TextWrapping="Wrap" Margin="0,2,0,0"
+                                       Text="Anyone with your key can spend your credit. Don't share it, email it, or commit it to a repository. If it is ever exposed, revoke it on the same API keys page and create a replacement. You can also cap spending there with a monthly budget limit."/>
+                        </StackPanel>
+                    </ScrollViewer>
+                </DockPanel>
+            </Border>
+        </Border>
+    </Grid>
+</Window>

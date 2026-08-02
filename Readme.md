@@ -14,7 +14,7 @@
 
 [![Latest release](https://img.shields.io/github/v/release/Dave5264/transom-revit?label=latest%20release&color=2ea44f&logo=github)](https://github.com/Dave5264/transom-revit/releases/latest)
 
-### ⬇ [Download the installer](https://github.com/Dave5264/transom-revit/releases/download/v1.9.8/Transom-1.9.8-SingleUser.msi)
+### ⬇ [Download the installer](https://github.com/Dave5264/transom-revit/releases/download/v1.9.9/Transom-1.9.9-SingleUser.msi)
 
 **One click, no admin rights** — installs into your per-user Revit add-ins folder.
 Double-click the `.msi`, then start Revit. Supports **Revit 2025, 2026 & 2027**. Free.
@@ -39,8 +39,10 @@ machine with no Revit installed.
 
 Bring it back through **Import → Preview → Apply**. The preview lists every change, what each one touches,
 and which schedules are affected; format-mismatched edits (`2'6` for `2'-6"`) hold **Apply** greyed until you
-confirm or discard them. What you apply is written in a **single transaction** — type parameters included —
-and each value is re-read to verify. Cells Transom can't write are listed and skipped, never half-applied.
+confirm or discard them. What you apply is written **atomically** — type parameters included — and each value
+is re-read to verify; if Revit rejects one change, Transom retries the rest individually so a single bad value
+can't discard your other edits, and every change is reported Applied or Failed. Cells Transom can't write are
+listed and skipped, never half-applied.
 
 Every cell is colored by **what an edit to it will actually touch**, classified at export time from the live
 model. White and green import directly — green meaning the value is shared beyond the row, like a type
@@ -103,11 +105,22 @@ can run in a fresh project while you watch. The supported client is **Claude Cod
 VM that can't reach a host-side bridge), and it should run with bypass permissions on — otherwise its
 permission prompts steal focus from Revit and UI-assist clicks silently miss.
 
-> **Status:** v1.9.8 (Revit 2025/2026/2027) — export now reports **data rows** instead of "element rows", so a
-> type-anchored schedule (a door schedule grouped by Type Mark, say) no longer says "0 element rows" after a
-> perfectly good export. The UI-Assist MCP server also ships expanded operating instructions, so every Claude
-> session that drives Revit's interface starts knowing the window-size, unsigned-add-in and model-load pitfalls.
-> Before that, v1.9.7 made Transom roughly **half the size on disk**. The three bundled helper
+> **Status:** v1.9.9 (Revit 2025/2026/2027) — a **correctness and honesty release** from a full line-by-line
+> audit of the codebase, plus a new tool: **AI Render Enhancer (AIRE)** batch-enhances architectural renders
+> through OpenAI's image models, with model/resolution/quality control, an estimated cost you confirm before
+> anything is spent, and a CSV log per batch. It needs your own OpenAI API key (there is a built-in
+> walkthrough for creating one; the key is DPAPI-encrypted per user and goes nowhere but OpenAI), works on
+> image files with or without a model open, and Claude can drive it over the bridge. AIRE is new in this
+> release and has had far less mileage than the schedule round-trip — treat the first batches as a trial.
+> The most important audit fixes: a multi-row schedule split by a hidden group field (a window
+> schedule grouped by Level, say) could write your edits to a *different* row's instances when the level names
+> sorted "1, 10, 2" — that ordering is now numeric, direction-aware, and refuses to guess rather than writing to
+> the wrong elements. Applying an import while a re-preview was still running could silently discard your typed
+> corrections and apply the older values; Apply now waits. Every bridge write checks whether Revit actually kept
+> the transaction, so a write Revit rolled back is reported as failed instead of succeeded. Reports got more
+> honest too: read-only cells no longer render the same red as genuine failures, header renames aren't counted
+> as applied unless they verified, and the run log distinguishes *proposed* from *applied*.
+> Before that, v1.9.8 fixed export row reporting; v1.9.7 made Transom roughly **half the size on disk**. The three bundled helper
 > executables each carried an uncompressed copy of the .NET runtime, and Roslyn's compiler messages shipped
 > translated into 13 languages that nothing reads; compressing the single-file bundles and dropping the unused
 > translations takes the payload from ~318 MB to ~163 MB per Revit version, with no functional change. Before
@@ -171,15 +184,18 @@ dotnet build source/Transom/Transom.csproj -c Debug.R25   # Revit 2025 (.NET 8)
 dotnet build source/Transom/Transom.csproj -c Debug.R27   # Revit 2027 (.NET 10)
 ```
 
-A successful build deploys the add-in to `%AppData%\Autodesk\Revit\Addins\<version>\`. The MSI installer and
-all-versions build run through the `build/` ModularPipelines project (`cd build; dotnet run -- pack`).
+A successful build deploys the add-in to `%AppData%\Autodesk\Revit\Addins\<version>\` — so **close Revit before
+building**, or the copy fails on a locked DLL.
+
+For the MSI installer, build each configuration directly and then run the installer project. Do **not** use
+`build/`'s `dotnet run -- pack`: its compile step can drop a Revit configuration and still exit 0, producing an
+installer that silently omits a whole Revit version.
 
 | Path | Description |
 |------|-------------|
 | `source/Transom/` | the add-in (commands, views, view-models, core logic) |
 | `build/`, `install/` | ModularPipelines build + WiX installer |
 | `branding/` | ribbon icon + generator |
-| `docs/` | `design-notes/` (shipped-fix rationale + Revit-API research notes), `parity-tool-status.md` (bridge-tool review state), `images/` (screenshots on this page) |
-| `tools/` | standalone dev tools (`transom_verify.py`) |
+| `docs/` | `design-notes/` (legend copy source of truth + Revit-API research notes), `parity-tool-status.md` (bridge-tool review state), `images/` (screenshots on this page) |
 
 </details>

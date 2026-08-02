@@ -17,7 +17,10 @@
         <SolidColorBrush x:Key="Surface" Color="#FFFFFF" />
         <SolidColorBrush x:Key="Text" Color="#26251F" />
         <SolidColorBrush x:Key="Muted" Color="#6B6A62" />
-        <SolidColorBrush x:Key="Hint" Color="#9A988E" />
+        <!-- GEN-11: Hint is declared in only two windows and they disagreed — #9A988E here vs #6F6E66 in
+             TransomView (and #8C8C8C vs #A8A8A8 in the dark ApplyTheme) — so the same semantic role rendered
+             visibly lighter in Help than in the Hub. Reconciled to the Hub's values, the primary surface. -->
+        <SolidColorBrush x:Key="Hint" Color="#6F6E66" />
         <SolidColorBrush x:Key="Line" Color="#E3E1D9" />
         <SolidColorBrush x:Key="Accent" Color="#185FA5" />
         <SolidColorBrush x:Key="InfoBg" Color="#E6F1FB" />
@@ -60,7 +63,7 @@
 
         <TextBlock DockPanel.Dock="Top" Text="Transom — Help" FontSize="17" FontWeight="SemiBold" Foreground="{DynamicResource Text}" />
         <TextBlock DockPanel.Dock="Top" Margin="0,4,0,10" Foreground="{DynamicResource Muted}" TextWrapping="Wrap" FontSize="12.5"
-                   Text="Transom round-trips Revit schedules through a spreadsheet: export a schedule exactly as Revit shows it, edit the values in Excel, then import your changes back into the model — safely, inside a single transaction, with a preview you confirm first." />
+                   Text="Transom round-trips Revit schedules through a spreadsheet: export a schedule exactly as Revit shows it, edit the values in Excel, then import your changes back into the model — safely, with a preview you confirm first and every change reported Applied or Failed." />
 
         <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="0,0,8,0">
             <StackPanel>
@@ -95,13 +98,16 @@
                     • <Run Text="Combined-parameter fields" FontWeight="SemiBold" /> (e.g. “Width x Height”) stay display-only on the main sheet but get a companion “… — parts” sheet exposing each underlying component as its own editable column.
                 </TextBlock>
                 <TextBlock Style="{StaticResource P}" Margin="0,0,0,2">
-                    • <Run Text="Edit-hint colours" FontWeight="SemiBold" /> in the exported file:
+                    • <Run Text="Cell colours" FontWeight="SemiBold" /> — every exported cell is coloured to show what an edit will touch on import, from “this row only” through “every element of the type” to “Revit computes it — not importable”. The legend sits on the Export tab.
                 </TextBlock>
+                <!-- UI-17: this bullet used to carry its OWN four-colour copy. It drifted when the legend was reworked
+                     to six colours in v1.7.0 — it still described blue as "importable only via Claude-assist", which is
+                     RED's constraint (blue resolves in-process via option 1, no Claude needed), and it omitted yellow
+                     and red entirely. docs/design-notes/export-legend-copy.md is the copy source of truth and names
+                     only two mirror targets (TransomView.xaml + ExportLegendDialog.xaml); this window was a third,
+                     unlisted copy. Link to the authoritative dialog instead of maintaining another mirror. -->
                 <TextBlock Style="{StaticResource P}" Margin="14,0,0,4">
-                    – <Run Text="Grey" FontWeight="SemiBold" /> cells can’t be imported (read-only, or driven by the family/type, or calculated).
-                    &#x0a;– <Run Text="Green" FontWeight="SemiBold" Foreground="#1E7A34" /> cells are bulk edits — a type parameter or a group header, where changing one cell updates every element it covers (no Claude needed).
-                    &#x0a;– <Run Text="Blue" FontWeight="SemiBold" /> cells are instance parameters on elements inside a Revit model group — importable only via Claude-assist.
-                    &#x0a;– Other cells edit a single element.
+                    <Hyperlink Click="Legend_Click" Foreground="{DynamicResource Accent}" TextDecorations="None">What the cell colours mean…</Hyperlink>
                 </TextBlock>
 
                 <!-- EDITING RULES -->
@@ -171,7 +177,7 @@
                     • <Run Text="Verified writes" FontWeight="SemiBold" /> — every parameter is re-read after setting to confirm it took; failures are reported, not assumed.
                 </TextBlock>
                 <TextBlock Style="{StaticResource P}">
-                    • <Run Text="One transaction" FontWeight="SemiBold" /> — all changes apply together and roll back on a fatal error. Non-Transom workbooks, or files with a missing anchor, are rejected rather than mis-written.
+                    • <Run Text="Atomic apply, with salvage" FontWeight="SemiBold" /> — changes apply together in one transaction; if Revit rejects one, Transom retries the rest individually so a single bad value can't discard your other edits. Every change is reported Applied or Failed. Non-Transom workbooks, or files with a missing anchor, are rejected rather than mis-written.
                 </TextBlock>
 
                 <!-- CLAUDE / MCP -->
@@ -183,7 +189,7 @@
                     The bridge is <Run Text="admin-free" FontWeight="SemiBold" />: it listens only on 127.0.0.1 (loopback) on a high port and requires a per-session token, so other apps and web pages can’t drive it. The first time you turn Claude Assist on, Transom registers its bundled connectors with Claude Code (restart Claude Code once afterward); the status panel next to the switch shows every layer at a glance. See “How Claude Code works” on the Settings tab.
                 </TextBlock>
                 <TextBlock Style="{StaticResource P}">
-                    • <Run Text="Beyond schedules" FontWeight="SemiBold" /> — with Claude Assist on, Claude can also read and drive the model directly: render a view to an image, read the current selection, query and filter elements, read/set parameters, run clash checks, tag, create views/sheets/levels, export PDF/DWG/IFC, and more (ask Claude what it can do in Revit). These run through the same loopback bridge and token, so the same Settings switch governs them.
+                    • <Run Text="Beyond schedules" FontWeight="SemiBold" /> — with Claude Assist on, Claude can also read and drive the model directly: render a view to an image, read the current selection, query and filter elements, read/set parameters, tag, create views/sheets/levels/rooms, place dimensions and detail lines, and more (ask Claude what it can do in Revit). These run through the same loopback bridge and token, so the same Settings switch governs them. A few tools — clash checks, family loading/placement, document export and save — are turned off in this build pending fixes.
                 </TextBlock>
 
                 <!-- REVISION NARRATIVE -->

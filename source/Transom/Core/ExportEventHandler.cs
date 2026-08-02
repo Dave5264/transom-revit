@@ -36,7 +36,15 @@ public sealed class ExportEventHandler : IExternalEventHandler
             int okCount = 0;
             foreach (var id in ScheduleIds.Distinct())
             {
-                if (doc.GetElement(new ElementId(id)) is not ViewSchedule vs) continue;
+                if (doc.GetElement(new ElementId(id)) is not ViewSchedule vs)
+                {
+                    // Never drop a SELECTED schedule silently (the codebase's honesty floor): a deleted
+                    // schedule, or one belonging to another document, used to just lower okCount — so the
+                    // user read "Exported 4 schedule(s)" having picked 5, with nothing naming the missing one.
+                    failures.Add(($"schedule id {id}",
+                        new InvalidOperationException("no longer exists in this project (deleted, or it belongs to a different document)")));
+                    continue;
+                }
                 try
                 {
                     var t = reader.Read(vs);

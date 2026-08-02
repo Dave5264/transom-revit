@@ -17,8 +17,9 @@ namespace Transom.Core;
 ///     <see cref="Importer"/>: live binding resolution (instance vs type), read-only / unsupported-storage
 ///     refusal, checking the <see cref="Parameter"/>.Set return value, re-reading to verify the value
 ///     actually landed, and rolling the transaction back when verification fails. Instance params on a
-///     Revit group member are written DIRECTLY (they may legally vary per group instance) — this is the
-///     "blue" cell the deterministic importer refuses.
+///     Revit group member are written directly ONLY when Revit permits it — identity built-ins
+///     (Mark/Number) or a project/shared param already varying by group instance; anything else is
+///     refused up front with an actionable error (the vary flag is a one-way door the bridge never sets).
 /// </summary>
 public static partial class BridgeTools
 {
@@ -36,6 +37,11 @@ public static partial class BridgeTools
                 ? a
                 : default;
 
+            // AIRE tools are document-independent (image files + HTTPS only) — dispatch them before
+            // document resolution so they work on the zero-doc Home screen too.
+            var aire = DispatchAire(tool, args);
+            if (aire != null) return aire;
+
             var doc = DocUtil.Resolve(app, "") ?? app.ActiveUIDocument?.Document;
             if (doc == null) return Err("no active document");
 
@@ -43,7 +49,7 @@ public static partial class BridgeTools
             {
                 "status"             => Status(doc),
                 "list_schedules"     => ListSchedules(doc),
-                "read_schedule"      => ReadSchedule(doc, args),
+                "read_schedule"      => ReadSchedule(app, doc, args),
                 "set_parameter"      => SetParameter(doc, args),
                 "set_parameters"     => SetParameters(doc, args),
                 "execute_revit_code" => ExecuteRevitCode(app, args),
@@ -89,13 +95,15 @@ public static partial class BridgeTools
 
     // --- read_schedule -----------------------------------------------------
 
-    private static string ReadSchedule(Document doc, JsonElement args)
+    private static string ReadSchedule(UIApplication app, Document doc, JsonElement args)
     {
         var vs = FindSchedule(doc, args);
         if (vs == null) return Err("schedule not found");
 
+        // UiApp arms the dialog suppressor around the rolled-back UID stamp — without it a side-effect
+        // prompt (e.g. stamping a Level name) blocks the API thread until a human dismisses it.
         ScheduleTable table;
-        try { table = new ScheduleReader(doc).Read(vs); }
+        try { table = new ScheduleReader(doc) { UiApp = app }.Read(vs); }
         catch (Exception ex) { return Err("read failed: " + ex.Message); }
 
         var columns = table.Columns.Select(c => new Dictionary<string, object?>
@@ -175,7 +183,15 @@ public static partial class BridgeTools
             var result = ApplyEdit(doc, edit);
             bool ok = result.TryGetValue("ok", out var okv) && okv is true;
             if (ok && Abandoned()) { tx.RollBack(); return Err("request timed out before commit — rolled back (not applied)"); }
-            if (ok) tx.Commit();
+            if (ok)
+            {
+                // Commit() returns RolledBack without throwing when an error-severity failure discards the
+                // transaction — report that as the failure it is, not as success.
+                TransactionStatus st;
+                try { st = tx.Commit(); } catch { st = TransactionStatus.RolledBack; }
+                if (st != TransactionStatus.Committed)
+                    return Err("write rolled back by Revit at commit — not applied");
+            }
             else tx.RollBack();
             return Json(result);
         }
@@ -223,12 +239,20 @@ public static partial class BridgeTools
                 tx.RollBack();
                 return Err("request timed out before commit — rolled back (not applied)");
             }
-            if (allOk) tx.Commit();
+            if (allOk)
+            {
+                // Same commit-status check as set_parameter: a Revit-side rollback at commit must not be
+                // reported as a successfully applied batch.
+                TransactionStatus st;
+                try { st = tx.Commit(); } catch { st = TransactionStatus.RolledBack; }
+                if (st != TransactionStatus.Committed)
+                    return Err("batch rolled back by Revit at commit — no edits applied");
+            }
             else tx.RollBack();
         }
         catch (Exception ex)
         {
-            tx.RollBack();
+            if (tx.GetStatus() == TransactionStatus.Started) tx.RollBack();
             return Err("batch failed (rolled back): " + ex.Message);
         }
 
@@ -359,20 +383,32 @@ public static partial class BridgeTools
 
         var (inGroup, groupName) = GroupInfo(doc, el);
 
+        // A grouped member's instance write only lands for the curated identity built-ins (Mark/Number,
+        // live-verified 2026-06-19) or a project/shared param ALREADY varying by group instance. Everything
+        // else Revit refuses or rolls back at commit — and the generic "write not verified" error gives the
+        // caller nothing to act on, so detect it up front and say which path applies. The vary flag is a
+        // one-way door, so the bridge never enables it itself.
+        if (inGroup && binding == "instance" && !ScheduleReader.IsInstanceIdentityBuiltin(pid))
+        {
+            bool varies = false;
+            try { varies = param.Definition is InternalDefinition idef && idef.VariesAcrossGroups; } catch { /* treat as not varying */ }
+            if (!varies)
+                return Fail(pid > 0
+                    ? $"parameter is on a member of group '{groupName}' and does not vary by group instance — enable 'vary by group instance' for it in Revit (or run the import through the Schedule Hub, which stages this), then retry"
+                    : $"built-in parameter on a member of group '{groupName}' — Revit only allows this write in Edit Group mode; use the Schedule Hub's Claude-Assist staged flow, not set_parameter");
+        }
+
         // Parse + set per storage type.
         bool setOk;
-        string newDisplayExpected;
         if (param.StorageType == StorageType.String)
         {
             setOk = param.Set(edit.Value);
-            newDisplayExpected = edit.Value;
         }
         else if (param.StorageType == StorageType.Integer)
         {
             if (!TryParseInteger(IsYesNo(param), edit.Value, out int iv))
                 return Fail($"unparseable integer value '{edit.Value}'");
             setOk = param.Set(iv);
-            newDisplayExpected = iv.ToString(System.Globalization.CultureInfo.InvariantCulture);
         }
         else // measurable double
         {
@@ -380,7 +416,6 @@ public static partial class BridgeTools
             if (!UnitFormatUtils.TryParse(doc.GetUnits(), new ForgeTypeId(spec), edit.Value, out double dv))
                 return Fail($"unparseable value '{edit.Value}' for this parameter's units");
             setOk = param.Set(dv);
-            newDisplayExpected = edit.Value;
         }
 
         if (!setOk)
@@ -394,7 +429,7 @@ public static partial class BridgeTools
             return Fail("write not verified — value did not take (rolled back)");
 
         var note = inGroup && binding == "instance"
-            ? $"instance parameter on group member '{groupName}' written directly"
+            ? $"instance parameter on group member '{groupName}' (identity built-in or varies by group instance)"
             : binding == "type"
                 ? $"type parameter — affects {instancesAffected} instance(s) of this type"
                 : "instance parameter";
@@ -476,17 +511,41 @@ public static partial class BridgeTools
         return null;
     }
 
+    /// <summary>
+    ///     PERF-01: how many instances a type write affects. This used to be
+    ///     <c>WhereElementIsNotElementType().Where(e =&gt; e.GetTypeId() == typeId).Count()</c> — the type match
+    ///     was a client-side LINQ predicate, so it materialised and inspected EVERY non-type element in the
+    ///     document (hundreds of thousands on a real project) inside the open write transaction, on the API
+    ///     thread, while the shim's request waiter counted down toward its abandonment check. It bought only a
+    ///     cosmetic <c>instancesAffected</c> field, and it was paid on every type-bound edit whether the caller
+    ///     read the field or not. Revit can do this server-side: an <see cref="ElementParameterFilter"/> on
+    ///     <c>ELEM_FAMILY_AND_TYPE_PARAM</c> pushes the comparison into the element iterator.
+    /// </summary>
     private static int CountInstancesOfType(Document doc, ElementId typeId)
     {
         if (typeId == ElementId.InvalidElementId) return 0;
         try
         {
+            var rule = ParameterFilterRuleFactory.CreateEqualsRule(
+                new ElementId(BuiltInParameter.ELEM_FAMILY_AND_TYPE_PARAM), typeId);
             return new FilteredElementCollector(doc)
                 .WhereElementIsNotElementType()
-                .Where(e => e.GetTypeId() == typeId)
-                .Count();
+                .WherePasses(new ElementParameterFilter(rule))
+                .GetElementCount();
         }
-        catch { return 0; }
+        catch
+        {
+            // Not every element category exposes ELEM_FAMILY_AND_TYPE_PARAM (system families, some sketch
+            // elements). Fall back to the exhaustive walk rather than reporting a wrong count.
+            try
+            {
+                return new FilteredElementCollector(doc)
+                    .WhereElementIsNotElementType()
+                    .Where(e => e.GetTypeId() == typeId)
+                    .Count();
+            }
+            catch { return 0; }
+        }
     }
 
     private static string CurrentDisplay(Parameter param) =>
@@ -543,7 +602,21 @@ public static partial class BridgeTools
         var gid = e.GroupId;
         if (gid == null || gid == ElementId.InvalidElementId) return (false, "");
         var g = doc.GetElement(gid);
-        return (true, g != null ? SafeName(g) : "Group");
+        if (g == null) return (true, "Group");
+        // The group TYPE name — what the Project Browser's Groups node and "Edit Group" show, and how
+        // users and the rest of the UI identify a group. Element.Name on the INSTANCE returns "Group 1",
+        // "Group 2", which tells nobody which group was touched.
+        try
+        {
+            var tid = g.GetTypeId();
+            if (tid != null && tid != ElementId.InvalidElementId && doc.GetElement(tid) is { } gt)
+            {
+                var tn = SafeName(gt);
+                if (!string.IsNullOrEmpty(tn)) return (true, tn);
+            }
+        }
+        catch { /* fall back to the instance name */ }
+        return (true, SafeName(g));
     }
 
     private static string SafeName(Element e)

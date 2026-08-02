@@ -84,6 +84,8 @@
         <Resource Include="Resources\Icons\Settings32.png"/>
         <Resource Include="Resources\Icons\RevisionNarrative16.png"/>
         <Resource Include="Resources\Icons\RevisionNarrative32.png"/>
+        <Resource Include="Resources\Icons\Aire16.png"/>
+        <Resource Include="Resources\Icons\Aire32.png"/>
     </ItemGroup>
 
     <ItemGroup>

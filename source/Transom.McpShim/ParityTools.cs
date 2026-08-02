@@ -68,9 +68,15 @@ internal static class ParityTools
         tools.Add(Tool(
             "get_current_view_elements",
             "Get all elements visible in the currently active view, with id, name, type, "
-            + "category, level, and location for each, plus summary counts by category. Useful "
-            + "for understanding what is on screen before selecting, tagging, or editing.",
-            NoArgsSchema()));
+            + "category, level, and location for each, plus summary counts and element ids by category. "
+            + "Useful for understanding what is on screen before selecting, tagging, or editing. Capped "
+            + "at max_elements (default 500); the response reports total_elements and a truncated flag.",
+            Schema(
+                new JsonObject
+                {
+                    ["max_elements"] = Prop("integer", "Maximum elements to return in full (optional, defaults to 500). "
+                        + "A populated plan view can hold tens of thousands."),
+                })));
 
         // -------------------------------------------------------------- families
 
@@ -139,8 +145,9 @@ internal static class ParityTools
             "color_splash",
             "Color elements in a category based on their parameter values — elements sharing a "
             + "value get the same color. Useful for visually auditing a model (e.g. color walls "
-            + "by \"Type Name\" or rooms by \"Department\"). Use list_category_parameters to "
-            + "discover valid parameter names first, and clear_colors to undo.",
+            + "by \"Type Name\" or rooms by \"Department\"). Writes graphic overrides into the "
+            + "ACTIVE VIEW only unless apply_to_similar_views is set. Use list_category_parameters "
+            + "to discover valid parameter names first, and clear_colors to undo.",
             Schema(
                 new JsonObject
                 {
@@ -148,17 +155,20 @@ internal static class ParityTools
                     ["parameter_name"] = Prop("string", "Name of the parameter to color by (e.g. \"Mark\", \"Type Name\")."),
                     ["use_gradient"] = Prop("boolean", "Use gradient coloring instead of distinct colors (defaults to false)."),
                     ["custom_colors"] = StringArray("Optional list of custom colors in hex format (e.g. [\"#FF0000\", \"#00FF00\"])."),
+                    ["apply_to_similar_views"] = Prop("boolean", "Also write the overrides into every other non-template view sharing the active view's ViewType — e.g. all floor plans, not just this one. Defaults to false. The response reports views_colored either way; undoing a true run needs the same flag on clear_colors."),
                 },
                 "category_name", "parameter_name")));
 
         tools.Add(Tool(
             "clear_colors",
             "Remove all color overrides previously applied to elements in a category (e.g. by "
-            + "color_splash), returning them to their default appearance.",
+            + "color_splash), returning them to their default appearance. Clears the ACTIVE VIEW "
+            + "only unless apply_to_similar_views is set.",
             Schema(
                 new JsonObject
                 {
                     ["category_name"] = Prop("string", "Name of the category to clear colors from (e.g. \"Walls\", \"Doors\")."),
+                    ["apply_to_similar_views"] = Prop("boolean", "Also clear every other non-template view sharing the active view's ViewType. Defaults to false. Set this to undo a color_splash that was run with the same flag (and note builds before v1.9.9 always painted every same-type view)."),
                 },
                 "category_name")));
 
@@ -272,9 +282,11 @@ internal static class ParityTools
 
         tools.Add(Tool(
             "modify_element",
-            "Modify one or more instance parameter values on a Revit element. Returns old and "
-            + "new values for confirmation. Use get_element_properties first to see which "
-            + "parameters exist and are writable.",
+            "Modify one or more parameter values on a Revit element. Resolves instance parameters first, "
+            + "then falls back to the element's TYPE — a type write affects every instance of that type, "
+            + "and each change reports which binding it used. Numeric values use wire units: lengths in mm, "
+            + "areas in m2, volumes in m3. Returns old and new values (same units) for confirmation. Use "
+            + "get_element_properties first to see which parameters exist and are writable.",
             Schema(
                 new JsonObject
                 {
@@ -348,7 +360,8 @@ internal static class ParityTools
                 new JsonObject
                 {
                     ["element_ids"] = IntArray("List of element ids to dimension."),
-                    ["dimension_type"] = Prop("string", "Type of dimension — \"linear\", \"aligned\", or \"angular\" (defaults to \"linear\")."),
+                    ["dimension_type"] = Prop("string", "Type of dimension — only \"linear\" is implemented (the default). "
+                        + "Aligned and angular dimensions are not supported by this tool."),
                 },
                 "element_ids")));
 
@@ -397,7 +410,10 @@ internal static class ParityTools
             Schema(
                 new JsonObject
                 {
-                    ["categories"] = StringArray("Categories to include, e.g. [\"OST_Walls\", \"OST_Floors\"] (optional, defaults to all categories)."),
+                    ["categories"] = StringArray("Categories to include, e.g. [\"OST_Walls\", \"OST_Floors\"]. "
+                        + "Optional — WITHOUT it only the six structural/enclosure categories are scanned "
+                        + "(walls, floors, roofs, ceilings, structural columns, structural framing). Pass the "
+                        + "categories explicitly for a takeoff that must cover doors, windows, casework, MEP, etc."),
                 })));
 
         tools.Add(Tool(
@@ -451,9 +467,11 @@ internal static class ParityTools
 
         tools.Add(Tool(
             "create_room",
-            "Create a room on a level in the Revit model. Rooms must be placed inside enclosed "
-            + "areas (bounded by walls or room separation lines); if no location is given, "
-            + "Revit auto-places the room. Location coordinates are in millimeters.",
+            "Create a room on a level in the Revit model. Give a location inside an enclosed area "
+            + "(bounded by walls or room separation lines) to place it. WITHOUT a location the room is "
+            + "created UNPLACED — no boundary, no area, listed under Unplaced in room schedules until "
+            + "someone places it; the response's `placed` field says which happened. Location "
+            + "coordinates are in millimeters.",
             Schema(
                 new JsonObject
                 {
@@ -499,6 +517,11 @@ internal static class ParityTools
                     ["view_type"] = Prop("string", "Type of view — \"floor_plan\", \"ceiling_plan\", \"section\", \"elevation\", or \"3d\"."),
                     ["name"] = Prop("string", "Display name for the new view."),
                     ["level_name"] = Prop("string", "Required for floor_plan and ceiling_plan — the level to show."),
+                    ["marker_position"] = Point("Elevation views only: where to place the elevation marker in "
+                        + "the host plan, in millimeters (optional, defaults to the project origin — which for "
+                        + "most projects is empty space, so pass a point inside the building)."),
+                    ["direction_index"] = Prop("integer", "Elevation views only: which way the elevation faces — "
+                        + "0 north, 1 east, 2 south, 3 west (optional, defaults to 0)."),
                     ["section_box"] = Schema(
                         new JsonObject
                         {
@@ -530,7 +553,9 @@ internal static class ParityTools
             "tag_elements",
             "Tag specific elements with annotation symbols in a view. Tags display element "
             + "properties like type name, mark, or room name/number, and work with walls, "
-            + "doors, windows, rooms, and other taggable categories. Offset is in millimeters.",
+            + "doors, windows, rooms, and other taggable categories. Offset is in millimeters. In "
+            + "elevation/section views tags anchor at the element's bounding-box centre (not its base) "
+            + "and offset.z moves them vertically on screen.",
             Schema(
                 new JsonObject
                 {
@@ -539,7 +564,8 @@ internal static class ParityTools
                     ["tag_type_name"] = Prop("string", "Tag family type name (optional, auto-detects an appropriate tag)."),
                     ["add_leader"] = Prop("boolean", "Show a leader line from the tag to the element (defaults to false)."),
                     ["orientation"] = Prop("string", "Tag orientation — \"horizontal\" or \"vertical\" (defaults to \"horizontal\")."),
-                    ["offset"] = Point2D("Tag offset from the element center in millimeters (optional)."),
+                    ["offset"] = Offset3D("Tag offset from the element anchor in millimeters (optional). "
+                                          + "In elevations/sections use z for the on-screen vertical."),
                 },
                 "element_ids")));
 
@@ -609,16 +635,18 @@ internal static class ParityTools
 
         tools.Add(Tool(
             "create_mep_system",
-            "Create a mechanical or piping system and optionally add duct/pipe elements to it. "
-            + "Groups MEP elements into a named system for organization and analysis.",
+            "Create a mechanical or piping system from existing duct/pipe elements. Groups MEP "
+            + "elements into a named system for organization and analysis. Create the ducts or pipes "
+            + "first — the system is built from their connectors and cannot be created empty.",
             Schema(
                 new JsonObject
                 {
                     ["system_type"] = Prop("string", "\"mechanical\" or \"piping\"."),
                     ["system_name"] = Prop("string", "Display name for the system (e.g. \"Level 1 Supply Air\")."),
-                    ["element_ids"] = IntArray("Optional list of duct/pipe element ids to add to the system."),
+                    ["element_ids"] = IntArray("Duct/pipe element ids to group into the system. Required — a "
+                        + "system is built from its members' connectors, so create the ducts/pipes first."),
                 },
-                "system_type", "system_name")));
+                "system_type", "system_name", "element_ids")));
 
         // ------------------------------------------------------------ parameters
 
@@ -716,6 +744,55 @@ internal static class ParityTools
                     ["max_clashes"] = Prop("integer", "Maximum clashes to return (defaults to 200)."),
                 })));
 
+        // ------------------------------------------------- AIRE (AI Render Enhancer)
+
+        tools.Add(Tool(
+            "aire_enhance",
+            "AIRE (AI Render Enhancer): start a background batch that enhances architectural render "
+            + "images through OpenAI's image-edit API (photoreal grass/landscaping/lighting/concrete while "
+            + "preserving geometry and composition). SPENDS REAL OpenAI API CREDIT on the user's saved "
+            + "key — always tell the user the estimated_cost_usd from the response. Needs no open document. "
+            + "Returns a job_id IMMEDIATELY (each image can take minutes); poll aire_job_status for progress. "
+            + "Outputs are written as <name>_enhanced.png plus a CSV log under <output_folder>\\logs. "
+            + "The API key must already be saved in the AIRE window (Transom ribbon) — there is no key argument.",
+            Schema(
+                new JsonObject
+                {
+                    ["images"] = StringArray("Full paths of images to enhance (.png/.jpg/.jpeg/.webp). "
+                        + "Optional if input_folder is given; files ending in _enhanced are skipped."),
+                    ["input_folder"] = Prop("string", "Folder to scan (non-recursive) for supported images (optional)."),
+                    ["output_folder"] = Prop("string", "Folder for the *_enhanced.png outputs and the logs\\ CSV (created if missing)."),
+                    ["prompt"] = Prop("string", "Enhancement prompt applied to every image (optional; defaults to "
+                        + "AIRE's architectural-render prompt that preserves geometry/composition)."),
+                    ["model"] = Prop("string", "OpenAI image model: gpt-image-2 (default), gpt-image-1.5, gpt-image-1, or gpt-image-1-mini."),
+                    ["size"] = Prop("string", "Output resolution (defaults to \"auto\"). gpt-image-2 also allows 3840x2160, 2160x3840, "
+                        + "2048x2048, 2048x1152; all models allow 1536x1024, 1024x1536, 1024x1024, auto."),
+                    ["quality"] = Prop("string", "high (default), medium, low, or auto."),
+                },
+                "output_folder")));
+
+        tools.Add(Tool(
+            "aire_job_status",
+            "Progress of an AIRE enhancement job started with aire_enhance: status "
+            + "(queued/running/completed/failed), done/total counts, current file, per-image results, "
+            + "estimated cost so far, and the CSV log path when finished. Poll this instead of waiting — "
+            + "a 4K image can take minutes.",
+            Schema(
+                new JsonObject
+                {
+                    ["job_id"] = Prop("string", "Job id from aire_enhance (optional; defaults to the most recent job)."),
+                })));
+
+        tools.Add(Tool(
+            "aire_cancel_job",
+            "Cancel a running AIRE enhancement job. The image currently being generated may still "
+            + "complete and be billed; subsequent images are skipped. Poll aire_job_status to confirm.",
+            Schema(
+                new JsonObject
+                {
+                    ["job_id"] = Prop("string", "Job id from aire_enhance (optional; defaults to the most recent job)."),
+                })));
+
         // Tool() returns null for names on the Disabled list; JsonArray stores those as JSON
         // nulls, so strip them before the array goes out in tools/list.
         for (int i = tools.Count - 1; i >= 0; i--)
@@ -802,6 +879,22 @@ internal static class ParityTools
         {
             ["x"] = Prop("number", "X coordinate in millimeters."),
             ["y"] = Prop("number", "Y coordinate in millimeters."),
+        },
+        ["required"] = new JsonArray { "x", "y" },
+        ["additionalProperties"] = false,
+    };
+
+    /// <summary>Offset with an OPTIONAL z: {x, y, z?} in MILLIMETERS. z is the on-screen vertical in
+    /// elevation/section views, where an x/y-only offset cannot move a tag up or down at all.</summary>
+    private static JsonObject Offset3D(string description) => new()
+    {
+        ["type"] = "object",
+        ["description"] = description,
+        ["properties"] = new JsonObject
+        {
+            ["x"] = Prop("number", "X offset in millimeters."),
+            ["y"] = Prop("number", "Y offset in millimeters."),
+            ["z"] = Prop("number", "Z offset in millimeters — the vertical in elevations/sections (optional, defaults to 0)."),
         },
         ["required"] = new JsonArray { "x", "y" },
         ["additionalProperties"] = false,

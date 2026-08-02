@@ -47,6 +47,9 @@ public sealed class ExcelReader
         {
             Path = path,
             SourceModelGuid = root.GetProperty("sourceModel").GetProperty("guid").GetString() ?? "",
+            // Optional — workbooks exported before the path tiebreaker existed have no "path" key.
+            SourceModelPath = root.GetProperty("sourceModel").TryGetProperty("path", out var smp)
+                ? smp.GetString() ?? "" : "",
         };
 
         foreach (var sheetMeta in root.GetProperty("sheets").EnumerateArray())

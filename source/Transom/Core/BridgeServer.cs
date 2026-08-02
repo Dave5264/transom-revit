@@ -39,9 +39,12 @@ public sealed class BridgeServer
     ///     and returns the response JSON. For <c>GET /status</c> the body sent to dispatch is
     ///     <c>{"tool":"status","args":{}}</c> so the Revit side can answer with live document info.
     /// </summary>
-    public void Start(int port, Func<string, string> dispatch, string? token = null)
+    public void Start(int port, Func<string, string> dispatch, string token)
     {
         if (dispatch == null) throw new ArgumentNullException(nameof(dispatch));
+        // The token IS the authorization boundary (loopback is not — any local process or cross-origin
+        // POST reaches 127.0.0.1). Required here so no future call site can silently start an open bridge.
+        if (string.IsNullOrEmpty(token)) throw new ArgumentException("bridge token is required", nameof(token));
         lock (_gate)
         {
             if (_running) return;
@@ -183,8 +186,13 @@ public sealed class BridgeServer
                 else if (method == "POST" && path == "/call")
                 {
                     // 3) Writes require the shared session token (read from a per-user file by the shim).
-                    if (!string.IsNullOrEmpty(_token) &&
-                        (!headers.TryGetValue("x-transom-token", out var tok) || !FixedEquals(tok, _token!)))
+                    // Fail CLOSED: no configured token = no writes, never "no token = no auth required".
+                    if (string.IsNullOrEmpty(_token))
+                    {
+                        WriteResponse(stream, 503, "Service Unavailable", "{\"ok\":false,\"error\":\"bridge not configured (no token)\"}");
+                        return;
+                    }
+                    if (!headers.TryGetValue("x-transom-token", out var tok) || !FixedEquals(tok, _token))
                     {
                         WriteResponse(stream, 401, "Unauthorized", "{\"ok\":false,\"error\":\"missing or invalid token\"}");
                         return;

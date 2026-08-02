@@ -15,7 +15,17 @@ public sealed partial class TransomView
         InitializeComponent();
         ApplyTheme();
         Instance = this;
-        Closed += (_, _) => Instance = null;
+        Closed += (_, _) => { Instance = null; viewModel.Detach(); };
+
+        // UI-08: with two Revit sessions open — the case the project switcher exists to serve — the taskbar and
+        // Alt-Tab showed two identical "Transom" entries with no way to tell which document each was editing.
+        // Track SelectedProject rather than binding Title, so an empty project name falls back cleanly to the
+        // bare product name instead of rendering a dangling em-dash.
+        UpdateTitle(viewModel);
+        viewModel.PropertyChanged += (_, args) =>
+        {
+            if (args.PropertyName == nameof(TransomViewModel.SelectedProject)) UpdateTitle(viewModel);
+        };
 
         // Show a modal resolver for each type-param conflict during import preview.
         viewModel.ConflictResolver = conflict =>
@@ -181,6 +191,50 @@ public sealed partial class TransomView
     private void LegendMoreInfo_Click(object sender, System.Windows.RoutedEventArgs e)
     {
         new ExportLegendDialog { Owner = this }.ShowDialog();
+    }
+
+    /// <summary>UI-08: "Transom — &lt;project&gt;", or plain "Transom" when no document is open.</summary>
+    private void UpdateTitle(TransomViewModel vm) =>
+        Title = string.IsNullOrWhiteSpace(vm.SelectedProject) ? "Transom" : "Transom — " + vm.SelectedProject;
+
+    /// <summary>UI-11: the bridge port's Apply. The box is display-only until this runs, so tabbing out of the
+    /// field can no longer restart a live bridge. Validates the range (a failed binding conversion used to be
+    /// swallowed silently) and confirms before disturbing a running Claude session.</summary>
+    private void BridgePortApply_Click(object sender, System.Windows.RoutedEventArgs e)
+    {
+        if (DataContext is not TransomViewModel vm) return;
+
+        var text = (BridgePortBox.Text ?? "").Trim();
+        if (!int.TryParse(text, System.Globalization.NumberStyles.None,
+                System.Globalization.CultureInfo.InvariantCulture, out var port)
+            || port < 1024 || port > 65535)
+        {
+            BridgePortError.Text = "Enter a whole number between 1024 and 65535. " +
+                                   "Ports below 1024 need administrator rights, which Transom deliberately never asks for.";
+            BridgePortError.Visibility = System.Windows.Visibility.Visible;
+            BridgePortBox.Focus();
+            BridgePortBox.SelectAll();
+            return;
+        }
+
+        BridgePortError.Visibility = System.Windows.Visibility.Collapsed;
+        if (port == vm.BridgePort) return;   // no-op edit — never restart the bridge for it
+
+        if (vm.IsClaudeAssistEnabled &&
+            System.Windows.MessageBox.Show(this,
+                $"Change the bridge port to {port}?\n\n" +
+                "Claude Assist is on, so this restarts the running bridge and rewrites the Claude Code " +
+                "registration. Claude Code loads MCP servers only at startup, so you'll need to restart it " +
+                "afterwards before the tools work again.",
+                "Transom — Bridge port",
+                System.Windows.MessageBoxButton.OKCancel,
+                System.Windows.MessageBoxImage.Warning) != System.Windows.MessageBoxResult.OK)
+        {
+            BridgePortBox.Text = vm.BridgePort.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            return;
+        }
+
+        vm.BridgePort = port;   // OnBridgePortChanged persists, re-registers and restarts
     }
 
     /// <summary>Matches Revit's UI theme — swaps the palette brushes to dark when Revit is dark.</summary>

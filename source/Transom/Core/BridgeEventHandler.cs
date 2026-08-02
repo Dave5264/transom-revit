@@ -21,7 +21,10 @@ public sealed class BridgeEventHandler : IExternalEventHandler
     private readonly object _flightGate = new();
     private readonly ManualResetEventSlim _done = new(false);
 
-    private string _pendingRequest = "";
+    // volatile: written on the caller's thread under _flightGate, read on Revit's API thread in Execute
+    // with no lock. _result is safely published by _done.Set()/Wait(), but the request payload had no
+    // equivalent barrier. The ticket check makes a stale read benign in practice; this closes the hole.
+    private volatile string _pendingRequest = "";
     private string _result = "";
     private int _ticket;                  // incremented per request (under _flightGate)
     private volatile int _inFlight = -1;  // current ticket Execute may publish; -1 = none (abandoned/idle)

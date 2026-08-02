@@ -131,6 +131,9 @@ public sealed class ScheduleTable
     public int Category;
     public string SourceModelGuid = "";
     public string SourceModelTitle = "";
+    /// <summary>Stable path of the exporting model (central path when workshared) — the cross-model
+    /// tiebreaker for models that share a CreationGUID via Save-As. See <see cref="DocUtil.StablePath"/>.</summary>
+    public string SourceModelPath = "";
     public bool RoundTrippable = true;
 
     /// <summary>Whether Claude-assist is enabled at export time. Drives built-in grouped cells: yellow (enabled)

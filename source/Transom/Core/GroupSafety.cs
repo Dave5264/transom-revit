@@ -78,9 +78,21 @@ public sealed class GroupSafetyResult
 }
 
 /// <summary>
-///   Shared detector for model groups the grouped-edit "group dance" (import option 3, Claude's Edit Group pass) cannot faithfully
-///   reproduce. Owner-validated criteria (the dance was over-refusing mirror-only and bystander-nested groups):
-///   the REAL breakers that gate the dance are
+///   <para>
+///   <b>VOCABULARY WARNING (DEAD-01).</b> This file talks throughout about the "group dance" — an in-process
+///   ungroup / edit / regroup manoeuvre that <b>no longer exists</b>. It was removed; there is no
+///   <c>GroupDanceApplier</c> and no code path performs it. What survives is this <i>detector</i>, and it is
+///   very much live — <see cref="ScheduleReader"/> calls it to decide a grouped cell's EXPORT COLOUR (yellow vs
+///   red), and <see cref="Importer"/> calls it to decide whether a column may be offered option 3. So read
+///   "danceable" as <b>"a Claude-Assist Edit Group pass can faithfully reproduce this group"</b>, and
+///   "the dance" as that pass. The criteria below were validated against the real manoeuvre and still describe
+///   what breaks a group; only the mechanism's name is stale. Names like
+///   <see cref="GroupSafetyResult.IsDanceGateBroken"/> are kept rather than renamed because they are referenced
+///   from <see cref="ScheduleReader"/>, <see cref="Importer"/> and <c>GroupModels</c>.
+///   </para>
+///   Shared detector for model groups the grouped-edit pass (import option 3, Claude's Edit Group pass) cannot faithfully
+///   reproduce. Owner-validated criteria (it was over-refusing mirror-only and bystander-nested groups):
+///   the REAL breakers that gate it are
 ///     * LEVEL-ANCHORED "broken families" — a member is hosted on a Level or is sketch-based (Ceiling/Floor/
 ///       Roof and their &lt;Sketch&gt;) or its work plane is a Level. Its position resolves against the level,
 ///       not the group frame, so a sibling repoint flings it (a level-hosted "CW_Closet Shelf and Pole" jumped).
@@ -100,7 +112,8 @@ public sealed class GroupSafetyResult
 /// </summary>
 public static class GroupSafety
 {
-    /// <summary>Analyze every top-level instance of a model-group type and report whether it is danceable.</summary>
+    /// <summary>Analyze every top-level instance of a model-group type and report whether a Claude-Assist
+    /// Edit Group pass can faithfully reproduce it ("danceable" — see the vocabulary warning above).</summary>
     public static GroupSafetyResult AnalyzeType(Document doc, ElementId groupTypeId)
     {
         var r = new GroupSafetyResult();

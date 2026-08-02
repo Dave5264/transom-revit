@@ -16,25 +16,29 @@ public static class DiagnosticsWriter
     public static void Write(ImportWorkbook wb, List<CellDiagnostic> diags, string path)
     {
         var book = new XSSFWorkbook();
-        var blue = Fill(book, 189, 215, 238);
         var yellow = Fill(book, 255, 235, 156);
         var red = Fill(book, 255, 199, 199);
+        var grey = Fill(book, 217, 217, 217);
         var header = HeaderStyle(book);
 
+        // The legend matches the severities the importer ACTUALLY emits: red, yellow, grey. It previously
+        // advertised a "blue = skipped" that nothing ever sets, and had no grey row — so read-only cells
+        // (deliberately distinguished by the importer, and taught as a separate colour by the export
+        // legend) were painted the same red as genuine write failures.
         var legend = book.CreateSheet("Legend");
         legend.CreateRow(0).CreateCell(0).SetCellValue("Transom import report — flagged cells");
-        var lb = legend.CreateRow(2);
-        lb.CreateCell(0).SetCellValue("skipped");
-        lb.GetCell(0).CellStyle = blue;
-        var ly = legend.CreateRow(3);
+        var ly = legend.CreateRow(2);
         ly.CreateCell(0).SetCellValue("changed since export");
         ly.GetCell(0).CellStyle = yellow;
-        var lr = legend.CreateRow(4);
+        var lr = legend.CreateRow(3);
         lr.CreateCell(0).SetCellValue("unable to write");
         lr.GetCell(0).CellStyle = red;
+        var lg = legend.CreateRow(4);
+        lg.CreateCell(0).SetCellValue("read-only — Revit computes it or the family/type drives it");
+        lg.GetCell(0).CellStyle = grey;
         legend.SetColumnWidth(0, 40 * 256);
 
-        ICellStyle Color(string sev) => sev == "blue" ? blue : sev == "yellow" ? yellow : red;
+        ICellStyle Color(string sev) => sev == "grey" ? grey : sev == "yellow" ? yellow : red;
 
         var usedNames = new HashSet<string> { "Legend", "Issues" };
         foreach (var sheet in wb.Sheets)

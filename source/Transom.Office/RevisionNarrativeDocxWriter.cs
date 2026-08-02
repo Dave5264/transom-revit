@@ -202,11 +202,14 @@ public static class RevisionNarrativeDocxWriter
         return null;
     }
 
+    // The ids come from a USER-SUPPLIED .docx (the previous-narrative workflow), so a malformed or
+    // absurdly long digit run must skip, not overflow int.Parse and kill the whole narrative.
     private static int MaxNumId(string numXml)
     {
         int max = 0;
         foreach (Match m in Regex.Matches(numXml, "<w:num w:numId=\"(\\d+)\""))
-            max = Math.Max(max, int.Parse(m.Groups[1].Value));
+            if (int.TryParse(m.Groups[1].Value, out int id))
+                max = Math.Max(max, id);
         return max;
     }
 
@@ -214,7 +217,8 @@ public static class RevisionNarrativeDocxWriter
     {
         int max = -1;
         foreach (Match m in Regex.Matches(numXml, "<w:abstractNum [^>]*?w:abstractNumId=\"(\\d+)\""))
-            max = Math.Max(max, int.Parse(m.Groups[1].Value));
+            if (int.TryParse(m.Groups[1].Value, out int id))
+                max = Math.Max(max, id);
         return max;
     }
 
@@ -225,6 +229,9 @@ public static class RevisionNarrativeDocxWriter
                   "<w:lvlJc w:val=\"left\"/><w:pPr><w:ind w:left=\"720\" w:hanging=\"360\"/></w:pPr></w:lvl></w:abstractNum>";
         int idx = numXml.IndexOf("<w:num ", StringComparison.Ordinal);
         if (idx < 0) idx = numXml.LastIndexOf("</w:numbering>", StringComparison.Ordinal);
+        // A minimal/self-closed numbering.xml (no <w:num>, no closing tag) has no insertion point —
+        // degrade to unnumbered output instead of throwing on Substring(0, -1).
+        if (idx < 0) return numXml;
         return numXml.Substring(0, idx) + abs + numXml.Substring(idx);
     }
 

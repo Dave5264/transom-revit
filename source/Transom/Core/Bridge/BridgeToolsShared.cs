@@ -66,12 +66,25 @@ public static partial class BridgeTools
 
     /// <summary>Reads an array of element ids (numbers or numeric strings) into ElementIds.</summary>
     internal static List<ElementId> IdListArg(JsonElement args, string prop)
+        => IdListArg(args, prop, out _);
+
+    /// <summary>
+    ///     Reads an array of element ids, reporting how many entries could NOT be parsed. Callers must not
+    ///     ignore <paramref name="dropped"/>: silently discarding an entry means a destructive tool acts on
+    ///     fewer elements than the caller asked for and still reports success (e.g. delete_elements with
+    ///     [123, "124", null, 126] deleting three and saying so, with nothing naming the fourth).
+    /// </summary>
+    internal static List<ElementId> IdListArg(JsonElement args, string prop, out int dropped)
     {
         var ids = new List<ElementId>();
+        dropped = 0;
         if (args.ValueKind == JsonValueKind.Object && args.TryGetProperty(prop, out var arr)
             && arr.ValueKind == JsonValueKind.Array)
             foreach (var el in arr.EnumerateArray())
+            {
                 if (TryGetLong(el, out var id)) ids.Add(new ElementId(id));
+                else dropped++;
+            }
         return ids;
     }
 
@@ -163,6 +176,20 @@ public static partial class BridgeTools
     ///     committing, and any exception rolls back and becomes Err. This is the ONLY transaction wrapper the
     ///     parity tools should use.
     /// </summary>
+    /// <summary>True when a tool response's TOP-LEVEL "ok" is true. Unparseable or missing ⇒ false
+    /// (fail closed: an envelope we can't read must not be treated as a success worth committing).</summary>
+    private static bool ResponseIsOk(string responseJson)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(responseJson);
+            return doc.RootElement.ValueKind == JsonValueKind.Object
+                   && doc.RootElement.TryGetProperty("ok", out var okEl)
+                   && okEl.ValueKind == JsonValueKind.True;
+        }
+        catch { return false; }
+    }
+
     internal static string InTransaction(Document doc, string name, Func<string> body)
     {
         using var tx = new Transaction(doc, name);
@@ -174,7 +201,13 @@ public static partial class BridgeTools
         try
         {
             var result = body();
-            bool ok = !result.Contains("\"ok\":false");
+            // Parse the envelope's ok field rather than substring-matching the serialized text. The old
+            // `!result.Contains("\"ok\":false")` was correct only because JsonOpts happens to set
+            // WriteIndented = false — flipping that to true while debugging a payload would emit
+            // `"ok": false` (with a space), the check would never match, and EVERY failed write would
+            // COMMIT instead of rolling back. It also misfired the other way for any batch tool that
+            // nested a per-item `"ok":false` inside a success envelope.
+            bool ok = ResponseIsOk(result);
             // Roll back a write whose waiter already timed out — committing now would be a silent change the
             // client was told didn't happen (and a retry would double-apply).
             if (ok && Abandoned())
@@ -182,7 +215,17 @@ public static partial class BridgeTools
                 if (tx.GetStatus() == TransactionStatus.Started) tx.RollBack();
                 return Err("request timed out before commit — rolled back (not applied)");
             }
-            if (ok && tx.GetStatus() == TransactionStatus.Started) tx.Commit();
+            if (ok && tx.GetStatus() == TransactionStatus.Started)
+            {
+                // Commit() returns RolledBack WITHOUT throwing when an error-severity failure discards
+                // the transaction (VERIFIED-LIVE, docs/design-notes/revit-api-research-notes.md) — the
+                // preprocessor above triggers exactly that, so an unchecked commit reports a wholly
+                // discarded write as success. Don't touch element handles here: they die with the rollback.
+                TransactionStatus st;
+                try { st = tx.Commit(); } catch { st = TransactionStatus.RolledBack; }
+                if (st != TransactionStatus.Committed)
+                    return Err("Revit rolled back the transaction at commit (error-severity failure) — no changes were applied");
+            }
             else if (tx.GetStatus() == TransactionStatus.Started) tx.RollBack();
             return result;
         }

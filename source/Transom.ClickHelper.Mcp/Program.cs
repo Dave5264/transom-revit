@@ -54,10 +54,24 @@ internal static class Program
 
             JsonNode? response;
             try { response = HandleMessage(line); }
-            catch (Exception ex) { Log($"Error handling message: {ex.Message}"); response = null; }
+            // A request WITH an id must always get a reply — swallowing the exception leaves the client
+            // waiting on that id until its own timeout, with only a stderr line to explain it.
+            catch (Exception ex) { Log($"Error handling message: {ex.Message}"); response = ErrorReplyFor(line, ex); }
 
             if (response is not null) WriteMessage(stdout, response);
         }
+    }
+
+    /// <summary>Best-effort error reply for a message that threw during dispatch: carries the request's id
+    /// when one can still be parsed from the raw line, else null (a notification gets no reply).</summary>
+    private static JsonNode? ErrorReplyFor(string body, Exception ex)
+    {
+        try
+        {
+            var id = (JsonNode.Parse(body) as JsonObject)?["id"];
+            return id is null ? null : Error(id, -32603, $"Internal error: {ex.Message}");
+        }
+        catch { return null; }
     }
 
     // ----------------------------------------------------------------- dispatch
@@ -70,7 +84,7 @@ internal static class Program
 
         if (root is not JsonObject obj) return Error(null, -32600, "Invalid Request");
 
-        string? method = obj["method"]?.GetValue<string>();
+        string? method = obj["method"] is JsonValue mv && mv.TryGetValue<string>(out var ms) ? ms : null;
         JsonNode? id = obj["id"];
         bool isNotification = id is null;
 
@@ -155,7 +169,13 @@ internal static class Program
         "COORDINATES: revit_click_xy / revit_keys / revit_type use ABSOLUTE SCREEN pixels. Do not hardcode " +
         "positions — the Hub and dialogs open at non-deterministic spots and stale coords miss SILENTLY. " +
         "Get live coords from revit_find (centerX/centerY); prefer revit_click_by_id (AutomationId) when a " +
-        "control is invokable.\n\n" +
+        "control is invokable.\n" +
+        "  EXCEPTION — THE TRANSOM HUB: its tab CONTENT is NOT exposed to UI Automation (only ~18 " +
+        "window-chrome controls are), so revit_find and revit_click_by_id CANNOT reach its tabs, schedule " +
+        "list, filter box, text fields or buttons. Inside the Hub, read coordinates off a fresh " +
+        "revit_screenshot instead. Re-screenshot after EVERY open: the Hub centres itself on the MONITOR " +
+        "work area, not on Revit's window, so with Revit tiled to ~2/3 it sits off-centre and can overhang " +
+        "Revit's right edge — coords reused from a previous open miss silently.\n\n" +
         "LOCATING A MEMBER: override its colour via the API, then revit_screenshot(screen=true) and click " +
         "the highlight. A SELECTED group shows the override as the INVERSE colour — deselect to confirm the " +
         "true colour.\n\n" +
@@ -166,6 +186,17 @@ internal static class Program
         "the only way to set them; revit_scroll the parameter into view first.\n\n" +
         "DIALOGS are SEPARATE top-level windows the main-window tools can't see: revit_list_dialogs to read " +
         "title/text/buttons, revit_click_dialog to click one (omit the button to safe-dismiss).\n\n" +
+        "NO RIGHT-CLICK, AND POPUPS ARE UNOBSERVABLE — don't burn turns here:\n" +
+        "  - There is NO right-click tool. revit_click_xy is LEFT-click only and SILENTLY IGNORES a 'button' " +
+        "argument, so an attempted right-click quietly lands as a LEFT click — which may tick a checkbox or " +
+        "select a row and make it look like the menu failed to open. Context menus cannot be opened.\n" +
+        "  - Transient popups (context menus, combo-box dropdowns) also cannot be SEEN: screen=true brings " +
+        "Revit forward, which DISMISSES the popup before the capture; the default PrintWindow grabs only the " +
+        "main frame, which the popup is not part of; and revit_find is rooted on the main window. So a popup " +
+        "is invisible to every tool here.\n" +
+        "  - Therefore: reach the same outcome another way (a ribbon/dialog button, or the Revit API), and " +
+        "confirm the EFFECT through a side channel — an API read-back, the clipboard, or a file the action " +
+        "writes. Do not report 'the menu is broken' from these tools alone; you cannot observe it either way.\n\n" +
         "GROUP EDITS CHANGE THE DEFINITION: a built-in edited inside Edit Group is set UNIFORMLY for every " +
         "instance of that group type. Per-instance divergent built-ins aren't possible while grouped (use " +
         "an instance shared parameter / import option 2b instead).\n\n" +
@@ -402,7 +433,10 @@ internal static class Program
     private static List<string> BuildTileArgs(JsonObject a)
     {
         var args = new List<string> { "tile" };
-        if (a["revitSide"]?.GetValue<string>() is { } side && (side == "left" || side == "right"))
+        // OptString, not GetValue<string>(): a wrong-typed optional arg (revitSide: 0) threw
+        // InvalidOperationException past the ToolArgException guard, and RunLoop's catch-all then wrote
+        // NO reply at all — hanging a request that carried an id.
+        if (OptString(a, "revitSide") is { } side && (side == "left" || side == "right"))
         { args.Add("--revit-side"); args.Add(side); }
         if (a["revitFrac"] is { } fracNode && double.TryParse(fracNode.ToString(),
                 System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var frac))
@@ -433,11 +467,19 @@ internal static class Program
     private static List<string> BuildClickDialogArgs(JsonObject a)
     {
         var args = new List<string> { "click-dialog" };
-        if (a["button"]?.GetValue<string>() is { Length: > 0 } b) args.Add(b);
+        if (OptString(a, "button") is { Length: > 0 } b) args.Add(b);
         return args;
     }
 
     private static bool HasNum(JsonObject a, string key) => a[key]?.GetValueKind() == JsonValueKind.Number;
+
+    /// <summary>An OPTIONAL string argument: null when absent or not a string. Never throws — a wrong-typed
+    /// optional arg must not escape as an unhandled exception (that path writes no reply at all).</summary>
+    private static string? OptString(JsonObject a, string key)
+    {
+        var v = a[key];
+        return v is not null && v.GetValueKind() == JsonValueKind.String ? v.GetValue<string>() : null;
+    }
 
     private static string ReqString(JsonObject a, string key)
     {
@@ -503,9 +545,23 @@ internal static class Program
         {
             using var p = Process.Start(psi);
             if (p is null) return (-1, "", "failed to start helper process");
-            string so = p.StandardOutput.ReadToEnd();
-            string se = p.StandardError.ReadToEnd();
-            if (!p.WaitForExit(30000)) { try { p.Kill(true); } catch { } return (-1, so, "helper timed out"); }
+            // ASYNC reads + wait-then-collect. ReadToEnd() returns only at EOF (i.e. when the child exits),
+            // so reading synchronously first made the 30s WaitForExit unreachable: a helper hung inside a
+            // cross-process UI-Automation COM call blocked here forever and, because RunLoop is
+            // single-threaded, stalled EVERY later request for the session. Reading both streams
+            // concurrently also avoids the classic stdout/stderr pipe-buffer deadlock.
+            var soTask = p.StandardOutput.ReadToEndAsync();
+            var seTask = p.StandardError.ReadToEndAsync();
+            if (!p.WaitForExit(30000))
+            {
+                try { p.Kill(true); } catch { /* already gone */ }
+                // Kill closes the pipes, so the readers complete; bound the wait anyway.
+                try { Task.WaitAll(new Task[] { soTask, seTask }, 2000); } catch { /* ignore */ }
+                return (-1, soTask.IsCompletedSuccessfully ? soTask.Result : "", "helper timed out");
+            }
+            try { Task.WaitAll(new Task[] { soTask, seTask }, 5000); } catch { /* ignore */ }
+            string so = soTask.IsCompletedSuccessfully ? soTask.Result : "";
+            string se = seTask.IsCompletedSuccessfully ? seTask.Result : "";
             return (p.ExitCode, so, se);
         }
         catch (Exception ex) { return (-1, "", ex.Message); }

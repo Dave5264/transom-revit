@@ -52,12 +52,73 @@ public class StartupCommand : ExternalCommand
             exportEvent, exportHandler, importEvent, importHandler, loadEvent, loadHandler);
         var view = new TransomView(viewModel);
         new WindowInteropHelper(view) { Owner = app.MainWindowHandle };
+        // WindowInteropHelper.Owner sets the native owner HWND (so the Hub stays above Revit and minimises
+        // with it) but NOT WPF's Window.Owner — and WindowStartupLocation="CenterOwner" is implemented
+        // against Window.Owner. With it null WPF silently fell back to centring on the PRIMARY screen, so
+        // on a multi-monitor setup the Hub opened on a different display from Revit. Centre it on Revit's
+        // window explicitly.
+        CenterOnRevit(view, app.MainWindowHandle);
         view.Show();
         // Zero documents (Settings is always-available): Export/Import are disabled, so land on the one
         // tab that works instead of a greyed Export page.
         if (projects.Count == 0) view.SelectSettingsTab();
         return view;
     }
+
+    /// <summary>
+    ///     Centres <paramref name="view"/> on Revit's main window and clamps it to that monitor's WORK
+    ///     AREA, so it can't open partly off-screen (the Hub asks for 880 DIP, which exceeds the usable
+    ///     height of a 1080p display at 150% scaling). Startup position only — the user can move/resize
+    ///     afterwards. Best-effort: any failure leaves WPF's own placement in charge.
+    /// </summary>
+    private static void CenterOnRevit(System.Windows.Window view, IntPtr revitHwnd)
+    {
+        try
+        {
+            if (revitHwnd == IntPtr.Zero) return;
+            var mon = MonitorFromWindow(revitHwnd, MONITOR_DEFAULTTONEAREST);
+            var mi = new MONITORINFO { cbSize = System.Runtime.InteropServices.Marshal.SizeOf<MONITORINFO>() };
+            if (!GetMonitorInfo(mon, ref mi)) return;
+
+            // Work area in physical pixels → DIP. 96 DPI per WPF's unit definition; the system scale is
+            // what Revit's own window is laid out against, which is the monitor we're centring on.
+            double scale = 1.0;
+            try
+            {
+                var dpi = System.Windows.Media.VisualTreeHelper.GetDpi(view);
+                if (dpi.DpiScaleX > 0) scale = dpi.DpiScaleX;
+            }
+            catch { /* keep 1.0 */ }
+
+            double waLeft = mi.rcWork.Left / scale, waTop = mi.rcWork.Top / scale;
+            double waW = (mi.rcWork.Right - mi.rcWork.Left) / scale;
+            double waH = (mi.rcWork.Bottom - mi.rcWork.Top) / scale;
+
+            // Clamp BEFORE centring: the Hub asks for 880 DIP, taller than a 1080p display's work area at
+            // 150% scaling, and an oversized centred window puts its footer (and Close button) off-screen.
+            if (view.Width > waW) view.Width = waW;
+            if (view.Height > waH) view.Height = waH;
+
+            view.WindowStartupLocation = System.Windows.WindowStartupLocation.Manual;
+            view.Left = waLeft + (waW - view.Width) / 2;
+            view.Top = waTop + (waH - view.Height) / 2;
+        }
+        catch { /* fall back to WPF's own placement */ }
+    }
+
+    private const uint MONITOR_DEFAULTTONEAREST = 2;
+
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+    private struct RECT { public int Left, Top, Right, Bottom; }
+
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+    private struct MONITORINFO { public int cbSize; public RECT rcMonitor; public RECT rcWork; public uint dwFlags; }
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern IntPtr MonitorFromWindow(IntPtr hwnd, uint dwFlags);
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern bool GetMonitorInfo(IntPtr hMonitor, ref MONITORINFO lpmi);
 
     /// <summary>Rebinds an already-open Hub to the current document state — called from the document
     /// opened/created/closed events (Application.RefreshOpenHub) so the window tracks documents live while

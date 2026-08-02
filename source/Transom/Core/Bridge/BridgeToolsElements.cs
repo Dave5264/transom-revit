@@ -96,7 +96,10 @@ public static partial class BridgeTools
                     .Select(l => (object?)new Dictionary<string, object?>
                     {
                         ["name"] = ElemName(l),
-                        ["elevation"] = Math.Round(l.Elevation, 2),
+                        // Suffixed keys, both units (same shape as list_levels) — the old bare "elevation"
+                        // emitted raw internal feet with nothing in the payload saying so.
+                        ["elevation_mm"] = Math.Round(FtToMm(l.Elevation), 1),
+                        ["elevation_feet"] = Math.Round(l.Elevation, 2),
                     })
                     .ToList();
             }
@@ -138,7 +141,7 @@ public static partial class BridgeTools
                             ["name"] = roomName, ["number"] = roomNumber,
                             ["level"] = levelName, ["is_placed"] = isPlaced,
                         };
-                        if (isPlaced) roomInfo["area"] = Math.Round(area, 2);
+                        if (isPlaced) roomInfo["area_sqm"] = Math.Round(area * SqFtToSqM, 2);   // ROOM_AREA is ft²
                         roomsInfo.Add(roomInfo);
                     }
                     catch { /* skip room */ }
@@ -149,13 +152,19 @@ public static partial class BridgeTools
             // ---- views and sheets ----
             int sheetsCount = 0, viewsCount = 0;
             int floorPlans = 0, elevations = 0, sections = 0, threeDViews = 0, schedules = 0;
+            int viewBreakdownOther = 0;
             try
             {
                 sheetsCount = new FilteredElementCollector(doc).OfCategory(BuiltInCategory.OST_Sheets)
                     .WhereElementIsNotElementType().GetElementCount();
+                int otherViews = 0;
                 foreach (var v in new FilteredElementCollector(doc).OfClass(typeof(View)).Cast<View>())
                 {
-                    if (v.IsTemplate || v.ViewType == ViewType.Internal || v.ViewType == ViewType.ProjectBrowser)
+                    // ViewSheet derives from View, so sheets came through this collector and were counted
+                    // into total_views AS WELL AS into sheets_count — a caller adding the two double-counted
+                    // every sheet. Sheets are reported separately; they are not views here.
+                    if (v.IsTemplate || v.ViewType == ViewType.Internal || v.ViewType == ViewType.ProjectBrowser
+                        || v.ViewType == ViewType.DrawingSheet)
                         continue;
                     viewsCount++;
                     switch (v.ViewType)
@@ -165,8 +174,12 @@ public static partial class BridgeTools
                         case ViewType.Section: sections++; break;
                         case ViewType.ThreeD: threeDViews++; break;
                         case ViewType.Schedule: schedules++; break;
+                        // Legends, ceiling plans, drafting views, area plans, … so the breakdown sums to
+                        // total_views instead of quietly falling short of it.
+                        default: otherViews++; break;
                     }
                 }
+                viewBreakdownOther = otherViews;
             }
             catch { /* keep zeros */ }
 
@@ -224,7 +237,10 @@ public static partial class BridgeTools
                     {
                         ["floor_plans"] = floorPlans, ["elevations"] = elevations,
                         ["sections"] = sections, ["3d_views"] = threeDViews, ["schedules"] = schedules,
+                        ["other"] = viewBreakdownOther,   // legends, ceiling/area plans, drafting views…
                     },
+                    // Sheets are NOT included in total_views (they were, alongside this count).
+
                     ["sheets_count"] = sheetsCount,
                 },
                 ["linked_models"] = new Dictionary<string, object?>
@@ -363,7 +379,7 @@ public static partial class BridgeTools
             if (targetLevel == null) return Err($"Level not found: {levelName}");
         }
 
-        return InTransaction(doc, "Place Family Instance via MCP", () =>
+        return InTransaction(doc, "Place Family Instance via Transom", () =>
         {
             var symbol = FindSymbol(doc, familyName, typeName);
             if (symbol == null)
@@ -424,14 +440,16 @@ public static partial class BridgeTools
                     : doc.Create.NewFamilyInstance(point, symbol, StructuralType.NonStructural);
             }
 
+            bool rotationApplied = rotation == 0;
             if (rotation != 0)
             {
                 try
                 {
                     var axis = Line.CreateBound(point, point.Add(XYZ.BasisZ));
                     ElementTransformUtils.RotateElement(doc, instance.Id, axis, rotation * Math.PI / 180.0);
+                    rotationApplied = true;
                 }
-                catch { /* element may not support rotation */ }
+                catch { /* element may not support rotation — reported below, not silently claimed */ }
             }
 
             // Optional instance properties.
@@ -470,7 +488,8 @@ public static partial class BridgeTools
                 ["type_name"] = typeName,
                 ["requested_location"] = MmPoint(point),
                 ["actual_location"] = MmPoint(actual),
-                ["rotation_degrees"] = rotation,
+                ["rotation_degrees"] = rotationApplied ? rotation : 0,
+                ["rotation_applied"] = rotationApplied,
                 ["level"] = targetLevel != null ? levelName : null,
                 ["properties_set"] = propertiesSet,
                 ["properties_failed"] = propertiesFailed,
@@ -690,7 +709,9 @@ public static partial class BridgeTools
                                 if (!string.IsNullOrEmpty(s)) parameters[pname] = s;
                                 break;
                             case StorageType.Double:
-                                parameters[pname] = Math.Round(p.AsDouble(), 4).ToString(CultureInfo.InvariantCulture);
+                                // Display value (project units, suffixed) — the raw AsDouble() emitted
+                                // internal ft/ft²/ft³ under bare keys like "Length" with no unit hint.
+                                parameters[pname] = ParamDisplayValue(doc, p);
                                 break;
                             case StorageType.Integer:
                                 parameters[pname] = p.AsInteger().ToString(CultureInfo.InvariantCulture);
@@ -736,14 +757,30 @@ public static partial class BridgeTools
         var elem = doc.GetElement(new ElementId(elementId));
         if (elem == null) return Err($"Element {elementId} not found in the active model");
 
-        return InTransaction(doc, "Modify Element via MCP", () =>
+        return InTransaction(doc, "Modify Element via Transom", () =>
         {
             var changes = new List<object?>();
             var failed = new List<object?>();
 
             foreach (var prop in paramsEl.EnumerateObject())
             {
+                // Instance first, then the element's TYPE — a type parameter otherwise reported "not found"
+                // while the recovery hint listed instance params only, confirming the wrong conclusion.
                 var param = elem.LookupParameter(prop.Name);
+                bool onType = false;
+                if (param == null)
+                {
+                    try
+                    {
+                        var tid = elem.GetTypeId();
+                        if (tid != null && tid != ElementId.InvalidElementId && doc.GetElement(tid) is { } te)
+                        {
+                            param = te.LookupParameter(prop.Name);
+                            onType = param != null;
+                        }
+                    }
+                    catch { /* no type / not accessible */ }
+                }
                 if (param == null)
                 {
                     var available = new List<string>();
@@ -751,12 +788,23 @@ public static partial class BridgeTools
                     {
                         try { available.Add(p.Definition.Name); } catch { /* skip */ }
                     }
+                    var typeAvailable = new List<string>();
+                    try
+                    {
+                        var tid = elem.GetTypeId();
+                        if (tid != null && tid != ElementId.InvalidElementId && doc.GetElement(tid) is { } te2)
+                            foreach (Parameter p in te2.Parameters)
+                            { try { typeAvailable.Add(p.Definition.Name); } catch { /* skip */ } }
+                    }
+                    catch { /* no type */ }
                     available.Sort(StringComparer.Ordinal);
+                    typeAvailable.Sort(StringComparer.Ordinal);
                     failed.Add(new Dictionary<string, object?>
                     {
                         ["parameter"] = prop.Name,
-                        ["reason"] = "not found",
+                        ["reason"] = "not found on the element or its type",
                         ["available_parameters"] = available.Take(20).Cast<object?>().ToList(),
+                        ["available_type_parameters"] = typeAvailable.Take(20).Cast<object?>().ToList(),
                     });
                     continue;
                 }
@@ -788,6 +836,9 @@ public static partial class BridgeTools
                         ["old_value"] = oldValue,
                         ["new_value"] = JsonValueString(prop.Value),
                         ["status"] = "set",
+                        // A type write changes EVERY instance of that type — say so, don't let it read
+                        // as a per-instance edit.
+                        ["binding"] = onType ? "type" : "instance",
                     });
                 }
                 catch (Exception setEx)
@@ -815,23 +866,36 @@ public static partial class BridgeTools
     /// <summary>Deletes elements (validated up front) and reports primary and cascaded deletions.</summary>
     internal static string DeleteElements(UIApplication app, Document doc, JsonElement args)
     {
-        var ids = IdListArg(args, "element_ids");
+        var ids = IdListArg(args, "element_ids", out int droppedIds);
         if (ids.Count == 0) return Err("No element_ids provided");
+        // Refuse rather than delete a subset: an unparseable entry used to be dropped silently, so the
+        // response reported a smaller deleted_count as an unqualified success.
+        if (droppedIds > 0)
+            return Err($"{droppedIds} entr{(droppedIds == 1 ? "y" : "ies")} in element_ids could not be read as an element id " +
+                       "— nothing was deleted. Pass integers (or numeric strings) only.");
 
         foreach (var id in ids)
             if (doc.GetElement(id) == null)
                 return Err($"Element {id.Value} not found in the active model");
 
-        return InTransaction(doc, "Delete Elements via MCP", () =>
+        return InTransaction(doc, "Delete Elements via Transom", () =>
         {
             var deletedIds = new List<long>();
             var cascadedIds = new List<long>();
+            var alreadyGone = new List<long>();
 
             foreach (var id in ids)
             {
+                // Deleting a host CASCADES to its hosted elements, so an id later in the list may already
+                // be gone — doc.Delete would throw and roll the whole batch back. Re-check liveness here
+                // (the up-front validation ran before any deletion).
+                if (doc.GetElement(id) == null) { alreadyGone.Add(id.Value); continue; }
+
                 var result = doc.Delete(id);
+                // Only count what Revit actually removed: Delete can return an empty set having deleted
+                // nothing, which was previously still reported as a successful deletion.
+                if (result == null || result.Count == 0) continue;
                 deletedIds.Add(id.Value);
-                if (result == null) continue;
                 foreach (var delId in result)
                     if (delId.Value != id.Value && !cascadedIds.Contains(delId.Value))
                         cascadedIds.Add(delId.Value);
@@ -841,6 +905,8 @@ public static partial class BridgeTools
             var message = $"Deleted {deletedIds.Count} element{(deletedIds.Count != 1 ? "s" : "")}";
             if (cascadedIds.Count > 0)
                 message += $" ({cascadedIds.Count} hosted element{(cascadedIds.Count != 1 ? "s" : "")} also removed)";
+            if (alreadyGone.Count > 0)
+                message += $"; {alreadyGone.Count} already removed by an earlier cascade";
 
             return Json(new Dictionary<string, object?>
             {
@@ -848,6 +914,7 @@ public static partial class BridgeTools
                 ["deleted_count"] = deletedIds.Count,
                 ["deleted_ids"] = deletedIds,
                 ["cascaded_ids"] = cascadedIds,
+                ["already_deleted_ids"] = alreadyGone,
                 ["message"] = message,
             });
         });
@@ -862,8 +929,11 @@ public static partial class BridgeTools
     /// </summary>
     internal static string TransformElements(UIApplication app, Document doc, JsonElement args)
     {
-        var ids = IdListArg(args, "element_ids");
+        var ids = IdListArg(args, "element_ids", out int droppedXf);
         if (ids.Count == 0) return Err("element_ids is required and must not be empty");
+        if (droppedXf > 0)
+            return Err($"{droppedXf} entr{(droppedXf == 1 ? "y" : "ies")} in element_ids could not be read as an element id " +
+                       "— nothing was transformed. Pass integers (or numeric strings) only.");
 
         var operation = StrArg(args, "operation");
         if (string.IsNullOrEmpty(operation)) return Err("operation is required (move, copy, rotate, mirror)");
@@ -910,14 +980,25 @@ public static partial class BridgeTools
                     return Err("mirror_plane is required for mirror operation");
                 var origin = mp.TryGetProperty("origin", out var o) && o.ValueKind == JsonValueKind.Object
                     ? PointOf(o) : XYZ.Zero;
-                var normalEl = mp.TryGetProperty("normal", out var n) && n.ValueKind == JsonValueKind.Object
-                    ? n : default;
-                var normal = new XYZ(DblOf(normalEl, "x"), DblOf(normalEl, "y", 1), DblOf(normalEl, "z")).Normalize();
+                // The y=1 default applies only when `normal` is ABSENT ENTIRELY. It used to apply
+                // per-component, so {"normal":{"x":1}} — a caller asking to mirror across the YZ plane —
+                // became (1,1,0), a 45° plane, and the elements were mirrored about the wrong axis with
+                // ok:true. An all-zero normal is now a clear error instead of a throw from Normalize().
+                XYZ normal;
+                if (mp.TryGetProperty("normal", out var n) && n.ValueKind == JsonValueKind.Object)
+                {
+                    var raw = new XYZ(DblOf(n, "x"), DblOf(n, "y"), DblOf(n, "z"));
+                    if (raw.GetLength() < 1e-9)
+                        return Err("mirror_plane.normal must have at least one non-zero component (e.g. {\"x\":1} to mirror across the YZ plane)");
+                    normal = raw.Normalize();
+                }
+                else normal = XYZ.BasisY;   // no normal supplied at all → the documented default
+
                 mirrorPlane = Plane.CreateByNormalAndOrigin(normal, origin);
                 break;
         }
 
-        return InTransaction(doc, "Transform Elements via MCP", () =>
+        return InTransaction(doc, "Transform Elements via Transom", () =>
         {
             var newElementIds = new List<long>();
             foreach (var id in targets)
@@ -988,9 +1069,12 @@ public static partial class BridgeTools
 
             if (!string.IsNullOrEmpty(category))
             {
-                if (!Enum.TryParse<BuiltInCategory>(category, false, out var bic))
-                    return Err($"Invalid category: {category}. Use BuiltInCategory names like OST_Walls, OST_Doors");
-                collector = collector.OfCategory(bic);
+                // GEN-05: was a case-SENSITIVE enum parse, so "Walls" and "ost_walls" both failed here while
+                // working in the sibling colour/parameter tools.
+                var bic = ResolveCategoryName(category);
+                if (bic == null)
+                    return Err($"Invalid category: {category}. Accepts \"OST_Walls\", \"Walls\", \"walls\" or a friendly alias like \"ducts\".");
+                collector = collector.OfCategory(bic.Value);
             }
             collector = collector.WhereElementIsNotElementType();
 
@@ -1005,10 +1089,13 @@ public static partial class BridgeTools
             var allElements = collector.ToElements();
             var elements = new List<object?>();
 
+            // Count every element that passes ALL filters (including type_name), not just those returned —
+            // the cap stops collection but must not stop counting, or a capped response looks complete.
+            int totalMatched = 0;
+            bool truncated = false;
+
             foreach (var elem in allElements)
             {
-                if (elements.Count >= maxElements) break;
-
                 if (!string.IsNullOrEmpty(typeName))
                 {
                     bool matches;
@@ -1026,6 +1113,9 @@ public static partial class BridgeTools
                     catch { continue; }
                     if (!matches) continue;
                 }
+
+                totalMatched++;
+                if (elements.Count >= maxElements) { truncated = true; continue; }
 
                 var info = new Dictionary<string, object?>
                 {
@@ -1061,7 +1151,6 @@ public static partial class BridgeTools
                 elements.Add(info);
             }
 
-            int totalMatched = allElements.Count;
             var catLabel = string.IsNullOrEmpty(category)
                 ? "element" : category!.Replace("OST_", "").ToLowerInvariant();
 
@@ -1071,7 +1160,9 @@ public static partial class BridgeTools
                 ["elements"] = elements,
                 ["count"] = elements.Count,
                 ["total_matched"] = totalMatched,
-                ["message"] = $"Found {totalMatched} {catLabel}{(totalMatched != 1 ? "s" : "")} matching filters",
+                ["truncated"] = truncated,
+                ["message"] = $"Found {totalMatched} {catLabel}{(totalMatched != 1 ? "s" : "")} matching filters"
+                              + (truncated ? $" (returning the first {elements.Count}; raise max_elements for more)" : ""),
             });
         }
         catch (Exception ex)
@@ -1089,8 +1180,12 @@ public static partial class BridgeTools
         {
             var categoryCounts = new Dictionary<string, int>();
             int total = 0;
+            int scanned = 0;
             foreach (var elem in new FilteredElementCollector(doc).WhereElementIsNotElementType())
             {
+                // PERF-02: walks every non-type element in the document. Cheap per element, unbounded overall.
+                if ((++scanned & 0x3FF) == 0 && Abandoned())
+                    return Err($"request timed out — model scan abandoned after {scanned} element(s).");
                 try
                 {
                     var cat = elem.Category;
@@ -1224,9 +1319,15 @@ public static partial class BridgeTools
             var requested = StringListArg(args, "categories");
             if (requested.Count > 0)
             {
-                foreach (var name in requested)
-                    if (Enum.TryParse<BuiltInCategory>(name, false, out var bic))
-                        targetCategories.Add(bic); // invalid names are skipped, like the Python
+                // GEN-05: this used the same case-sensitive parse as ai_element_filter but SILENTLY DROPPED
+                // anything it couldn't parse — so a typo produced a confident answer computed over fewer
+                // categories than the caller asked for. Resolve through the shared vocabulary and say what
+                // didn't resolve, like every other category-taking tool.
+                var (bics, unknown) = ResolveClashCategories(requested);
+                if (unknown.Count > 0)
+                    return Err($"Unknown categor{(unknown.Count == 1 ? "y" : "ies")}: {string.Join(", ", unknown)}. " +
+                               "Accepts \"OST_Walls\", \"Walls\", \"walls\" or a friendly alias like \"ducts\".");
+                targetCategories.AddRange(bics);
             }
             else
             {
@@ -1240,6 +1341,10 @@ public static partial class BridgeTools
 
             // material name -> (area sqft, volume cuft, element count)
             var materialData = new Dictionary<string, (double Area, double Volume, int Count)>();
+            // PERF-02: nested per-element, per-material with GetMaterialArea/GetMaterialVolume calls — the same
+            // shape as the clash scan, an order of magnitude cheaper but still unbounded. Bail out once the
+            // request's waiter has given up rather than finishing a computation nobody will receive.
+            int scanned = 0;
             foreach (var bic in targetCategories)
             {
                 try
@@ -1247,6 +1352,9 @@ public static partial class BridgeTools
                     foreach (var elem in new FilteredElementCollector(doc)
                                  .OfCategory(bic).WhereElementIsNotElementType())
                     {
+                        if ((++scanned & 0xFF) == 0 && Abandoned())
+                            return Err($"request timed out — material scan abandoned after {scanned} element(s). "
+                                       + "Pass a narrower `categories` list and retry.");
                         try
                         {
                             var matIds = elem.GetMaterialIds(false);
@@ -1359,8 +1467,19 @@ public static partial class BridgeTools
             var seen = new HashSet<(long, long)>();
             bool truncated = false;
 
+            // PERF-02: this is |A| collector builds and O(|A|·|B|) SOLID-GEOMETRY intersection tests, and
+            // max_clashes bounds the OUTPUT, not the scan — on a clean model the early exit never fires, so the
+            // full sweep always runs. InTransaction consults Abandoned() before committing precisely because the
+            // shim's waiter can time out mid-operation; no read-side tool did, so Revit kept grinding on the API
+            // thread (UI blocked) long past the point where anyone could receive the answer, and the client's
+            // retry started the whole scan again. Stop as soon as nobody is listening.
+            int scanned = 0;
             foreach (var elem in setA)
             {
+                // Checking every 64 elements rather than every element keeps the delegate call off the hot path.
+                if ((++scanned & 0x3F) == 0 && Abandoned())
+                    return Err("request timed out — clash scan abandoned after "
+                               + $"{scanned} of {setA.Count} element(s). Narrow set_a_categories/set_b_categories and retry.");
                 try
                 {
                     long eid = elem.Id.Value;
@@ -1460,10 +1579,15 @@ public static partial class BridgeTools
         });
         int valueCount = uniqueValues.Count;
 
-        // Numeric-gradient mode: gradient requested on a dimension-like parameter.
-        bool numericGradient = useGradient && new[]
-            { "length", "longueur", "area", "volume", "height", "width", "thickness" }
-            .Any(t => parameterName!.IndexOf(t, StringComparison.OrdinalIgnoreCase) >= 0);
+        // Numeric-gradient mode: gradient requested on a parameter that actually carries numbers.
+        // GEN-06: this used to sniff the parameter's NAME for hardcoded English/French substrings
+        // ("length", "longueur", "area", …) — a leftover from the ported IronPython source, and the only French
+        // string in the codebase. That mis-classified in both directions: a numeric Depth/Elevation/Offset/
+        // Diameter got flat categorical colours, a TEXT parameter called "Area Code" went into gradient mode
+        // where every value landed at position 0.5 (one uniform colour for the whole category), and on a
+        // non-English/French Revit the feature never engaged at all. The parameter's real type is already in
+        // hand — rawByDisplay holds the raw value ParamSortValue read from p.StorageType — so use it.
+        bool numericGradient = useGradient && uniqueValues.Any(v => rawByDisplay[v] is double or int);
 
         var positions = new Dictionary<string, double>();
         if (numericGradient)
@@ -1508,7 +1632,11 @@ public static partial class BridgeTools
         }
 
         var solidFillId = SolidFillPatternId(doc);
-        var otherViews = SameTypeViews(doc, activeView);
+        // UI-05: this used to unconditionally write the overrides into EVERY non-template view sharing the active
+        // view's ViewType — one call in a floor plan repainted all 40 floor plans — while reporting only
+        // elements_colored, so neither Claude nor the user learned the blast radius. Now opt-in, and the response
+        // states how many views were written either way.
+        var otherViews = BoolArg(args, "apply_to_similar_views") ? SameTypeViews(doc, activeView) : new List<View>();
 
         return InTransaction(doc, "Color Elements by Parameter", () =>
         {
@@ -1559,7 +1687,10 @@ public static partial class BridgeTools
             var result = new Dictionary<string, object?>
             {
                 ["ok"] = true, ["status"] = "success",
-                ["message"] = $"Successfully colored {elementsColored} elements in {valueCount} color groups",
+                ["message"] = $"Successfully colored {elementsColored} elements in {valueCount} color groups, " +
+                              (otherViews.Count == 0
+                                  ? "in the active view only"
+                                  : $"across {otherViews.Count + 1} views of type {activeView.ViewType}"),
                 ["category"] = categoryName,
                 ["parameter"] = parameterName,
                 ["color_assignments"] = colorAssignments,
@@ -1567,6 +1698,7 @@ public static partial class BridgeTools
                 {
                     ["total_elements"] = elements.Count,
                     ["elements_colored"] = elementsColored,
+                    ["views_colored"] = otherViews.Count + 1,
                     ["unique_parameter_values"] = valueCount,
                     ["use_gradient"] = useGradient,
                     ["sorted_values"] = uniqueValues.Cast<object?>().ToList(),
@@ -1600,7 +1732,9 @@ public static partial class BridgeTools
 
         var activeView = doc.ActiveView;
         if (activeView == null) return Err("No active view");
-        var otherViews = SameTypeViews(doc, activeView);
+        // UI-05: symmetric with color_splash — active view only unless the caller opts in. (Recovering a paint job
+        // made by an older build, which always wrote to every same-type view, needs apply_to_similar_views: true.)
+        var otherViews = BoolArg(args, "apply_to_similar_views") ? SameTypeViews(doc, activeView) : new List<View>();
 
         return InTransaction(doc, "Clear Element Colors", () =>
         {
@@ -1624,9 +1758,13 @@ public static partial class BridgeTools
             return Json(new Dictionary<string, object?>
             {
                 ["ok"] = true, ["status"] = "success",
-                ["message"] = $"Successfully cleared color overrides for {cleared} elements",
+                ["message"] = $"Successfully cleared color overrides for {cleared} elements, " +
+                              (otherViews.Count == 0
+                                  ? "in the active view only"
+                                  : $"across {otherViews.Count + 1} views of type {activeView.ViewType}"),
                 ["category"] = categoryName,
                 ["elements_processed"] = cleared,
+                ["views_cleared"] = otherViews.Count + 1,
             });
         });
     }
@@ -1650,15 +1788,23 @@ public static partial class BridgeTools
         catch { return null; }
     }
 
-    /// <summary>Category by display name from Document.Settings.Categories, or null.</summary>
+    /// <summary>Category from Document.Settings.Categories. GEN-05: accepts the display name ("Walls") as before,
+    /// and now also every other dialect the sibling tools take (OST_Walls / ost_walls / walls / friendly alias),
+    /// so one vocabulary works across the whole surface.</summary>
     private static Category? CategoryByDisplayName(Document doc, string name)
     {
         try
         {
             foreach (Category cat in doc.Settings.Categories)
-                if (cat.Name == name) return cat;
+                if (string.Equals(cat.Name, name, StringComparison.OrdinalIgnoreCase)) return cat;
         }
         catch { /* fall through */ }
+
+        var bic = ResolveCategoryName(name);
+        if (bic != null)
+        {
+            try { return Category.GetCategory(doc, bic.Value); } catch { /* not in this document */ }
+        }
         return null;
     }
 
@@ -1685,41 +1831,70 @@ public static partial class BridgeTools
     };
 
     /// <summary>
-    ///     Sets a parameter from a JSON value by storage type (mm/units untouched — raw internal values,
-    ///     matching the Python). Returns null on success, else a short failure reason.
+    ///     Sets a parameter from a JSON value by storage type. Double values follow the wire contract —
+    ///     lengths in mm, areas in m², volumes in m³ — and are converted to internal ft/ft²/ft³ here;
+    ///     other Double specs (angle, number, …) pass through unconverted. Checks the Set() return value:
+    ///     Revit can refuse a write without throwing. Returns null on success, else a short failure reason.
     /// </summary>
     private static string? SetParamFromJson(Parameter param, JsonElement value)
     {
         switch (param.StorageType)
         {
             case StorageType.String:
-                param.Set(JsonValueString(value));
-                return null;
+                return param.Set(JsonValueString(value)) ? null : "error: Revit refused the write";
             case StorageType.Integer:
                 int iv;
                 if (value.ValueKind == JsonValueKind.Number) iv = (int)Math.Round(value.GetDouble());
                 else if (value.ValueKind is JsonValueKind.True or JsonValueKind.False) iv = value.GetBoolean() ? 1 : 0;
                 else if (!int.TryParse(JsonValueString(value), NumberStyles.Integer, CultureInfo.InvariantCulture, out iv))
                     return "error: value is not an integer";
-                param.Set(iv);
-                return null;
+                return param.Set(iv) ? null : "error: Revit refused the write";
             case StorageType.Double:
                 double dv;
                 if (value.ValueKind == JsonValueKind.Number) dv = value.GetDouble();
                 else if (!double.TryParse(JsonValueString(value), NumberStyles.Float, CultureInfo.InvariantCulture, out dv))
                     return "error: value is not a number";
-                param.Set(dv);
-                return null;
+                return param.Set(WireToInternal(param, dv)) ? null : "error: Revit refused the write";
             case StorageType.ElementId:
                 if (!TryGetLong(value, out long idv)) return "error: value is not an element id";
-                param.Set(new ElementId(idv));
-                return null;
+                return param.Set(new ElementId(idv)) ? null : "error: Revit refused the write";
             default:
                 return "unsupported type";
         }
     }
 
-    /// <summary>Raw (non-display) value string used as old_value by modify_element.</summary>
+    /// <summary>Wire→internal for Double params: mm→ft (length), m²→ft² (area), m³→ft³ (volume).</summary>
+    private static double WireToInternal(Parameter param, double wire)
+    {
+        try
+        {
+            var spec = param.Definition?.GetDataType();
+            if (spec == null) return wire;
+            if (spec.Equals(SpecTypeId.Length)) return MmToFt(wire);
+            if (spec.Equals(SpecTypeId.Area)) return wire / SqFtToSqM;
+            if (spec.Equals(SpecTypeId.Volume)) return wire / CuFtToCuM;
+        }
+        catch { /* params without a measurable spec write raw */ }
+        return wire;
+    }
+
+    /// <summary>Internal→wire for Double params, mirror of <see cref="WireToInternal"/>.</summary>
+    private static double InternalToWire(Parameter param, double internalValue)
+    {
+        try
+        {
+            var spec = param.Definition?.GetDataType();
+            if (spec == null) return internalValue;
+            if (spec.Equals(SpecTypeId.Length)) return FtToMm(internalValue);
+            if (spec.Equals(SpecTypeId.Area)) return internalValue * SqFtToSqM;
+            if (spec.Equals(SpecTypeId.Volume)) return internalValue * CuFtToCuM;
+        }
+        catch { /* fall through to raw */ }
+        return internalValue;
+    }
+
+    /// <summary>Non-display value string used as old_value by modify_element. Double values are reported
+    /// in wire units (mm/m²/m³ for length/area/volume specs) so old_value is comparable to new_value.</summary>
     private static string ParamRawValueString(Parameter param)
     {
         try
@@ -1728,7 +1903,7 @@ public static partial class BridgeTools
             {
                 StorageType.String => param.AsString() ?? "",
                 StorageType.Integer => param.AsInteger().ToString(CultureInfo.InvariantCulture),
-                StorageType.Double => Math.Round(param.AsDouble(), 6).ToString(CultureInfo.InvariantCulture),
+                StorageType.Double => Math.Round(InternalToWire(param, param.AsDouble()), 6).ToString(CultureInfo.InvariantCulture),
                 StorageType.ElementId => (param.AsElementId()?.Value ?? -1).ToString(CultureInfo.InvariantCulture),
                 _ => "",
             };
@@ -1953,18 +2128,39 @@ public static partial class BridgeTools
         return null;
     }
 
-    /// <summary>Resolves clash category names (OST_ ids or friendly aliases) to (valid, unknown).</summary>
+    /// <summary>
+    ///     GEN-05: THE category resolver for this file. Six tools here take a category argument, and they used to
+    ///     speak four incompatible dialects with three different unknown-name behaviours: case-SENSITIVE
+    ///     <c>OST_Walls</c> (ai_element_filter, erroring; get_material_quantities, silently dropping),
+    ///     case-insensitive enum + friendly aliases (check_clashes), and display name only (color_splash,
+    ///     clear_colors, list_category_parameters). So "Walls" worked in three tools and failed in two, "ost_walls"
+    ///     worked in one, and a typo was ignored by exactly one. For a surface whose only caller is a model
+    ///     inferring usage from descriptions, that is a per-tool trial-and-error tax.
+    ///     <para>Accepts, for every tool: <c>OST_Walls</c>, <c>ost_walls</c>, <c>Walls</c>, <c>walls</c>,
+    ///     <c>Structural Framing</c>, and the friendly aliases (<c>ducts</c>, <c>beams</c>).</para>
+    /// </summary>
+    private static BuiltInCategory? ResolveCategoryName(string? name)
+    {
+        var n = (name ?? "").Trim();
+        if (n.Length == 0) return null;
+        if (!n.StartsWith("OST_", StringComparison.OrdinalIgnoreCase)
+            && ClashFriendlyNames.TryGetValue(n.ToLowerInvariant(), out var mapped))
+            n = mapped;
+        // FindBuiltInCategory (BridgeToolsShared) already handles OST_-prefixing, space stripping,
+        // case-insensitive enum parsing and a LabelUtils display-label fallback. It existed in the shared file
+        // every one of these tools includes, and had exactly one caller.
+        return FindBuiltInCategory(n);
+    }
+
+    /// <summary>Resolves a list of category names to (valid, unknown) through <see cref="ResolveCategoryName"/>.</summary>
     private static (List<BuiltInCategory> Bics, List<string> Unknown) ResolveClashCategories(IEnumerable<string> names)
     {
         var bics = new List<BuiltInCategory>();
         var unknown = new List<string>();
         foreach (var raw in names)
         {
-            var n = raw.Trim();
-            if (!n.StartsWith("OST_", StringComparison.Ordinal)
-                && ClashFriendlyNames.TryGetValue(n.ToLowerInvariant(), out var mapped))
-                n = mapped;
-            if (Enum.TryParse<BuiltInCategory>(n, true, out var bic)) bics.Add(bic);
+            var bic = ResolveCategoryName(raw);
+            if (bic != null) bics.Add(bic.Value);
             else unknown.Add(raw);
         }
         return (bics, unknown);

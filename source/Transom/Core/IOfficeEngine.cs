@@ -6,7 +6,7 @@ namespace Transom.Core;
 ///     The spreadsheet/document engine boundary. Implemented by Transom.Office.dll (which owns every NPOI /
 ///     SixLabors reference) and loaded into a dedicated AssemblyLoadContext via <see cref="OfficeIsolation"/>,
 ///     so the NPOI closure never binds in Revit's shared default context — the same first-loader-wins clash
-///     the Roslyn isolation solved for pyRevit (see docs/design-notes/dependency-isolation-brief.md).
+///     the Roslyn isolation solved for pyRevit.
 ///     RULE: no NPOI/SixLabors/etc. type may ever appear in these signatures — Transom-defined DTOs and
 ///     framework types only, because these types cross the load-context boundary and must have one identity.
 /// </summary>

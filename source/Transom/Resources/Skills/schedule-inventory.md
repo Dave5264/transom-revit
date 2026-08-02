@@ -22,7 +22,7 @@ tools. This skill changes nothing — no writes, no transactions.
 
 ## Rules
 
-- Read-only: do not call any tool that writes (`set_parameter`, `execute_revit_code` with a transaction,
-  create/modify/delete tools).
+- Read-only: do not call any tool that writes (`set_parameter`, `execute_revit_code` unless you pass
+  `readOnly: true` — a plain call opens a transaction and commits, create/modify/delete tools).
 - If the model has more than ~30 schedules, ask the user whether they want all of them or a subset before
   reading every one.

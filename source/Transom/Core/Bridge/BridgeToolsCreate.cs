@@ -153,7 +153,21 @@ public static partial class BridgeTools
 
                             if (!beamType!.IsActive) { beamType.Activate(); doc.Regenerate(); }
 
-                            var beam = doc.Create.NewFamilyInstance(line, beamType, level, StructuralType.Beam);
+                            // Z is an offset from the target level, matching create_structural_framing (and
+                            // how Wall.Create consumes a level + height). Without this the same wire input
+                            // produced beams at different heights depending on which tool the caller used.
+                            var beamLine = line;
+                            var beamLevelElev = level?.Elevation ?? 0.0;
+                            if (Math.Abs(beamLevelElev) > 1e-9)
+                            {
+                                var s = line.GetEndPoint(0);
+                                var e = line.GetEndPoint(1);
+                                beamLine = Line.CreateBound(
+                                    new XYZ(s.X, s.Y, s.Z + beamLevelElev),
+                                    new XYZ(e.X, e.Y, e.Z + beamLevelElev));
+                            }
+
+                            var beam = doc.Create.NewFamilyInstance(beamLine, beamType, level, StructuralType.Beam);
 
                             created.Add(new Dictionary<string, object?>
                             {
@@ -172,13 +186,18 @@ public static partial class BridgeTools
                     catch (Exception elemEx) { errors.Add($"Element {idx}: {elemEx.Message}"); }
                 }
 
+                // ok/status must mean what they mean everywhere else on this bridge: a batch where EVERY
+                // item failed used to return ok:true / status:"success" with count:0, so a client
+                // branching on `ok` (the field that exists for exactly that) read a total failure as a win.
+                bool allFailed = created.Count == 0 && errors.Count > 0;
                 var payload = new Dictionary<string, object?>
                 {
-                    ["ok"] = true,
-                    ["status"] = "success",
+                    ["ok"] = !allFailed,
+                    ["status"] = allFailed ? "failed" : errors.Count > 0 ? "partial" : "success",
                     ["created"] = created,
                     ["count"] = created.Count,
-                    ["message"] = $"Created {created.Count} element(s)",
+                    ["message"] = $"Created {created.Count} element(s)"
+                                  + (errors.Count > 0 ? $" ({errors.Count} failed)" : ""),
                 };
                 if (errors.Count > 0) payload["errors"] = errors;
                 return Json(payload);
@@ -212,6 +231,10 @@ public static partial class BridgeTools
             var roofTypeMap = new Dictionary<string, RoofType>(StringComparer.OrdinalIgnoreCase);
             foreach (var rt in new FilteredElementCollector(doc).OfClass(typeof(RoofType)).Cast<RoofType>())
                 roofTypeMap[ElemName(rt)] = rt;
+
+            var ceilingTypeMap = new Dictionary<string, CeilingType>(StringComparer.OrdinalIgnoreCase);
+            foreach (var ct in new FilteredElementCollector(doc).OfClass(typeof(CeilingType)).Cast<CeilingType>())
+                ceilingTypeMap[ElemName(ct)] = ct;
 
             (double X, double Y, double Z) MmXyz(JsonElement p) => (DblOf(p, "x"), DblOf(p, "y"), DblOf(p, "z"));
 
@@ -247,7 +270,11 @@ public static partial class BridgeTools
                             {
                                 var f = points[0];
                                 var l = points[^1];
-                                if (Math.Abs(f.X - l.X) < 0.001 && Math.Abs(f.Y - l.Y) < 0.001 && Math.Abs(f.Z - l.Z) < 0.001)
+                                // 1 mm, matching the closed-polygon check below — these tuples are RAW MM,
+                                // so the old 0.001 was 0.001 mm and any rounding at all (a float
+                                // round-trip, 0.01mm) defeated the dedupe. The wrap-around then made a
+                                // sub-millimetre final segment that Line.CreateBound rejects outright.
+                                if (Math.Abs(f.X - l.X) < 1.0 && Math.Abs(f.Y - l.Y) < 1.0 && Math.Abs(f.Z - l.Z) < 1.0)
                                     points.RemoveAt(points.Count - 1);
                             }
                             for (int pi = 0; pi < points.Count; pi++)
@@ -284,7 +311,49 @@ public static partial class BridgeTools
 
                         XYZ Ft((double X, double Y, double Z) p) => new(MmToFt(p.X), MmToFt(p.Y), MmToFt(p.Z));
 
-                        if (elementType == "floor" || elementType == "ceiling")
+                        if (elementType == "ceiling")
+                        {
+                            // Real Ceiling.Create + CeilingType — this branch used to build a FLOOR with a
+                            // FloorType and echo back "ceiling", so the element landed in the Floors
+                            // category (wrong schedules, wrong tags) sitting in the storey's floor slab.
+                            var typeName = StrArg(elem, "type_name");
+                            CeilingType? ceilingType = null;
+                            if (!string.IsNullOrEmpty(typeName))
+                            {
+                                if (!ceilingTypeMap.TryGetValue(typeName!, out ceilingType))
+                                {
+                                    var available = string.Join(", ", ceilingTypeMap.Keys.OrderBy(k => k, StringComparer.Ordinal).Take(10));
+                                    errors.Add($"Element {idx}: Ceiling type '{typeName}' not found. Available: {available}");
+                                    continue;
+                                }
+                            }
+                            else if (ceilingTypeMap.Count > 0) ceilingType = ceilingTypeMap.Values.First();
+                            else
+                            { errors.Add($"Element {idx}: No ceiling types available — load ceiling families"); continue; }
+
+                            var cloop = new CurveLoop();
+                            foreach (var seg in segments)
+                                cloop.Append(Line.CreateBound(Ft(seg.A), Ft(seg.B)));
+
+                            var ceiling = Ceiling.Create(doc, new List<CurveLoop> { cloop }, ceilingType!.Id, level!.Id);
+
+                            var cOffsetMm = DblOf(elem, "offset");
+                            if (cOffsetMm != 0)
+                            {
+                                var cp = ceiling.get_Parameter(BuiltInParameter.CEILING_HEIGHTABOVELEVEL_PARAM);
+                                if (cp != null && !cp.IsReadOnly) cp.Set(MmToFt(cOffsetMm));
+                            }
+
+                            created.Add(new Dictionary<string, object?>
+                            {
+                                ["id"] = ceiling.Id.Value,
+                                ["name"] = StrArg(elem, "name") ?? "",
+                                ["type"] = ElemName(ceilingType),
+                                ["level"] = ElemName(level),
+                                ["element_type"] = "ceiling",
+                            });
+                        }
+                        else if (elementType == "floor")
                         {
                             var typeName = StrArg(elem, "type_name");
                             FloorType? floorType = null;
@@ -330,7 +399,7 @@ public static partial class BridgeTools
                                 ["name"] = StrArg(elem, "name") ?? "",
                                 ["type"] = ElemName(floorType),
                                 ["level"] = ElemName(level),
-                                ["element_type"] = elementType,
+                                ["element_type"] = "floor",
                             });
                         }
                         else // roof
@@ -356,6 +425,16 @@ public static partial class BridgeTools
 
                             var roof = doc.Create.NewFootPrintRoof(curveArray, level!, roofType!, out ModelCurveArray _);
 
+                            // `offset` is advertised for every element in the batch but was applied only on
+                            // the floor/ceiling branch — a roof asked for 3000mm above its level was built AT
+                            // the level and reported ok, geometrically wrong by a storey height.
+                            var roofOffsetMm = DblOf(elem, "offset");
+                            if (roofOffsetMm != 0)
+                            {
+                                var rp = roof.get_Parameter(BuiltInParameter.ROOF_LEVEL_OFFSET_PARAM);
+                                if (rp != null && !rp.IsReadOnly) rp.Set(MmToFt(roofOffsetMm));
+                            }
+
                             created.Add(new Dictionary<string, object?>
                             {
                                 ["id"] = roof.Id.Value,
@@ -369,13 +448,18 @@ public static partial class BridgeTools
                     catch (Exception elemEx) { errors.Add($"Element {idx}: {elemEx.Message}"); }
                 }
 
+                // ok/status must mean what they mean everywhere else on this bridge: a batch where EVERY
+                // item failed used to return ok:true / status:"success" with count:0, so a client
+                // branching on `ok` (the field that exists for exactly that) read a total failure as a win.
+                bool allFailed = created.Count == 0 && errors.Count > 0;
                 var payload = new Dictionary<string, object?>
                 {
-                    ["ok"] = true,
-                    ["status"] = "success",
+                    ["ok"] = !allFailed,
+                    ["status"] = allFailed ? "failed" : errors.Count > 0 ? "partial" : "success",
                     ["created"] = created,
                     ["count"] = created.Count,
-                    ["message"] = $"Created {created.Count} element(s)",
+                    ["message"] = $"Created {created.Count} element(s)"
+                                  + (errors.Count > 0 ? $" ({errors.Count} failed)" : ""),
                 };
                 if (errors.Count > 0) payload["errors"] = errors;
                 return Json(payload);
@@ -423,13 +507,16 @@ public static partial class BridgeTools
                     catch (Exception lvEx) { errors.Add($"Level {idx}: {lvEx.Message}"); }
                 }
 
+                // See the note on the batch envelope above — ok:false when nothing was created.
+                bool allLevelsFailed = created.Count == 0 && errors.Count > 0;
                 var payload = new Dictionary<string, object?>
                 {
-                    ["ok"] = true,
-                    ["status"] = "success",
+                    ["ok"] = !allLevelsFailed,
+                    ["status"] = allLevelsFailed ? "failed" : errors.Count > 0 ? "partial" : "success",
                     ["created"] = created,
                     ["count"] = created.Count,
-                    ["message"] = $"Created {created.Count} level(s)",
+                    ["message"] = $"Created {created.Count} level(s)"
+                                  + (errors.Count > 0 ? $" ({errors.Count} failed)" : ""),
                 };
                 if (errors.Count > 0) payload["errors"] = errors;
                 return Json(payload);
@@ -451,36 +538,54 @@ public static partial class BridgeTools
             return InTransaction(doc, "Create Grids", () =>
             {
                 var created = new List<object?>();
+                var errors = new List<object?>();
+                int idx = 0;
 
                 foreach (var gridDef in grids)
                 {
-                    var start = PointArg(gridDef, "start_point") ?? XYZ.Zero;
-                    var end = PointArg(gridDef, "end_point") ?? XYZ.Zero;
-                    if (start.DistanceTo(end) < 0.001) continue; // zero length — skip, like the Python
-
-                    var grid = Grid.Create(doc, Line.CreateBound(start, end));
-
-                    var name = StrArg(gridDef, "name");
-                    if (!string.IsNullOrEmpty(name))
+                    idx++;
+                    // Per-item guard: without it one degenerate line threw out of the lambda and
+                    // InTransaction rolled back the ENTIRE batch, naming neither the index nor the tool.
+                    try
                     {
-                        try { grid.Name = name!; } catch { /* duplicate/invalid name — keep auto name */ }
+                        // Require both points: coalescing a missing/malformed point to the origin drew a
+                        // grid line from the caller's point to (0,0,0) and reported success.
+                        var start = PointArg(gridDef, "start_point");
+                        var end = PointArg(gridDef, "end_point");
+                        if (start == null || end == null)
+                        { errors.Add($"Grid {idx}: start_point and end_point are both required as {{x,y,z}} objects"); continue; }
+                        if (start.DistanceTo(end) < 0.001)
+                        { errors.Add($"Grid {idx}: start and end are the same point — skipped"); continue; }
+
+                        var grid = Grid.Create(doc, Line.CreateBound(start, end));
+
+                        var name = StrArg(gridDef, "name");
+                        if (!string.IsNullOrEmpty(name))
+                        {
+                            try { grid.Name = name!; } catch { /* duplicate/invalid name — keep auto name */ }
+                        }
+
+                        created.Add(new Dictionary<string, object?>
+                        {
+                            ["id"] = grid.Id.Value,
+                            ["name"] = ElemName(grid),
+                        });
                     }
-
-                    created.Add(new Dictionary<string, object?>
-                    {
-                        ["id"] = grid.Id.Value,
-                        ["name"] = ElemName(grid),
-                    });
+                    catch (Exception gridEx) { errors.Add($"Grid {idx}: {gridEx.Message}"); }
                 }
 
-                return Json(new Dictionary<string, object?>
+                bool allGridsFailed = created.Count == 0 && errors.Count > 0;
+                var gridPayload = new Dictionary<string, object?>
                 {
-                    ["ok"] = true,
-                    ["status"] = "success",
+                    ["ok"] = !allGridsFailed,
+                    ["status"] = allGridsFailed ? "failed" : errors.Count > 0 ? "partial" : "success",
                     ["created"] = created,
                     ["count"] = created.Count,
-                    ["message"] = $"Created {created.Count} grid line{(created.Count != 1 ? "s" : "")}",
-                });
+                    ["message"] = $"Created {created.Count} grid line{(created.Count != 1 ? "s" : "")}"
+                                  + (errors.Count > 0 ? $" ({errors.Count} failed or skipped)" : ""),
+                };
+                if (errors.Count > 0) gridPayload["errors"] = errors;
+                return Json(gridPayload);
             });
         }
         catch (Exception ex) { return Err(ex.Message); }
@@ -510,59 +615,85 @@ public static partial class BridgeTools
             return InTransaction(doc, "Create Structural Framing", () =>
             {
                 var created = new List<Dictionary<string, object?>>();
+                var errors = new List<object?>();
+                int idx = 0;
 
                 foreach (var elemDef in elements)
                 {
-                    var start = PointArg(elemDef, "start_point") ?? XYZ.Zero;
-                    var end = PointArg(elemDef, "end_point") ?? XYZ.Zero;
-                    if (start.DistanceTo(end) < 0.001) continue; // zero length — skip, like the Python
-
-                    var typeName = StrArg(elemDef, "type_name");
-                    var targetSymbol = !string.IsNullOrEmpty(typeName)
-                        ? framingSymbols.FirstOrDefault(s =>
-                            string.Equals(ElemName(s), typeName, StringComparison.OrdinalIgnoreCase))
-                        : null;
-                    targetSymbol ??= framingSymbols[0];
-
-                    var levelName = StrArg(elemDef, "level_name");
-                    var targetLevel = !string.IsNullOrEmpty(levelName)
-                        ? levels.FirstOrDefault(l =>
-                            string.Equals(ElemName(l), levelName, StringComparison.OrdinalIgnoreCase))
-                        : null;
-                    targetLevel ??= levels.FirstOrDefault();
-
-                    if (!targetSymbol.IsActive) { targetSymbol.Activate(); doc.Regenerate(); }
-
-                    var levelElev = targetLevel?.Elevation ?? 0.0;
-                    if (Math.Abs(levelElev) > 1e-9)
+                    idx++;
+                    // Per-item guard: one bad definition used to abort and roll back the whole batch.
+                    try
                     {
-                        start = new XYZ(start.X, start.Y, start.Z + levelElev);
-                        end = new XYZ(end.X, end.Y, end.Z + levelElev);
+                        // Both points required — see the create_grid note; a missing point used to place
+                        // one end of the beam at the project origin.
+                        var start = PointArg(elemDef, "start_point");
+                        var end = PointArg(elemDef, "end_point");
+                        if (start == null || end == null)
+                        { errors.Add($"Element {idx}: start_point and end_point are both required as {{x,y,z}} objects"); continue; }
+                        if (start.DistanceTo(end) < 0.001)
+                        { errors.Add($"Element {idx}: start and end are the same point — skipped"); continue; }
+
+                        var typeName = StrArg(elemDef, "type_name");
+                        FamilySymbol? targetSymbol = null;
+                        if (!string.IsNullOrEmpty(typeName))
+                        {
+                            targetSymbol = framingSymbols.FirstOrDefault(s =>
+                                string.Equals(ElemName(s), typeName, StringComparison.OrdinalIgnoreCase));
+                            // A misspelled name silently substituted an arbitrary beam type — say so instead.
+                            if (targetSymbol == null)
+                            { errors.Add($"Element {idx}: framing type '{typeName}' not found — skipped"); continue; }
+                        }
+                        targetSymbol ??= framingSymbols[0];
+
+                        var levelName = StrArg(elemDef, "level_name");
+                        Level? targetLevel = null;
+                        if (!string.IsNullOrEmpty(levelName))
+                        {
+                            targetLevel = levels.FirstOrDefault(l =>
+                                string.Equals(ElemName(l), levelName, StringComparison.OrdinalIgnoreCase));
+                            if (targetLevel == null)
+                            { errors.Add($"Element {idx}: level '{levelName}' not found — skipped"); continue; }
+                        }
+                        targetLevel ??= levels.FirstOrDefault();
+
+                        if (!targetSymbol.IsActive) { targetSymbol.Activate(); doc.Regenerate(); }
+
+                        var levelElev = targetLevel?.Elevation ?? 0.0;
+                        if (Math.Abs(levelElev) > 1e-9)
+                        {
+                            start = new XYZ(start.X, start.Y, start.Z + levelElev);
+                            end = new XYZ(end.X, end.Y, end.Z + levelElev);
+                        }
+
+                        var beam = doc.Create.NewFamilyInstance(
+                            Line.CreateBound(start, end), targetSymbol, targetLevel, StructuralType.Beam);
+
+                        created.Add(new Dictionary<string, object?>
+                        {
+                            ["id"] = beam.Id.Value,
+                            ["name"] = StrArg(elemDef, "name") ?? "",
+                            ["type"] = ElemName(targetSymbol),
+                            ["level"] = targetLevel != null ? ElemName(targetLevel) : "Unknown",
+                        });
                     }
-
-                    var beam = doc.Create.NewFamilyInstance(
-                        Line.CreateBound(start, end), targetSymbol, targetLevel, StructuralType.Beam);
-
-                    created.Add(new Dictionary<string, object?>
-                    {
-                        ["id"] = beam.Id.Value,
-                        ["name"] = StrArg(elemDef, "name") ?? "",
-                        ["type"] = ElemName(targetSymbol),
-                        ["level"] = targetLevel != null ? ElemName(targetLevel) : "Unknown",
-                    });
+                    catch (Exception beamEx) { errors.Add($"Element {idx}: {beamEx.Message}"); }
                 }
 
                 var levelMsg = created.Count > 0 && created[0]["level"] is string lvl && !string.IsNullOrEmpty(lvl)
                     ? $" on {lvl}" : "";
 
-                return Json(new Dictionary<string, object?>
+                bool allFramingFailed = created.Count == 0 && errors.Count > 0;
+                var framingPayload = new Dictionary<string, object?>
                 {
-                    ["ok"] = true,
-                    ["status"] = "success",
+                    ["ok"] = !allFramingFailed,
+                    ["status"] = allFramingFailed ? "failed" : errors.Count > 0 ? "partial" : "success",
                     ["created"] = created.Cast<object?>().ToList(),
                     ["count"] = created.Count,
-                    ["message"] = $"Created {created.Count} structural framing element{(created.Count != 1 ? "s" : "")}{levelMsg}",
-                });
+                    ["message"] = $"Created {created.Count} structural framing element{(created.Count != 1 ? "s" : "")}{levelMsg}"
+                                  + (errors.Count > 0 ? $" ({errors.Count} failed or skipped)" : ""),
+                };
+                if (errors.Count > 0) framingPayload["errors"] = errors;
+                return Json(framingPayload);
             });
         }
         catch (Exception ex) { return Err(ex.Message); }
@@ -641,6 +772,12 @@ public static partial class BridgeTools
                 var label = !string.IsNullOrEmpty(actualName) ? actualName
                     : !string.IsNullOrEmpty(actualNumber) ? actualNumber : "Unnamed";
 
+                // NewRoom(phase) — the no-location path — creates an UNPLACED room: no location, no
+                // boundary, no area, sitting in a schedule's "Unplaced" group until someone drags it into
+                // an enclosed region. Say so. The old message asserted a level placement that never
+                // happened, so a caller looping to populate a floor got a pile of unplaced rooms and a
+                // success for each.
+                bool placed = area > 0;
                 return Json(new Dictionary<string, object?>
                 {
                     ["ok"] = true,
@@ -649,8 +786,13 @@ public static partial class BridgeTools
                     ["name"] = actualName,
                     ["number"] = actualNumber,
                     ["level"] = levelName,
-                    ["area"] = area,
-                    ["message"] = $"Room '{label}' created on level '{levelName}'",
+                    ["area_sqm"] = area,
+                    ["placed"] = placed,
+                    ["message"] = placed
+                        ? $"Room '{label}' created and placed on level '{levelName}'"
+                        : $"Room '{label}' created UNPLACED (no location given, or the point was not inside an "
+                          + "enclosed area) — it has no boundary or area and will sit in the schedule's Unplaced "
+                          + "group until it is placed.",
                 });
             });
         }
@@ -668,6 +810,7 @@ public static partial class BridgeTools
             if (lines.Count == 0) return Err("No lines provided");
 
             var viewName = StrArg(args, "view_name");
+            var levelName = StrArg(args, "level_name");
             View? targetView;
             if (!string.IsNullOrEmpty(viewName))
             {
@@ -675,6 +818,19 @@ public static partial class BridgeTools
                     .FirstOrDefault(v => !v.IsTemplate
                                          && string.Equals(v.Name, viewName, StringComparison.OrdinalIgnoreCase));
                 if (targetView == null) return Err($"View '{viewName}' not found");
+            }
+            else if (!string.IsNullOrEmpty(levelName))
+            {
+                // level_name is advertised but was never read — lines landed on the ACTIVE view's level,
+                // silently producing wrong room areas. Resolve the level's plan view instead.
+                var level = new FilteredElementCollector(doc).OfClass(typeof(Level)).Cast<Level>()
+                    .FirstOrDefault(l => string.Equals(ElemName(l), levelName, StringComparison.OrdinalIgnoreCase));
+                if (level == null)
+                    return Err($"Level '{levelName}' not found");
+                targetView = new FilteredElementCollector(doc).OfClass(typeof(ViewPlan)).Cast<ViewPlan>()
+                    .FirstOrDefault(v => !v.IsTemplate && v.GenLevel != null && v.GenLevel.Id == level.Id);
+                if (targetView == null)
+                    return Err($"No plan view found for level '{levelName}' — pass view_name instead");
             }
             else
             {
@@ -687,13 +843,25 @@ public static partial class BridgeTools
 
             return InTransaction(doc, "Create Room Separation Lines", () =>
             {
+                // Per-item guard: a degenerate line (coincident points) threw out of the lambda and
+                // InTransaction rolled the WHOLE batch back with a raw Revit message. Skip and report.
                 var curveArray = new CurveArray();
+                var lineErrors = new List<object?>();
+                int idx = 0;
                 foreach (var lineDef in lines)
                 {
-                    var start = PointArg(lineDef, "start_point") ?? XYZ.Zero;
-                    var end = PointArg(lineDef, "end_point") ?? XYZ.Zero;
-                    curveArray.Append(Line.CreateBound(start, end));
+                    idx++;
+                    var start = PointArg(lineDef, "start_point");
+                    var end = PointArg(lineDef, "end_point");
+                    if (start == null || end == null)
+                    { lineErrors.Add($"Line {idx}: start_point and end_point are both required as {{x,y,z}} objects"); continue; }
+                    if (start.DistanceTo(end) < 0.001)
+                    { lineErrors.Add($"Line {idx}: start and end are the same point — skipped"); continue; }
+                    try { curveArray.Append(Line.CreateBound(start, end)); }
+                    catch (Exception lex) { lineErrors.Add($"Line {idx}: {lex.Message}"); }
                 }
+                if (curveArray.Size == 0)
+                    return Err("No usable lines" + (lineErrors.Count > 0 ? ": " + string.Join("; ", lineErrors.Select(e => e?.ToString())) : ""));
 
                 var sketchPlane = targetView.SketchPlane;
                 if (sketchPlane == null && targetView.GenLevel != null)
@@ -706,14 +874,18 @@ public static partial class BridgeTools
                     foreach (ModelCurve mc in separator)
                         createdIds.Add(mc.Id.Value);
 
-                return Json(new Dictionary<string, object?>
+                var sepPayload = new Dictionary<string, object?>
                 {
                     ["ok"] = true,
                     ["status"] = "success",
                     ["line_count"] = createdIds.Count,
                     ["line_ids"] = createdIds,
-                    ["message"] = $"Created {createdIds.Count} room separation line{(createdIds.Count != 1 ? "s" : "")}",
-                });
+                    ["view_used"] = ElemName(targetView),
+                    ["message"] = $"Created {createdIds.Count} room separation line{(createdIds.Count != 1 ? "s" : "")}"
+                                  + (lineErrors.Count > 0 ? $" ({lineErrors.Count} skipped)" : ""),
+                };
+                if (lineErrors.Count > 0) sepPayload["errors"] = lineErrors;
+                return Json(sepPayload);
             });
         }
         catch (Exception ex) { return Err(ex.Message); }
@@ -940,8 +1112,13 @@ public static partial class BridgeTools
                     newSystem = doc.GetElement(new ElementId(existingSystems[0]));
                     if (newSystem != null)
                     {
-                        var nameParam = newSystem.LookupParameter("System Name")
-                                        ?? newSystem.LookupParameter("Comments");
+                        // Built-in handle first, and NO Comments fallback. Comments is an unrelated user
+                        // annotation: writing the system name there overwrote whatever the user had while
+                        // still reporting the rename as successful. The built-in id is also
+                        // locale-independent — the old name lookup matched nothing on a non-English Revit,
+                        // so the rename silently did nothing there and still reported success.
+                        var nameParam = newSystem.get_Parameter(BuiltInParameter.RBS_SYSTEM_NAME_PARAM)
+                                        ?? newSystem.LookupParameter("System Name");
                         if (nameParam != null && !nameParam.IsReadOnly) nameParam.Set(systemName);
                     }
                 }
@@ -1253,6 +1430,21 @@ public static partial class BridgeTools
                     return Err($"Unsupported file type '{fileExt}'. Supported: DWG, DXF, DGN, SAT, SKP, 3DM, RVT");
                 }
 
+                // `position` is advertised as a placement offset but every path above places at the project
+                // origin — move the created instance so the argument means what the schema says. A CAD
+                // underlay whose own origin differs from the project's is the normal coordination case.
+                bool moved = false;
+                var pos = PointArg(args, "position");
+                if (pos != null && resultId.HasValue && !pos.IsZeroLength())
+                {
+                    try
+                    {
+                        ElementTransformUtils.MoveElement(doc, new ElementId(resultId.Value), pos);
+                        moved = true;
+                    }
+                    catch { /* some link types refuse a move — reported as position_applied=false */ }
+                }
+
                 var verb = mode == "link" ? "Linked" : "Imported";
                 return Json(new Dictionary<string, object?>
                 {
@@ -1262,7 +1454,8 @@ public static partial class BridgeTools
                     ["file_name"] = fileName,
                     ["file_type"] = fileType,
                     ["mode"] = mode,
-                    ["message"] = $"{verb} file '{fileName}'",
+                    ["position_applied"] = moved,
+                    ["message"] = $"{verb} file '{fileName}'" + (moved ? " (moved to the requested position)" : ""),
                 });
             });
         }

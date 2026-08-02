@@ -52,7 +52,15 @@ public sealed class PublishShimModule : Module
 
         foreach (var publishFolder in publishFolders)
         {
-            shimExe.CopyTo(publishFolder.GetFile(shimExe.Name).Path);
+            // NEXT TO Transom.dll, which lives one level deeper in publish/Transom/ (Transom.csproj's Office
+            // post-build stages the payload there, and the add-in's first-launch
+            // EnsureBundledShimAndAutoRegister looks for the shim beside itself). Copying to the publish
+            // ROOT put it one directory above every one of those — the installer harvests recursively, so
+            // the file shipped, just not where anything looks for it. The manual runbook already targets
+            // publish/Transom/; this now matches it.
+            var payloadFolder = publishFolder.GetFolder("Transom");
+            var destFolder = payloadFolder.Exists ? payloadFolder : publishFolder;
+            shimExe.CopyTo(destFolder.GetFile(shimExe.Name).Path);
         }
     }
 }

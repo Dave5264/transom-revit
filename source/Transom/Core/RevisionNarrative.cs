@@ -37,6 +37,29 @@ public static class RevisionNarrative
         public string FirmName = "";
         /// <summary>Normalize comment text to house style (sentence case + trailing period). Answer #4 = yes.</summary>
         public bool Normalize = true;
+
+        // GEN-01..GEN-04: four conventions that used to be compiled in as one practice's house style. Each is
+        // empty/null by default and falls back to the built-in value, so the out-of-the-box narrative is
+        // unchanged; TransomSettings supplies overrides (see FromSettings).
+
+        /// <summary>Intro boilerplate with <c>{title}</c>/<c>{date}</c> placeholders. Empty = built-in.</summary>
+        public string IntroTemplate = "";
+        /// <summary>"PREFIX=Discipline" entries; list order = discipline order. Null/empty = built-in map.</summary>
+        public IReadOnlyList<string>? DisciplineMap;
+        /// <summary>Title-block parameter names to try for the building name. Null/empty = "Building Name".</summary>
+        public IReadOnlyList<string>? BuildingNameParameters;
+        /// <summary>Words the title-caser keeps lowercase mid-sentence. Null/empty = built-in English list.</summary>
+        public IReadOnlyList<string>? TitleCaseSmallWords;
+
+        /// <summary>Reads the four overridable narrative conventions out of the persisted settings. Anything the
+        /// user hasn't set stays empty, i.e. keeps the built-in default.</summary>
+        public static Options FromSettings(TransomSettings s) => new()
+        {
+            IntroTemplate = s.RevisionIntroTemplate ?? "",
+            DisciplineMap = s.RevisionDisciplineMap,
+            BuildingNameParameters = s.RevisionBuildingNameParameters,
+            TitleCaseSmallWords = s.RevisionTitleCaseSmallWords,
+        };
     }
 
     // ---- output model (consumed by RevisionNarrativeDocxWriter) ----
@@ -70,7 +93,10 @@ public static class RevisionNarrative
 
     // Sheet-number prefix -> discipline name. G (general) is filed under Architectural, which matches common
     // narrative practice. Order of this list is the discipline order in the document.
-    private static readonly (string Prefix, string Name)[] DisciplineMap =
+    // GEN-02: this is the DEFAULT map, not the only one — a project using AD for demolition, T for telecom, FS
+    // for food service, or a non-US discipline scheme used to fall silently into "Other". Options.DisciplineMap
+    // (from TransomSettings.RevisionDisciplineMap) replaces it wholesale when set.
+    private static readonly (string Prefix, string Name)[] DefaultDisciplineMap =
     {
         ("A", "Architectural"), ("G", "Architectural"),
         ("S", "Structural"),
@@ -81,8 +107,35 @@ public static class RevisionNarrative
         ("L", "Landscape"),
         ("FP", "Fire Protection"), ("FA", "Fire Alarm"),
     };
-    private static readonly string[] DisciplineOrder =
-        { "Architectural", "Structural", "Mechanical", "Electrical", "Plumbing", "Civil", "Landscape", "Fire Protection", "Fire Alarm", "Other" };
+
+    /// <summary>The prefix→discipline pairs in effect: the caller's override, else the built-in map. Malformed
+    /// entries (no '=', empty prefix or name) are skipped rather than failing the whole run.</summary>
+    private static (string Prefix, string Name)[] MapFor(Options opts)
+    {
+        if (opts.DisciplineMap == null || opts.DisciplineMap.Count == 0) return DefaultDisciplineMap;
+        var pairs = new List<(string, string)>();
+        foreach (var entry in opts.DisciplineMap)
+        {
+            var i = (entry ?? "").IndexOf('=');
+            if (i <= 0) continue;
+            var prefix = entry!.Substring(0, i).Trim().ToUpperInvariant();
+            var name = entry.Substring(i + 1).Trim();
+            if (prefix.Length > 0 && name.Length > 0) pairs.Add((prefix, name));
+        }
+        return pairs.Count > 0 ? pairs.ToArray() : DefaultDisciplineMap;
+    }
+
+    /// <summary>Discipline output order: the order the map lists them in (first mention wins), with "Other"
+    /// always last. Derived rather than a second hardcoded list, so a custom map can't silently order-drop a
+    /// discipline the way a fixed order array would.</summary>
+    private static string[] DisciplineOrderFor(Options opts)
+    {
+        var order = new List<string>();
+        foreach (var (_, name) in MapFor(opts))
+            if (!order.Contains(name)) order.Add(name);
+        order.Add("Other");
+        return order.ToArray();
+    }
 
     public static Data Build(Document doc, ElementId revisionId, Options opts)
     {
@@ -96,24 +149,24 @@ public static class RevisionNarrative
         var pinfo = doc.ProjectInformation;
         // Building name is read FROM the title block, so it only appears when it's actually used there
         // (and uses the exact value shown on the sheets). Empty => not shown.
-        data.BuildingName = TitleCaseSmart(BuildingNameFromTitleBlock(doc));
-        data.ProjectName = TitleCaseSmart(SafeStr(() => pinfo?.Name));
+        data.BuildingName = TitleCaseSmart(BuildingNameFromTitleBlock(doc, opts), opts);
+        data.ProjectName = TitleCaseSmart(SafeStr(() => pinfo?.Name), opts);
         foreach (var line in SafeStr(() => pinfo?.Address).Replace("\r", "").Split('\n'))
-            if (!string.IsNullOrWhiteSpace(line)) data.AddressLines.Add(TitleCaseSmart(line.Trim()));
+            if (!string.IsNullOrWhiteSpace(line)) data.AddressLines.Add(TitleCaseSmart(line.Trim(), opts));
         var projNo = SafeStr(() => pinfo?.Number);
         data.ProjectNumberLine = string.IsNullOrWhiteSpace(opts.FirmName)
             ? $"Project Number: {projNo}"
             : $"{opts.FirmName} Project Number: {projNo}";
 
-        data.AddendumLabel = TitleCaseSmart(SafeStr(() => rev.Description));
+        data.AddendumLabel = TitleCaseSmart(SafeStr(() => rev.Description), opts);
         data.IssueDate = FormatDate(SafeStr(() => rev.RevisionDate));
 
         // The boilerplate references the ISSUE BEING REVISED — the previous (non-blank) revision in the
         // sequence, or, for the first revision, the original submission (Project Status + Project Issue Date).
         var (refTitleRaw, refDateRaw) = ReferencedIssue(doc, revisionId);
-        data.RefTitle = TitleCaseSmart(string.IsNullOrWhiteSpace(opts.PlanSetTitle) ? refTitleRaw : opts.PlanSetTitle);
+        data.RefTitle = TitleCaseSmart(string.IsNullOrWhiteSpace(opts.PlanSetTitle) ? refTitleRaw : opts.PlanSetTitle, opts);
         data.RefDate = string.IsNullOrWhiteSpace(opts.PlanSetDate) ? refDateRaw : opts.PlanSetDate;
-        data.IntroSentence = ComposeIntro(data.RefTitle, data.RefDate);
+        data.IntroSentence = ComposeIntro(data.RefTitle, data.RefDate, opts.IntroTemplate);
 
         // ---- collect clouds for this revision ----
         var clouds = new FilteredElementCollector(doc)
@@ -156,7 +209,7 @@ public static class RevisionNarrative
                 var number = SafeStr(() => sh.SheetNumber);
                 var name = SafeStr(() => sh.Name);
 
-                var disc = DisciplineFor(number);
+                var disc = DisciplineFor(number, opts);
                 if (!byDiscipline.TryGetValue(disc, out var sheetMap)) { sheetMap = new Dictionary<string, Sheet>(); byDiscipline[disc] = sheetMap; }
                 if (!sheetMap.TryGetValue(number, out var sheet)) { sheet = new Sheet { Number = number, Name = name }; sheetMap[number] = sheet; }
                 sheet.Notes.Add(new Note { Text = comment, DetailNumber = kv.Value.detail, Mark = mark, CloudId = c.Id.Value });
@@ -167,8 +220,8 @@ public static class RevisionNarrative
         if (orphan > 0) data.Warnings.Add($"{orphan} cloud(s) could not be attributed to a sheet.");
         data.SourceCloudCount = clouds.Count - noComment - orphan;   // #104: clouds that produced notes (before collapse)
 
-        // ---- order: disciplines (fixed order), sheets (natural by number), notes (detail# -> mark -> id) ----
-        foreach (var discName in DisciplineOrder)
+        // ---- order: disciplines (map order), sheets (natural by number), notes (detail# -> mark -> id) ----
+        foreach (var discName in DisciplineOrderFor(opts))
         {
             if (!byDiscipline.TryGetValue(discName, out var sheetMap)) continue; // #7: only disciplines with clouds
             var d = new Discipline { Name = discName };
@@ -184,16 +237,22 @@ public static class RevisionNarrative
     }
 
     /// <summary>The boilerplate intro sentence, composed from the referenced issue — public so the confirm
-    /// dialog can recompose it after the user edits <see cref="Data.RefTitle"/> / <see cref="Data.RefDate"/>.</summary>
-    public static string ComposeIntro(string refTitle, string refDate) =>
-        $"The drawings for the above-referenced project titled {refTitle}, dated {refDate} " +
-        "are revised by, but not limited to, the following items:";
+    /// dialog can recompose it after the user edits <see cref="Data.RefTitle"/> / <see cref="Data.RefDate"/>.
+    /// GEN-01: the default sentence is one jurisdiction's US-English addendum phrasing; <paramref name="template"/>
+    /// (from TransomSettings.RevisionIntroTemplate) replaces it, substituting {title} and {date}.</summary>
+    public static string ComposeIntro(string refTitle, string refDate, string template = "")
+    {
+        if (!string.IsNullOrWhiteSpace(template))
+            return template.Replace("{title}", refTitle).Replace("{date}", refDate);
+        return $"The drawings for the above-referenced project titled {refTitle}, dated {refDate} " +
+               "are revised by, but not limited to, the following items:";
+    }
 
-    private static string DisciplineFor(string sheetNumber)
+    private static string DisciplineFor(string sheetNumber, Options opts)
     {
         var n = (sheetNumber ?? "").TrimStart().ToUpperInvariant();
         // two-letter prefixes first (FP/FA), then single-letter
-        foreach (var (prefix, name) in DisciplineMap.OrderByDescending(m => m.Prefix.Length))
+        foreach (var (prefix, name) in MapFor(opts).OrderByDescending(m => m.Prefix.Length))
             if (n.StartsWith(prefix, StringComparison.Ordinal)) return name;
         return "Other";
     }
@@ -372,7 +431,9 @@ public static class RevisionNarrative
     private static bool IsProtectedToken(string tok, bool entirelyUpper)
     {
         var core = tok.Trim('(', ')', '.', ',', ';', ':', '"');
-        if (Regex.IsMatch(core, @"[A-Za-z]{1,3}\d{2,4}")) return true;           // A601, 3/A601, 20/S301
+        // Anchored: the WHOLE token must be a sheet ref/callout. Unanchored, any word with letters+digits
+        // embedded (ROOM101) matched on a substring and escaped normalization.
+        if (Regex.IsMatch(core, @"^\d*/?[A-Za-z]{1,3}\d{2,4}$")) return true;    // A601, 3/A601, 20/S301
         if (core.Contains('/') && Regex.IsMatch(core, "[A-Za-z]")) return true;  // generic "n/Sheet" callouts
         if (!entirelyUpper && Regex.IsMatch(core, @"^[A-Z][A-Z0-9]{1,5}$")) return true; // SCEC, CFM, SIM, MLO
         return false;
@@ -428,8 +489,14 @@ public static class RevisionNarrative
     ///     confirm which built-in a title-block *label* displays, so (b) is gated on title blocks existing
     ///     rather than on inspecting the label — a practical, conservative proxy.)
     /// </summary>
-    private static string BuildingNameFromTitleBlock(Document doc)
+    private static string BuildingNameFromTitleBlock(Document doc, Options opts)
     {
+        // GEN-03: "Building Name" was the only name looked up, so a template calling the parameter BuildingName,
+        // Building_Name or a localized equivalent matched nothing and fell through silently.
+        var names = opts.BuildingNameParameters is { Count: > 0 }
+            ? opts.BuildingNameParameters
+            : new[] { "Building Name" };
+
         try
         {
             var onSheets = new HashSet<long>(
@@ -442,8 +509,11 @@ public static class RevisionNarrative
             {
                 if (tb.OwnerViewId == ElementId.InvalidElementId || !onSheets.Contains(tb.OwnerViewId.Value)) continue;
                 titleBlockOnSheet = true;
-                var v = tb.LookupParameter("Building Name")?.AsString(); // (a) custom/shared param on the title block
-                if (!string.IsNullOrWhiteSpace(v)) return v!;
+                foreach (var pname in names)   // (a) custom/shared param on the title block
+                {
+                    var v = tb.LookupParameter(pname)?.AsString();
+                    if (!string.IsNullOrWhiteSpace(v)) return v!;
+                }
             }
 
             // (b) built-in Project Information "Building Name" (what a title block typically labels).
@@ -457,8 +527,17 @@ public static class RevisionNarrative
         return "";
     }
 
-    private static readonly HashSet<string> SmallWords = new(StringComparer.OrdinalIgnoreCase)
+    // GEN-04: this list mixes languages — the English connectors plus the Romance particles "de" and "la". In an
+    // English title-caser those two wrongly lowercase legitimate words: "DE SOTO AVENUE" becomes "de Soto Avenue".
+    // Kept in the default for backward compatibility with narratives already produced by this build; a practice
+    // that wants one language sets TransomSettings.RevisionTitleCaseSmallWords.
+    private static readonly HashSet<string> DefaultSmallWords = new(StringComparer.OrdinalIgnoreCase)
         { "of", "the", "and", "a", "an", "in", "on", "at", "to", "for", "by", "or", "nor", "but", "de", "la" };
+
+    private static HashSet<string> SmallWordsFor(Options opts) =>
+        opts.TitleCaseSmallWords is { Count: > 0 }
+            ? new HashSet<string>(opts.TitleCaseSmallWords, StringComparer.OrdinalIgnoreCase)
+            : DefaultSmallWords;
 
     /// <summary>
     ///     Title-cases an ALL-CAPS string the way a name/address reads: each significant word capitalized,
@@ -467,11 +546,12 @@ public static class RevisionNarrative
     ///     ("29th", "1200"). Strings that already contain lowercase are left as entered in Revit.
     ///     e.g. "1200 WEST 29TH STREET N" -> "1200 West 29th Street N"; "SPRINGFIELD, KANSAS" -> "Springfield, Kansas".
     /// </summary>
-    private static string TitleCaseSmart(string s)
+    private static string TitleCaseSmart(string s, Options opts)
     {
         if (string.IsNullOrWhiteSpace(s)) return s ?? "";
         if (s.Any(char.IsLower)) return s; // already mixed case — assume entered correctly
 
+        var smallWords = SmallWordsFor(opts);
         var sb = new StringBuilder();
         bool first = true;
         foreach (var tok in Regex.Split(s.ToLowerInvariant(), @"(\s+)"))
@@ -481,7 +561,7 @@ public static class RevisionNarrative
 
             var core = tok.Trim('(', ')', '.', ',', ';', ':', '"', '#');
             if (core.Length == 1 && char.IsLetter(core[0])) sb.Append(tok.ToUpperInvariant()); // A, B, N, S…
-            else if (!first && SmallWords.Contains(core)) sb.Append(tok);                        // of, the, and…
+            else if (!first && smallWords.Contains(core)) sb.Append(tok);                        // of, the, and…
             else sb.Append(CapFirstLetter(tok));
             first = false;
         }
@@ -514,9 +594,19 @@ public static class RevisionNarrative
                     int si = i, sj = j;
                     while (i < a.Length && char.IsDigit(a[i])) i++;
                     while (j < b.Length && char.IsDigit(b[j])) j++;
-                    var na = long.Parse(a.Substring(si, i - si));
-                    var nb = long.Parse(b.Substring(sj, j - sj));
-                    if (na != nb) return na.CompareTo(nb);
+                    var ra = a.Substring(si, i - si);
+                    var rb = b.Substring(sj, j - sj);
+                    // Compare the runs numerically WITHOUT parsing — a 19+-digit run overflows
+                    // long.Parse, and an exception inside an IComparer aborts the whole OrderBy.
+                    // Strip leading zeros: a longer remainder is bigger, then ordinal digits decide.
+                    var ta = ra.TrimStart('0');
+                    var tb = rb.TrimStart('0');
+                    if (ta.Length != tb.Length) return ta.Length.CompareTo(tb.Length);
+                    int ncmp = string.CompareOrdinal(ta, tb);
+                    if (ncmp != 0) return ncmp;
+                    // Numerically equal but padded differently ("A01" vs "A1"): shorter run first,
+                    // so two distinct sheet numbers never compare as a tie.
+                    if (ra.Length != rb.Length) return ra.Length.CompareTo(rb.Length);
                 }
                 else
                 {

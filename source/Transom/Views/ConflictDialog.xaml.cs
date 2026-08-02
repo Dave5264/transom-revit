@@ -30,9 +30,20 @@ public partial class ConflictDialog : Window
             // like "ABC". The picker only chooses WHICH value wins the conflict; parsing/format is handled later on
             // the inline confirm line (an unreadable pick becomes a pending row that asks for a usable value).
             var entered = opt.IsEntered ? "   (entered value)" : "";
+            // opt.Display is a schedule CELL VALUE — arbitrary user data (a long text parameter, a comment, a
+            // concatenated hardware description). RadioButton.Content set to a plain string renders as a single
+            // non-wrapping line, and this window is fixed-width, so long competing values were clipped and the
+            // user picked between values they could only partly see — a choice Apply_Click then writes to the
+            // model. A wrapping TextBlock is the content instead. (Every other text element in the XAML already
+            // sets TextWrapping; this was the one whose content is unbounded.)
             var rb = new RadioButton
             {
-                Content = $"{opt.Display}{entered}",
+                Content = new TextBlock
+                {
+                    Text = $"{opt.Display}{entered}",
+                    TextWrapping = TextWrapping.Wrap,
+                    Foreground = (System.Windows.Media.Brush)Resources["Text"],
+                },
                 Margin = new Thickness(0, 4, 0, 4),
                 IsChecked = first,
             };

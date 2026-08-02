@@ -41,10 +41,14 @@ public sealed class ExcelWriter
         var used = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var pairs = new List<(ScheduleTable t, string name)>();
 
+        // ONE style cache for the whole workbook: styles/fonts allocate into workbook-global tables, so a
+        // per-sheet cache re-creates identical styles per sheet (N× bloat) — and the .xls 4,000-style cap
+        // is a WORKBOOK limit, so a per-sheet count could sail past it without the guard ever firing.
+        var styleCache = new Dictionary<string, ICellStyle>();
         foreach (var table in tables)
         {
             var name = UniqueName(SafeSheetName(table.ScheduleName), used);
-            WriteSheet(wb, wb.CreateSheet(name), table, xls, outcomes, attempted);
+            WriteSheet(wb, wb.CreateSheet(name), table, xls, styleCache, outcomes, attempted);
             pairs.Add((table, name));
         }
 
@@ -65,10 +69,10 @@ public sealed class ExcelWriter
     }
 
     private static void WriteSheet(IWorkbook wb, ISheet sheet, ScheduleTable table, bool xls,
+        Dictionary<string, ICellStyle> cache,
         Dictionary<(string uid, int paramId), ApplyOutcome>? outcomes = null,
         Dictionary<(string uid, int paramId), string>? attempted = null)
     {
-        var cache = new Dictionary<string, ICellStyle>();
         int anchorCol = table.ColCount;
 
         // When the schedule's column headers are turned off, Revit's Body has no field-name row, so row 0 is real
@@ -214,21 +218,29 @@ public sealed class ExcelWriter
         foreach (var m in table.Merges)
             sheet.AddMergedRegion(new CellRangeAddress(m.Top + rowOffset, m.Bottom + rowOffset, m.Left, m.Right));
 
+        // PERF-04: this used to call NPOI's AutoSizeColumn for every column. AutoSizeColumn renders and measures
+        // the text of EVERY cell in the column through the font metrics — O(rows × cols) text measurements per
+        // sheet, NPOI's well-known slow path, and the reason large exports cost far more than their data volume
+        // suggests. The measurement was then immediately clamped into [8, 60] characters, so all that precision
+        // bought was a value somewhere inside that band.
+        //
+        // The replacement is the character-count approximation that used to sit in the `catch`: O(rows × cols)
+        // string-LENGTH reads instead of font measurements, orders of magnitude cheaper, and it lands in the
+        // same [8, 60] clamp, so the visible outcome is preserved.
+        //
+        // NOT ScheduleTable.ColWidthsPx. That field holds Revit's own per-column widths
+        // (ScheduleReader.SafeWidthPx → TableSectionData.GetColumnWidthInPixels) and is tempting because it is
+        // read and then never used — but it is the SCHEDULE VIEW's column widths, which in practice are left at
+        // the default. Measured live on a real project (2026-08-01): every body column of an 18-column door
+        // schedule reported exactly 96 px, so keying off it produced a workbook whose columns were all the
+        // identical 13.7 characters wide. That is a visible regression against content-fitted widths, so the
+        // cheap approximation wins on both axes here.
         for (int c = 0; c < table.ColCount; c++)
         {
-            int w;
-            try
-            {
-                sheet.AutoSizeColumn(c);
-                w = (int)sheet.GetColumnWidth(c) + 2 * 256;
-            }
-            catch
-            {
-                int maxLen = 4;
-                for (int r = 0; r < table.RowCount; r++)
-                    maxLen = Math.Max(maxLen, table.Cells[r][c].Text.Length);
-                w = (maxLen + 2) * 256;
-            }
+            int maxLen = 4;
+            for (int r = 0; r < table.RowCount; r++)
+                maxLen = Math.Max(maxLen, table.Cells[r][c].Text.Length);
+            int w = (maxLen + 2) * 256;
             sheet.SetColumnWidth(c, Math.Max(8 * 256, Math.Min(w, 60 * 256)));
         }
 
@@ -278,15 +290,10 @@ public sealed class ExcelWriter
         BorderTop = s.BorderTop, BorderBottom = s.BorderBottom, BorderLeft = s.BorderLeft, BorderRight = s.BorderRight,
     };
 
-    /// <summary>Red fill but GREY text — a BROKEN-group built-in cell when Claude-Assist is OFF. Without Assist the
-    /// cell usually can't be edited (option 2 aside, which depends on import-time value alignment not known at
-    /// export); the greyed text reads as effectively non-editable until Assist is enabled.</summary>
-    private static CellStyleInfo RedGreyOf(CellStyleInfo s) => new()
-    {
-        FontName = s.FontName, TextSize = s.TextSize, Bold = s.Bold, Italic = s.Italic, Underline = s.Underline,
-        HAlign = s.HAlign, VAlign = s.VAlign, TextColor = 0x9A9A9A, BackColor = 0xF8D2D5,
-        BorderTop = s.BorderTop, BorderBottom = s.BorderBottom, BorderLeft = s.BorderLeft, BorderRight = s.BorderRight,
-    };
+    // RedGreyOf (red fill + grey text for a broken-group built-in with Claude-Assist OFF) was defined here
+    // and never called — the style-precedence chain has no Assist-enabled branch that could reach it, so
+    // its doc comment described a user-visible colour contract the export does not implement. Removed
+    // rather than left as a promise; re-add it together with the branch that selects it.
 
     /// <summary>A green-tinted-FILL copy of a cell style for BULK-write cells (type param / group header → many
     /// elements). Keeps the original (black) text colour — only the background is tinted.</summary>
@@ -481,7 +488,7 @@ public sealed class ExcelWriter
             tool = "Transom",
             version = 1,
             anchorSentinel = ScheduleReader.AnchorSentinel,
-            sourceModel = new { guid = first.SourceModelGuid, title = first.SourceModelTitle },
+            sourceModel = new { guid = first.SourceModelGuid, title = first.SourceModelTitle, path = first.SourceModelPath },
             sheets = pairs.Select(p => new
             {
                 sheetName = p.name,

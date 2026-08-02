@@ -17,6 +17,11 @@ public partial class HelpDialog : Window
     private void Issues_Click(object sender, RoutedEventArgs e) => Open(AppInfo.IssuesUrl);
     private void Releases_Click(object sender, RoutedEventArgs e) => Open(AppInfo.ReleasesUrl);
 
+    /// <summary>UI-17: opens the authoritative cell-colour legend (the Export tab's "More information" dialog)
+    /// instead of this window keeping its own copy of the legend text, which is what let it drift.</summary>
+    private void Legend_Click(object sender, RoutedEventArgs e) =>
+        new ExportLegendDialog { Owner = this }.ShowDialog();
+
     private static void Open(string url)
     {
         try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(url) { UseShellExecute = true }); }
@@ -38,7 +43,7 @@ public partial class HelpDialog : Window
         Set("Surface", "#3A3A3D");
         Set("Text", "#E8E8E8");
         Set("Muted", "#B4B4B4");
-        Set("Hint", "#8C8C8C");
+        Set("Hint", "#A8A8A8");   // GEN-11: matched to TransomView's dark Hint (was #8C8C8C)
         Set("Line", "#4A4A4D");
         Set("Accent", "#4C9DE0");
         Set("InfoBg", "#23323F");

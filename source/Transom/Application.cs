@@ -19,7 +19,8 @@ public class Application : ExternalApplication
         Core.BridgeRuntime.Initialize();
 
         // Seamless MCP setup: copy the bundled self-contained shim to the per-user location and register it
-        // with the user's Claude clients once (Option A — see install/SEAMLESS_INSTALL.md). Run off the UI
+        // with the user's Claude clients once (Option A of the bundled-MCP design; the v1.3.0 post-mortem that
+        // chose it is archived locally, not in this repo). Run off the UI
         // thread so Revit startup is never delayed by the file copy; the helper never throws.
         System.Threading.Tasks.Task.Run(Core.McpRegistration.EnsureBundledShimAndAutoRegister);
 
@@ -69,7 +70,18 @@ public class Application : ExternalApplication
         panel.AddPushButton<RevisionNarrativeCommand>("Revision\nNarrative")
             .SetImage("/Transom;component/Resources/Icons/RevisionNarrative16.png")
             .SetLargeImage("/Transom;component/Resources/Icons/RevisionNarrative32.png")
-            .SetToolTip("Generate a Revision Narrative (.docx) from a selected revision's clouds — reads each cloud's Comments, groups by discipline and sheet, numbers the items per sheet, and writes the firm letterhead narrative (start from a previous narrative to keep header/footer/fonts). Stand-alone; no Claude required.");
+            .SetToolTip("Generate a Revision Narrative (.docx) from a selected revision's clouds — reads each cloud's Comments, groups by discipline and sheet, numbers the items per sheet, and writes a letterhead narrative (start from a previous narrative to keep header/footer/fonts). Stand-alone; no Claude required.");
+
+        var aireButton = panel.AddPushButton<AireCommand>("AI Render\nEnhancer")
+            .SetImage("/Transom;component/Resources/Icons/Aire16.png")
+            .SetLargeImage("/Transom;component/Resources/Icons/Aire32.png")
+            .SetToolTip("AIRE — AI Render Enhancer: batch-enhance architectural renders through OpenAI image "
+                        + "models with model/resolution/quality control, per-batch cost confirmation, and a CSV log. "
+                        + "Works on image files, no model required. Claude can also run it via the bridge (aire_enhance) "
+                        + "once an API key is saved here.");
+        // Image enhancement needs no document — keep the button live on the zero-doc Home screen too.
+        if (aireButton is Autodesk.Revit.UI.PushButton airePb)
+            airePb.AvailabilityClassName = typeof(AlwaysAvailable).FullName;
 
         panel.AddSeparator();
 
@@ -85,7 +97,7 @@ public class Application : ExternalApplication
 
         // Claude consolidation: the old "Claude Assist" ribbon group (Set up Claude / Claude Bridge / Bridge
         // Status) is retired — setup, the on/off switch, and the status checklist all live on the Settings tab
-        // now (see docs/design-notes/claude-ui-consolidation.md). Settings is the one remaining entry point.
+        // now (the v1.7.0 Claude-UI consolidation; note archived locally). Settings is the one remaining entry point.
         var settingsButton = panel.AddPushButton<SettingsCommand>("Settings")
             .SetImage("/Transom;component/Resources/Icons/Settings16.png")
             .SetLargeImage("/Transom;component/Resources/Icons/Settings32.png")

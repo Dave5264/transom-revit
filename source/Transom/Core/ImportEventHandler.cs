@@ -29,6 +29,20 @@ public sealed class ImportEventHandler : IExternalEventHandler
     public Action<string> OnAppliedLog = _ => { };   // full apply diagnostic (incl. Revit warnings) for Copy-log
     public Action<string> OnError = _ => { };
 
+    /// <summary>
+    ///     Revit dialogs the apply may auto-answer with 7 (No/Cancel) — the side-effect prompts a parameter
+    ///     write raises, where "No" is both safe and the intended answer. Fail-closed by design: anything not
+    ///     listed here is recorded and left for a human, because answering "No" to an unknown prompt can
+    ///     silently abandon part of a write while the apply still reports success. Grow this list only after
+    ///     observing a dialog live and confirming No is the benign answer (same policy as the failure
+    ///     auto-resolution allow-list in docs/design-notes/revit-api-research-notes.md).
+    /// </summary>
+    private static readonly System.Collections.Generic.HashSet<string> AutoDismissDialogIds = new(StringComparer.Ordinal)
+    {
+        "TaskDialog_Rename_Corresponding_Level_and_Views",   // renaming a Level: "rename associated views?"
+        "TaskDialog_Changes_To_Group",                        // group-member edit notice
+    };
+
     public void Execute(UIApplication app)
     {
         try
@@ -61,7 +75,7 @@ public sealed class ImportEventHandler : IExternalEventHandler
                     try { OfficeIsolation.Engine.WriteDiagnostics(wb, cs.Diagnostics, reportPath); cs.ReportPath = reportPath; }
                     catch { /* report is best-effort */ }
                 }
-                if (WriteRunLog) RunLog.WriteImport(ExchangeFolder, WorkbookPath, cs);
+                if (WriteRunLog) RunLog.WriteImport(ExchangeFolder, WorkbookPath, cs, "preview");
                 OnPreview(cs);
             }
             else
@@ -69,13 +83,25 @@ public sealed class ImportEventHandler : IExternalEventHandler
                 if (PendingChangeSet == null) { OnError("No previewed changes to apply."); return; }
 
                 // Some edits raise modal DialogBoxes (not Failures) that would block the apply — e.g. renaming a
-                // Level prompts "rename associated views?". Auto-dismiss them (7 = No/Cancel, same as the export
-                // pass) so the apply completes; record which ones for the log.
+                // Level prompts "rename associated views?". Auto-dismiss the KNOWN-SAFE ones with 7 (No/Cancel);
+                // record every dialog seen. An unrecognised dialog is left alone: answering "No" to everything
+                // could silently abandon part of a write whose prompt needed assent, and the user would see a
+                // successful apply with only a raw DialogId in the log.
                 var dialogs = new System.Collections.Generic.List<string>();
+                var unhandledDialogs = new System.Collections.Generic.List<string>();
                 EventHandler<Autodesk.Revit.UI.Events.DialogBoxShowingEventArgs> dh = (_, e) =>
                 {
-                    try { dialogs.Add(e.DialogId); } catch { /* ignore */ }
-                    try { e.OverrideResult(7); } catch { /* ignore */ }
+                    string id = "";
+                    try { id = e.DialogId ?? ""; } catch { /* ignore */ }
+                    try { dialogs.Add(id); } catch { /* ignore */ }
+                    if (AutoDismissDialogIds.Contains(id))
+                    {
+                        try { e.OverrideResult(7); } catch { /* ignore */ }
+                    }
+                    else
+                    {
+                        try { unhandledDialogs.Add(id); } catch { /* ignore */ }
+                    }
                 };
                 app.DialogBoxShowing += dh;
                 string status;
@@ -90,10 +116,11 @@ public sealed class ImportEventHandler : IExternalEventHandler
                     // FIX 3 + FIX 4: rebuild the apply log + status from the FINAL by-uid verified outcomes, so the
                     // counts don't carry the mid-loop type-bound over-count and the non-applied set is split into
                     // honest buckets (write-didn't-take vs no-such-parameter). Only for the clean single-commit path:
-                    // a rollback ("ROLLED BACK") or per-change recovery ("recovered after rollback") keeps its own
-                    // authoritative log (those carry essential rollback/retry context the finalizer would drop, and
-                    // their per-change transactions don't have the mid-loop type-bound over-count).
-                    if (!status.Contains("ROLLED BACK") && !status.Contains("recovered after rollback"))
+                    // a rollback or per-change recovery keeps its own authoritative log (those carry essential
+                    // rollback/retry context the finalizer would drop, and their per-change transactions don't have
+                    // the mid-loop type-bound over-count). Branch on the FLAGS Apply sets — this used to substring-
+                    // match the user-facing status prose, so re-wording a message silently changed control flow.
+                    if (!PendingChangeSet.RolledBack && !PendingChangeSet.RecoveredAfterRollback)
                         status = new Importer().FinalizeApplyReport(PendingChangeSet);
 
                     var runResultsPath = RunResultsWriter.Write(doc, PendingChangeSet, app, WorkbookPath);
@@ -101,7 +128,12 @@ public sealed class ImportEventHandler : IExternalEventHandler
                 }
                 catch { /* verification / report is best-effort — never block the apply */ }
 
-                if (dialogs.Count > 0) status += $"  ·  {dialogs.Count} Revit prompt(s) auto-dismissed (see log)";
+                int autoDismissed = dialogs.Count - unhandledDialogs.Count;
+                if (autoDismissed > 0) status += $"  ·  {autoDismissed} Revit prompt(s) auto-dismissed (see log)";
+                // An unrecognised prompt was answered by the USER, not by us — it may have changed what the
+                // apply did, so it must never be invisible on the status line.
+                if (unhandledDialogs.Count > 0)
+                    status += $"  ·  ⚠ {unhandledDialogs.Count} unexpected Revit prompt(s) shown during apply (see log)";
 
                 // W1 (Task #17): if Revit's regen auto-fix deleted geometry during apply, surface it on the status
                 // line too (the detail/ids are in the apply log) — a "successful" apply that removed geometry must
@@ -109,17 +141,57 @@ public sealed class ImportEventHandler : IExternalEventHandler
                 if (PendingChangeSet.RevitDeletions.Count > 0)
                     status += $"  ·  ⚠ {PendingChangeSet.RevitDeletions.Count} element(s) auto-deleted by Revit during apply (see log)";
 
+                // Apply-stage run log: outcomes are final here (VerifyApplied ran above), so this is the
+                // only write that may legitimately call its entries "applied".
+                if (WriteRunLog) RunLog.WriteImport(ExchangeFolder, WorkbookPath, PendingChangeSet, "apply");
+
                 OnApplied(status);
                 OnAppliedLog(PendingChangeSet.DiagnosticLog
                     + (dialogs.Count > 0
-                        ? "\n\n== Revit prompts auto-dismissed during apply ==\n  - " + string.Join("\n  - ", dialogs)
+                        ? "\n\n== Revit prompts during apply ==\n  - " + string.Join("\n  - ", dialogs)
+                        : "")
+                    + (unhandledDialogs.Count > 0
+                        ? "\n\n== NOT auto-dismissed (not on the safe list — answered by the user) ==\n  - "
+                          + string.Join("\n  - ", unhandledDialogs)
                         : ""));
             }
         }
         catch (Exception ex)
         {
-            OnError(ex.Message);
+            // Write the type + full stack to a copyable log and name it in the status. A bare one-line
+            // message left a failure inside BuildChangeSet/Apply — the most complex code in the product —
+            // undebuggable from the UI, while the export path had done this properly all along.
+            var logPath = WriteErrorLog(ex, DocTitle);
+            OnError(ex.Message + (string.IsNullOrEmpty(logPath) ? "" : $"  ·  details: {logPath}"));
         }
+    }
+
+    /// <summary>Writes the failing exception (type, message, stack) to %TEMP%\Transom\import-errors.log and
+    /// returns the path, or null if even that fails. Mirrors ExportEventHandler's log.</summary>
+    private static string? WriteErrorLog(Exception ex, string docTitle)
+    {
+        try
+        {
+            var dir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "Transom");
+            System.IO.Directory.CreateDirectory(dir);
+            var path = System.IO.Path.Combine(dir, "import-errors.log");
+            var sb = new System.Text.StringBuilder();
+            sb.AppendLine("Transom import error log");
+            sb.AppendLine("Model: " + docTitle);
+            sb.AppendLine("When:  " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
+            sb.AppendLine();
+            for (Exception? e = ex; e != null; e = e.InnerException)
+            {
+                sb.AppendLine(new string('=', 64));
+                sb.AppendLine("ERROR: " + e.GetType().FullName + ": " + e.Message);
+                sb.AppendLine("STACK:");
+                sb.AppendLine(e.StackTrace ?? "(none)");
+                sb.AppendLine();
+            }
+            System.IO.File.WriteAllText(path, sb.ToString());
+            return path;
+        }
+        catch { return null; }
     }
 
     public string GetName() => "Transom Import";

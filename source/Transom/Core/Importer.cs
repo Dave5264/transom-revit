@@ -17,6 +17,11 @@ public sealed class ProposedChange : System.ComponentModel.INotifyPropertyChange
 
     public string UniqueId = "";
     public long TypeId;
+    /// <summary>UniqueId of the type element, captured alongside <see cref="TypeId"/> at preview. The apply
+    /// sites resolve type hosts uid-first: a raw ElementId is only unique within one model, so a stale or
+    /// cross-model change set would write to whatever unrelated element holds that id — the uid resolves to
+    /// null there and fails safely instead.</summary>
+    public string TypeUniqueId = "";
     public int ParameterId;
     public string Binding = "instance";
 
@@ -254,6 +259,9 @@ public sealed class ConflictOption
 public sealed class TypeConflict
 {
     public long TypeId;
+    /// <summary>Type element's UniqueId, carried onto the resolved <see cref="ProposedChange"/> (see its
+    /// TypeUniqueId doc for why uid resolution matters).</summary>
+    public string TypeUniqueId = "";
     public int ParameterId;
     public string Field = "";
     public string TypeName = "";
@@ -283,7 +291,12 @@ public sealed class CellDiagnostic
     public int Col;
     public string FieldName = "";
     public string ElementLabel = "";
-    public string Severity = "";   // red | yellow
+    /// <summary>The ONE severity vocabulary, shared by every consumer (this file's copy-log breakdown,
+    /// Transom.Office DiagnosticsWriter's fill colours and legend): "red" = can't write · "yellow" =
+    /// advisory/drift · "grey" = read-only (Revit computes it, or the family/type drives it). There is no
+    /// "blue" — it was legended and bucketed for a while but never emitted, which broke both the report
+    /// colours and the log's own sum.</summary>
+    public string Severity = "";   // red | yellow | grey
     public string Category = "advisory";   // drift | advisory (meaningful for yellow only)
     public string Reason = "";
     public string Value = "";
@@ -330,6 +343,16 @@ public sealed class ChangeSet
 {
     public string ScheduleName = "";
     public bool CrossModel;
+
+    /// <summary>True when Revit rolled the initial bulk commit back. Set by <see cref="Importer.Apply"/>;
+    /// read by the caller to decide whether the apply report may be rebuilt by FinalizeApplyReport.
+    /// This used to be inferred by substring-matching the user-facing status prose, so re-wording a
+    /// message silently sent a rolled-back apply through a finalizer that must not see it.</summary>
+    public bool RolledBack;
+
+    /// <summary>True when the per-change retry ran after a rollback. Those transactions count per CELL
+    /// (not per instance), so their log is already authoritative and must not be re-finalized.</summary>
+    public bool RecoveredAfterRollback;
     public List<SheetSummary> SheetSummaries = new();
     public List<ProposedChange> Changes = new();
     public List<SkippedItem> Skipped = new();
@@ -421,8 +444,17 @@ public sealed class ChangeSet
 
     /// <summary>§10 mandatory per-(schedule,type) warnings recorded while applying option 2 — each a type left
     /// blank because the column was converted to a TYPE param and that type's instances had varying values.
-    /// Surfaced in the apply status note AND the copyable apply log (it survives the post-apply log rebuild).</summary>
+    /// Surfaced in the apply status note AND the copyable apply log (it survives the post-apply log rebuild).
+    /// STRICTLY §10 blanks: every consumer counts this list as "N type(s) left blank", so a warning of any
+    /// other kind must go in <see cref="Option2Notes"/> instead.</summary>
     public List<string> Option2Warnings = new();
+
+    /// <summary>Option-2 CONVERSION-MECHANICS warnings — things adjusted or refused while building the new
+    /// parameter (e.g. "couldn't enable vary by group instance"). Separate from <see cref="Option2Warnings"/>
+    /// because those are counted and labelled as types left blank: an instance-binding conversion blanks no
+    /// type at all, so filing its warning there produced "1 type(s) left blank" under a heading that denied
+    /// what the message actually said.</summary>
+    public List<string> Option2Notes = new();
 
     /// <summary>D1/D2 (option-2 apply-log honesty): the conversion counts from <c>ApplyNewParam</c> — params
     /// created, values written (edits + carried-forward originals), source columns replaced, columns appended.
@@ -497,6 +529,8 @@ public sealed class Importer
         public string ScheduleName = "";   // C-7: carried so a resolved type-conflict change can be matched to its schedule.
         public string ScheduleUid = "";    // C-7: (rename-safe uid; name fallback) — see ChangesForSchedule / per-schedule selection.
         public string TypeName = "";
+        public string TypeUid = "";        // the type element's UniqueId — carried onto changes for uid-first apply resolution
+
         public bool IsString;
         public string? SpecTypeId;
         public string CurString = "";
@@ -510,9 +544,25 @@ public sealed class Importer
         public int TotalRows;
     }
 
+    /// <summary>
+    ///     True when the workbook was exported from a different model than <paramref name="doc"/>. The
+    ///     CreationGUID alone can false-negative — a Save-As copy SHARES its source's CreationGUID (the
+    ///     codebase's documented shared-GUID pair) — so the source model's stable path, carried in the
+    ///     workbook since the BUG-26 fix, is the tiebreaker. Older workbooks without a path fall back to
+    ///     the GUID-only check.
+    /// </summary>
+    private static bool IsCrossModel(ImportWorkbook wb, Document doc)
+    {
+        if (wb.SourceModelGuid != doc.CreationGUID.ToString()) return true;
+        var docPath = DocUtil.StablePath(doc);
+        return !string.IsNullOrEmpty(wb.SourceModelPath)
+               && !string.IsNullOrEmpty(docPath)
+               && !string.Equals(wb.SourceModelPath, docPath, StringComparison.OrdinalIgnoreCase);
+    }
+
     public ChangeSet BuildChangeSet(Document doc, ImportWorkbook wb)
     {
-        var cs = new ChangeSet { CrossModel = wb.SourceModelGuid != doc.CreationGUID.ToString() };
+        var cs = new ChangeSet { CrossModel = IsCrossModel(wb, doc) };
         var units = doc.GetUnits();
         cs.Units = units;   // captured for the inline confirm strip's UI-thread re-parse (ConfirmRow)
 
@@ -918,6 +968,37 @@ public sealed class Importer
     ///     FORK 3 (per-FIELD component-wins): if ANY of this field's component columns was edited DIRECTLY in this row,
     ///     the combined parse is suppressed for the WHOLE field (the explicit component edit lands instead).
     /// </summary>
+    /// <summary>
+    ///     Rebuilds what a combined column currently renders for this element, by reading each component's
+    ///     live value and re-applying its prefix/suffix/separator — the inverse of the split below. Used as
+    ///     the "is this cell edited?" comparand when the workbook carries no baseline. Null when any part
+    ///     can't be resolved, in which case the caller falls back to the older non-empty test.
+    /// </summary>
+    private static string? CurrentCombinedDisplay(Document doc, Element el, List<CombinedPart> parts)
+    {
+        try
+        {
+            var sb = new System.Text.StringBuilder();
+            for (int i = 0; i < parts.Count; i++)
+            {
+                var p = parts[i];
+                var binding = ResolveBindingLive(doc, el, p.ParamId, p.Binding);
+                var host = binding == "type"
+                    ? (el.GetTypeId() != ElementId.InvalidElementId ? doc.GetElement(el.GetTypeId()) : null)
+                    : binding == "instance" ? el : null;
+                var param = host == null ? null : GetParam(host, p.ParamId);
+                if (param == null) return null;
+                var val = param.StorageType == StorageType.String
+                    ? (param.AsString() ?? "")
+                    : (param.AsValueString() ?? "");
+                if (i > 0) sb.Append(parts[i - 1].Separator ?? "");
+                sb.Append(p.Prefix).Append(val).Append(p.Suffix);
+            }
+            return sb.ToString();
+        }
+        catch { return null; }
+    }
+
     private void HandleCombinedColumn(Document doc, ImportSheet sheet, ImportRow row, ChangeSet cs, ImportColumn col,
         Element el, Dictionary<int, string>? baseRow, string? baseline, string label, Units units,
         bool elInGroup, string elGroupName, string cellText)
@@ -925,8 +1006,18 @@ public sealed class Importer
         var parts = col.CombinedParts!;
 
         // Only act on an EDITED combined cell. Unedited → no-op (drift on a combined cell isn't surfaced — its
-        // components carry their own drift if any). baseline null → compare against the rendered current value.
-        bool edited = baseline != null ? cellText != baseline : !string.IsNullOrEmpty(cellText);
+        // components carry their own drift if any). baseline null → compare against the rendered current value,
+        // which is what the comment always claimed and the main per-cell path at :746 actually does. Treating
+        // ANY non-empty cell as edited sent untouched cells into the fail-closed parse→distribute path, where a
+        // value containing the separator (or not matching the template exactly) produced a user-visible
+        // "couldn't be split safely" skip for a cell the user never touched.
+        bool edited;
+        if (baseline != null) edited = cellText != baseline;
+        else
+        {
+            var current = CurrentCombinedDisplay(doc, el, parts);
+            edited = current == null ? !string.IsNullOrEmpty(cellText) : cellText != current;
+        }
         if (!edited) return;
 
         // FORK 3: did the user edit any of this field's component columns directly in THIS row? If so, suppress the
@@ -1019,6 +1110,14 @@ public sealed class Importer
             var param = host == null ? null : GetParam(host, p.ParamId);
             if (param == null || param.IsReadOnly) { Refuse("one of its parts can't be written on this element"); return; }   // (b)
 
+            // A type-bound component MUST carry the type's identity: these changes are built by hand rather
+            // than through TypeChange(), so TypeId/TypeUniqueId stayed unset and the apply sites resolved
+            // ElementId(0) — the write was silently dropped (and the change was skipped by ComputeDependents,
+            // whose `TypeId != 0` guard is the tell). `host` IS the type element on this branch.
+            bool partIsType = binding == "type";
+            long partTypeId = partIsType ? host!.Id.Value : 0;
+            string partTypeUid = partIsType ? host!.UniqueId : "";
+
             // (a) the separator must not appear inside this part's CURRENT value (it would make a future split ambiguous)
             string curVal = param.StorageType == StorageType.String ? (param.AsString() ?? "") : (param.AsValueString() ?? "");
             var psep = p.Separator ?? "";
@@ -1031,7 +1130,8 @@ public sealed class Importer
                 if ((param.AsString() ?? "") == token) continue;   // no-op for this part
                 pending.Add(new ProposedChange
                 {
-                    UniqueId = host!.UniqueId, ParameterId = p.ParamId, Binding = binding, ElementName = SafeName(el),
+                    UniqueId = host!.UniqueId, TypeId = partTypeId, TypeUniqueId = partTypeUid,
+                    ParameterId = p.ParamId, Binding = binding, ElementName = SafeName(el),
                     Field = col.FieldName + " · " + (param.Definition?.Name ?? ("part " + p.ParamId)),
                     OldValue = param.AsString() ?? "", NewValue = token, IsString = true, NewString = token,
                 });
@@ -1042,7 +1142,8 @@ public sealed class Importer
                 if (param.AsInteger() == iv) continue;
                 pending.Add(new ProposedChange
                 {
-                    UniqueId = host!.UniqueId, ParameterId = p.ParamId, Binding = binding, ElementName = SafeName(el),
+                    UniqueId = host!.UniqueId, TypeId = partTypeId, TypeUniqueId = partTypeUid,
+                    ParameterId = p.ParamId, Binding = binding, ElementName = SafeName(el),
                     Field = col.FieldName + " · " + (param.Definition?.Name ?? ("part " + p.ParamId)),
                     OldValue = CurrentDisplay(param), NewValue = token, IsInt = true, NewInt = iv,
                 });
@@ -1054,7 +1155,8 @@ public sealed class Importer
                 if (Math.Abs(param.AsDouble() - parsed) < 1e-9) continue;
                 pending.Add(new ProposedChange
                 {
-                    UniqueId = host!.UniqueId, ParameterId = p.ParamId, Binding = binding, ElementName = SafeName(el),
+                    UniqueId = host!.UniqueId, TypeId = partTypeId, TypeUniqueId = partTypeUid,
+                    ParameterId = p.ParamId, Binding = binding, ElementName = SafeName(el),
                     Field = col.FieldName + " · " + (param.Definition?.Name ?? ("part " + p.ParamId)),
                     OldValue = param.AsValueString() ?? "", NewValue = token, NewDouble = parsed,
                 });
@@ -1301,8 +1403,13 @@ public sealed class Importer
             .GroupBy(c => ChangeSet.ColumnKey(c.ParameterId, c.Field))
             .Where(g => cs.Option2Modes.ContainsKey(g.Key))
             .ToList();
+        // Uid-or-NAME, the same identity rule ComputeDependents and the fold-in use. Keeping only the uid
+        // meant a legacy workbook's uid-less source schedule was absent from this set and therefore never
+        // excluded — so it could be offered as a replace-candidate for its own column, which is the exact
+        // reviewed bug the comment above describes.
         var sourcesByKey = byKey.ToDictionary(g => g.Key,
-            g => g.Select(c => c.SourceScheduleUid).Where(u => !string.IsNullOrEmpty(u)).ToHashSet());
+            g => g.Select(c => !string.IsNullOrEmpty(c.SourceScheduleUid) ? c.SourceScheduleUid : c.SourceScheduleName)
+                  .Where(k => !string.IsNullOrEmpty(k)).ToHashSet());
         // Parameter id per column key, read off the changes themselves (never re-parse the key string —
         // ColumnKey owns that format).
         var paramByKey = byKey.ToDictionary(g => g.Key, g => g.First().ParameterId);
@@ -1319,13 +1426,18 @@ public sealed class Importer
             // ComputeDependents. An unenumerable source yields an empty set -> its candidates are simply not
             // offered (fail closed).
             var elemsBySched = new Dictionary<string, HashSet<long>>();
-            HashSet<long> SchedElems(string schedUid)
+            // Key is a uid OR a schedule name (see sourcesByKey) — resolve uid first, then by name, so a
+            // uid-less legacy sheet still yields its element set instead of failing closed.
+            HashSet<long> SchedElems(string schedKey)
             {
-                if (elemsBySched.TryGetValue(schedUid, out var cached)) return cached;
-                elemsBySched[schedUid] = cached = new HashSet<long>();
+                if (elemsBySched.TryGetValue(schedKey, out var cached)) return cached;
+                elemsBySched[schedKey] = cached = new HashSet<long>();
                 try
                 {
-                    if (doc.GetElement(schedUid) is ViewSchedule svs)
+                    var svs = doc.GetElement(schedKey) as ViewSchedule
+                              ?? new FilteredElementCollector(doc).OfClass(typeof(ViewSchedule)).Cast<ViewSchedule>()
+                                  .FirstOrDefault(v => !v.IsTemplate && v.Name == schedKey);
+                    if (svs != null)
                         foreach (var el in new FilteredElementCollector(doc, svs.Id).WhereElementIsNotElementType())
                             cached.Add(el.Id.Value);
                 }
@@ -1363,9 +1475,13 @@ public sealed class Importer
 
                 // Which converted columns match this schedule by field AND aren't its own source? Only then is
                 // the (potentially large) element enumeration of the candidate worth doing.
+                // Match the candidate against the source set by uid OR name — sourcesByKey now holds
+                // whichever identity each change carried (uid preferred, name for uid-less legacy sheets).
+                string vsName; try { vsName = vs.Name ?? ""; } catch { vsName = ""; }
                 var matched = paramByKey
                     .Where(kv => fieldParamIds.Contains(kv.Value)
-                        && !(sourcesByKey.TryGetValue(kv.Key, out var srcs) && srcs.Contains(vs.UniqueId)))
+                        && !(sourcesByKey.TryGetValue(kv.Key, out var srcs)
+                             && (srcs.Contains(vs.UniqueId) || (vsName.Length > 0 && srcs.Contains(vsName)))))
                     .ToList();
                 if (matched.Count == 0) continue;
 
@@ -1458,9 +1574,24 @@ public sealed class Importer
                     continue;
                 }
                 string afterG;
-                try { afterG = vs.GetCellText(SectionType.Body, hc.Top, hc.Left) ?? ""; } catch { afterG = ""; }
-                hc.Outcome = ApplyOutcome.Applied; applied++;
-                if (!string.IsNullOrEmpty(afterG) && afterG != hc.NewHeading) hc.OutcomeNote = $"saved as '{afterG}'";
+                bool readOkG = true;
+                try { afterG = vs.GetCellText(SectionType.Body, hc.Top, hc.Left) ?? ""; }
+                catch { afterG = ""; readOkG = false; }
+                // The outcome must FOLLOW the verification, not precede it. An empty re-read (the write
+                // didn't take) or a throwing re-read is Unverified — reporting it Applied inflated the
+                // headline count and, because Applied suppresses the run-results workbook, left the user
+                // with no artifact contradicting a rename that never happened.
+                if (!readOkG || string.IsNullOrEmpty(afterG))
+                {
+                    hc.Outcome = ApplyOutcome.Unverified;
+                    hc.OutcomeNote = readOkG ? "heading read back empty — write may not have taken" : "could not re-read the heading";
+                    unverified.Add(label + " — " + hc.OutcomeNote);
+                }
+                else
+                {
+                    hc.Outcome = ApplyOutcome.Applied; applied++;
+                    if (afterG != hc.NewHeading) hc.OutcomeNote = $"saved as '{afterG}'";
+                }
                 continue;
             }
 
@@ -1486,18 +1617,26 @@ public sealed class Importer
 
             // Verify by re-read — ColumnHeading can be trimmed/normalized by Revit.
             string after;
-            try { after = field.ColumnHeading ?? ""; } catch { after = ""; }
+            bool readOk = true;
+            try { after = field.ColumnHeading ?? ""; } catch { after = ""; readOk = false; }
             if (after == hc.NewHeading)
             {
                 hc.Outcome = ApplyOutcome.Applied; applied++;
             }
+            else if (!readOk || string.IsNullOrEmpty(after))
+            {
+                // NOT applied: either the write silently didn't take, or the verification itself threw.
+                // Both used to be recorded Applied with no note (the note was gated on a non-empty value).
+                hc.Outcome = ApplyOutcome.Unverified;
+                hc.OutcomeNote = readOk ? "heading read back empty — write may not have taken" : "could not re-read the heading";
+                unverified.Add(label + " — " + hc.OutcomeNote);
+            }
             else
             {
-                // Revit accepted but coerced the text (e.g. whitespace-normalized) — treat as applied-with-note,
+                // Revit accepted but coerced the text (e.g. whitespace-normalized) — applied-with-note,
                 // not failed, since the heading DID change; record what actually stuck.
                 hc.Outcome = ApplyOutcome.Applied; applied++;
-                if (!string.IsNullOrEmpty(after) && after != hc.NewHeading)
-                    hc.OutcomeNote = $"saved as '{after}'";
+                hc.OutcomeNote = $"saved as '{after}'";
             }
         }
         return applied;
@@ -1720,13 +1859,14 @@ public sealed class Importer
         int red = scopedDiags.Count(d => d.Severity == "red");
         int drift = scopedDiags.Count(d => d.Severity == "yellow" && d.Category == "drift");
         int advisory = scopedDiags.Count(d => d.Severity == "yellow" && d.Category != "drift");
-        // C3 (H4): the leading total previously dropped the BLUE severity, so the breakdown didn't sum to it
-        // (retest read "7 (0 red / 0 drift / 6 advisory)" — the 7th was the hidden frozen cell). Count blue and
-        // label it "frozen/skipped": most blue sites pair with a FrozenChange, but the "instance scope ambiguous"
-        // site emits a blue diagnostic with no FrozenChange, so blue ≥ the (frozen: N) count above — the broader
-        // label stays honest. Now red+drift+advisory+frozen == diagnostics count exactly. (ux1 wording.)
-        int frozen = scopedDiags.Count(d => d.Severity == "blue");
-        sb.AppendLine($"  cell diagnostics: {scopedDiags.Count} ({red} red / {drift} drift / {advisory} advisory / {frozen} frozen/skipped)");
+        // The breakdown must SUM to the leading total. The earlier fix bucketed "blue" — a severity nothing
+        // in the codebase ever emits — while the actually-unbucketed one is "grey" (edited read-only cells),
+        // so any import containing one read a total one higher than its own buckets. Count grey, and add an
+        // "other" catch-all so a future severity can never silently break the sum again.
+        int readOnly = scopedDiags.Count(d => d.Severity == "grey");
+        int other = scopedDiags.Count - red - drift - advisory - readOnly;
+        sb.AppendLine($"  cell diagnostics: {scopedDiags.Count} ({red} red / {drift} drift / {advisory} advisory / {readOnly} read-only"
+                      + (other > 0 ? $" / {other} other" : "") + ")");
         // §3b surface-3: scoped skip count + listing in subset mode; the header names the scope so a copied log
         // is self-explanatory (and the count agrees with the on-screen panel + status count, all off the same set).
         sb.AppendLine(subset ? $"  skipped (selected schedules only): {scopedSkips.Count}" : $"  skipped: {scopedSkips.Count}");
@@ -2072,6 +2212,26 @@ public sealed class Importer
                 ElementLabel = label, Severity = "yellow", Reason = $"{missing} member(s) no longer exist", Value = cellText,
             });
 
+        // IDEMPOTENCY (the latent twin the idempotency design note predicted): drop members that ALREADY
+        // hold the new value. The baseline is the FROZEN export-time cell text and is never refreshed, so
+        // `cellText != baseline` stays true forever — only a live-value compare can tell the write already
+        // happened. Without this, re-previewing the same workbook re-proposes an applied header edit and
+        // re-fires the GroupResolutionDialog for a column that was already converted, which is how a second
+        // redundant parameter gets created. Skipped while a value still needs confirming (nothing parsed yet).
+        if (!ghNeedsConfirm)
+        {
+            var ghPending = new List<string>();
+            foreach (var uid in ids)
+            {
+                var inst = doc.GetElement(uid);
+                var ip = inst == null ? null : GetParam(inst, ghe.ParameterId);
+                if (ip != null && AlreadyHas(ip, isString, str, isInt, iv, dbl)) continue;
+                ghPending.Add(uid);
+            }
+            if (ghPending.Count == 0) return;   // every member already matches — nothing to write, nothing to show
+            ids = ghPending;
+        }
+
         // Split grouped vs ungrouped members. Grouped members can't be written in the direct apply transaction
         // (the "Changes to groups are allowed only in group edit mode" error) — Mark() routes them to the durable
         // group path (project-param vary, or Claude-assist dance for built-ins). Ungrouped members apply directly.
@@ -2132,7 +2292,8 @@ public sealed class Importer
         if (!typeGroups.TryGetValue(key, out var tc))
         {
             tc = new TypeCandidate { Col = col, SheetTab = sheet.SheetTabName, TypeName = SafeName(host), SpecTypeId = col.SpecTypeId,
-                                     ScheduleName = sheet.ScheduleName, ScheduleUid = sheet.ScheduleUniqueId };
+                                     ScheduleName = sheet.ScheduleName, ScheduleUid = sheet.ScheduleUniqueId,
+                                     TypeUid = host.UniqueId };
             if (param.StorageType == StorageType.String)
             {
                 tc.IsString = true;
@@ -2230,6 +2391,7 @@ public sealed class Importer
                 var conflict = new TypeConflict
                 {
                     TypeId = kv.Key.Item1,
+                    TypeUniqueId = tc.TypeUid,
                     ParameterId = kv.Key.Item2,
                     Field = tc.Col.FieldName,
                     TypeName = tc.TypeName,
@@ -2370,7 +2532,7 @@ public sealed class Importer
         bool needsConfirm = unreadable || reformat;
         return new()
         {
-            TypeId = c.TypeId, ParameterId = c.ParameterId, Binding = "type", ElementName = c.TypeName,
+            TypeId = c.TypeId, TypeUniqueId = c.TypeUniqueId, ParameterId = c.ParameterId, Binding = "type", ElementName = c.TypeName,
             // New shows the value in the schedule's format (the canonical/interpreted value) — but blank for an
             // unreadable pick (nothing valid yet) and PENDING until confirmed.
             Field = c.Field, OldValue = c.CurrentDisplay,
@@ -2475,13 +2637,11 @@ public sealed class Importer
                     }
                     else
                     {
-                        // TEMP DIAGNOSTIC (2026-06-20): log the failure's actual FailureDefinitionId GUID so we can
-                        // identify WHICH join/geometry-failure variant is firing (the "Can't keep elements joined"
-                        // text maps to several distinct definition ids) and whitelist the correct one. Remove once
-                        // the right id is added to IsAllowedFailure.
-                        string fidGuid; try { fidGuid = f.GetFailureDefinitionId().Guid.ToString(); } catch { fidGuid = "(unavailable)"; }
+                        // The 2026-06-20 [DIAG …Guid=] instrumentation is REMOVED: it existed to identify which
+                        // join/geometry failure variant was firing, that investigation concluded (both ids are
+                        // whitelisted below), and its own comment said to remove it once they were. It printed a
+                        // raw GUID into the copyable apply log users are asked to paste into reports.
                         Messages.Add($"[Error] {desc} — NOT auto-resolved (failure id not in allow-list); left for retry/report"
-                                     + $"  [DIAG failureDefinitionId.Guid={fidGuid}]"
                                      + (n > 0 ? $" — {n} element(s)" : "") + who);
                     }
                 }
@@ -2529,10 +2689,16 @@ public sealed class Importer
         {
             if (string.IsNullOrEmpty(desc)) return false;
             var d = desc.ToLowerInvariant();
+            // EVERY case needs the resolution context, not just the last one. The first three used to be
+            // bare substring tests, so an ordinary Revit warning whose prose merely mentions deleting
+            // elements landed in AutoFixWarnings — the counted, user-facing "your geometry was adjusted"
+            // headline bucket — and told the user their model had been rebuilt when nothing had.
+            bool isResolution = d.Contains("error resolution") || d.Contains("automatically resolved");
+            if (!isResolution) return false;
             return d.Contains("delete splitting element")
                 || d.Contains("delete instance")
                 || d.Contains("delete element")
-                || (d.Contains("error resolution") && d.Contains("delete"));
+                || d.Contains("delete");
         }
 
         /// <summary>DEFECT #2: a short label for the family geometry REGEN/REPAIR kind extracted from a warning
@@ -2690,6 +2856,10 @@ public sealed class Importer
     /// </summary>
     public string Apply(Document doc, ChangeSet cs)
     {
+        // Reset per-run outcome flags — a change set can be applied more than once (retry after fixes).
+        cs.RolledBack = false;
+        cs.RecoveredAfterRollback = false;
+
         using var watcher = new DeletionWatcher(doc);
         try
         {
@@ -2773,7 +2943,7 @@ public sealed class Importer
                     continue;
                 }
 
-                var host = ch.Binding == "type" ? doc.GetElement(new ElementId(ch.TypeId)) : doc.GetElement(ch.UniqueId);
+                var host = ch.Binding == "type" ? ResolveTypeHost(doc, ch) : doc.GetElement(ch.UniqueId);
                 var param = host == null ? null : GetParam(host, ch.ParameterId);
                 if (param == null || param.IsReadOnly) { failed.Add(Label(ch)); ch.Outcome = ApplyOutcome.Failed; continue; }
                 if (ch.GroupMode == GroupMode.ProjectVary && !EnsureVary(param, doc)) { failed.Add(Label(ch) + " — can't vary by group instance"); ch.Outcome = ApplyOutcome.Failed; continue; }
@@ -2804,6 +2974,7 @@ public sealed class Importer
         catch (Exception ex)
         {
             if (tx.GetStatus() == TransactionStatus.Started) tx.RollBack();
+            cs.RolledBack = true;
             cs.DiagnosticLog = "Transom apply — FAILED (rolled back): " + ex.Message;
             return "Apply failed (rolled back): " + ex.Message;
         }
@@ -2859,6 +3030,10 @@ public sealed class Importer
     /// </summary>
     private string RetryPerChange(Document doc, ChangeSet cs, ApplyFailureCollector collector, int attempted)
     {
+        // Structured flags for the caller — never make it re-derive this from the status prose.
+        cs.RolledBack = true;
+        cs.RecoveredAfterRollback = true;
+
         // Nothing from the rolled-back pass persisted — clear its optimistic stamps before re-running.
         foreach (var c in cs.Changes)
             if (c.Outcome is ApplyOutcome.Applied or ApplyOutcome.Unverified) c.Outcome = ApplyOutcome.Pending;
@@ -2885,6 +3060,7 @@ public sealed class Importer
             {
                 total += newParamChanges.Count;
                 cs.Option2Warnings.Clear();   // §10 warnings from the discarded pass describe rolled-back state
+                cs.Option2Notes.Clear();      // …and so do the conversion notes from that pass
                 using var ptx = new Transaction(doc, "Transom: import edits (new parameter, retried)");
                 ptx.Start();
                 AttachCollector(ptx, collector);
@@ -2941,7 +3117,7 @@ public sealed class Importer
                     else
                     {
                         // Re-resolve from the doc — the rolled-back pass left nothing of the first resolution.
-                        var host = ch.Binding == "type" ? doc.GetElement(new ElementId(ch.TypeId)) : doc.GetElement(ch.UniqueId);
+                        var host = ch.Binding == "type" ? ResolveTypeHost(doc, ch) : doc.GetElement(ch.UniqueId);
                         var param = host == null ? null : GetParam(host, ch.ParameterId);
                         if (param == null || param.IsReadOnly) { failed.Add(Label(ch)); anyFail = true; }
                         else if (ch.GroupMode == GroupMode.ProjectVary && !EnsureVary(param, doc)) { failed.Add(Label(ch) + " — can't vary by group instance"); anyFail = true; }
@@ -3077,7 +3253,7 @@ public sealed class Importer
             }
             else
             {
-                var host = ch.Binding == "type" ? doc.GetElement(new ElementId(ch.TypeId)) : doc.GetElement(ch.UniqueId);
+                var host = ch.Binding == "type" ? ResolveTypeHost(doc, ch) : doc.GetElement(ch.UniqueId);
                 var param = host == null ? null : GetParam(host, ch.ParameterId);
                 if (param == null) { matches = false; anyAbsent = true; }
                 else { matches = VerifyWrite(param, ch); if (!matches) anyPresentMismatch = true; }
@@ -3269,6 +3445,12 @@ public sealed class Importer
             foreach (var w in cs.Option2Warnings.Take(cap)) sb.AppendLine("  - " + w);
             if (cs.Option2Warnings.Count > cap) sb.AppendLine($"  … +{cs.Option2Warnings.Count - cap} more");
         }
+        if (cs.Option2Notes.Count > 0)
+        {
+            sb.AppendLine($"\n== option 2 — conversion notes (review): {cs.Option2Notes.Count} ==");
+            foreach (var w in cs.Option2Notes.Take(cap)) sb.AppendLine("  - " + w);
+            if (cs.Option2Notes.Count > cap) sb.AppendLine($"  … +{cs.Option2Notes.Count - cap} more");
+        }
 
         AppendHeaderChangeSection(sb, cs, cap);
         return sb.ToString();
@@ -3383,6 +3565,12 @@ public sealed class Importer
             sb.AppendLine($"\n== option 2 — types left blank (varying values under a type parameter): {cs.Option2Warnings.Count} ==");
             foreach (var w in cs.Option2Warnings.Take(cap)) sb.AppendLine("  - " + w);
             if (cs.Option2Warnings.Count > cap) sb.AppendLine($"  … +{cs.Option2Warnings.Count - cap} more");
+        }
+        if (cs.Option2Notes.Count > 0)
+        {
+            sb.AppendLine($"\n== option 2 — conversion notes (review): {cs.Option2Notes.Count} ==");
+            foreach (var w in cs.Option2Notes.Take(cap)) sb.AppendLine("  - " + w);
+            if (cs.Option2Notes.Count > cap) sb.AppendLine($"  … +{cs.Option2Notes.Count - cap} more");
         }
 
         AppendHeaderChangeSection(sb, cs, cap);
@@ -3546,7 +3734,7 @@ public sealed class Importer
                     try { varied = varyDef.VariesAcrossGroups; } catch { varied = false; }
                 }
                 if (!varied)
-                    cs.Option2Warnings.Add($"'{sample.Field}': couldn't enable 'vary by group instance' on the new " +
+                    cs.Option2Notes.Add($"'{sample.Field}': couldn't enable 'vary by group instance' on the new " +
                         "instance parameter — per-instance values in multi-instance groups may be rejected by Revit.");
             }
 
@@ -4036,7 +4224,23 @@ public sealed class Importer
             var defFile = app.OpenSharedParameterFile();
             if (defFile == null)
             {
-                var tmp = Path.Combine(Path.GetTempPath(), "Transom_SharedParameters.txt");
+                // DURABLE location, not %TEMP%. A shared parameter's identity IS its GUID, and that GUID
+                // lives in this file; if the file is cleaned up (disk cleanup, a reboot, another machine)
+                // the next conversion of the same column mints a NEW GUID under the same name. Two models
+                // then carry same-named parameters that don't correspond — copy/paste doesn't carry values
+                // and a shared schedule template resolves the column in only one of them, with no error.
+                var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Transom");
+                Directory.CreateDirectory(dir);
+                var tmp = Path.Combine(dir, "Transom_SharedParameters.txt");
+
+                // One-time migration: adopt the old %TEMP% file if it's still around, so GUIDs already
+                // bound into the user's models keep resolving.
+                var legacy = Path.Combine(Path.GetTempPath(), "Transom_SharedParameters.txt");
+                if (!File.Exists(tmp) && File.Exists(legacy) && new FileInfo(legacy).Length > 0)
+                {
+                    try { File.Copy(legacy, tmp); } catch { /* fall through to a fresh file */ }
+                }
+
                 if (!File.Exists(tmp) || new FileInfo(tmp).Length == 0)
                     File.WriteAllText(tmp,
                         "# This is a Revit shared parameter file.\n# Do not edit manually.\n" +
@@ -4198,6 +4402,14 @@ public sealed class Importer
         catch { return AddFieldResult.Failed; }
     }
 
+    /// <summary>
+    ///     Double comparison tolerance, in Revit internal units (feet), shared by write verification and the
+    ///     idempotency check. ONE constant on purpose: when the idempotency test was the stricter of the two,
+    ///     a value Revit stored within the verify tolerance but outside it verified as Applied and then failed
+    ///     the "already has it" test on the next preview — so the same change was re-proposed forever.
+    /// </summary>
+    private const double ValueEpsilon = 1e-6;
+
     /// <summary>Re-reads a just-written parameter to confirm the new value persisted (within unit tolerance).</summary>
     private static bool VerifyWrite(Parameter param, ProposedChange ch)
     {
@@ -4210,7 +4422,7 @@ public sealed class Importer
             if (param.StorageType == StorageType.Integer)
                 return param.AsInteger() == ch.NewInt;
             if (param.StorageType == StorageType.Double)
-                return Math.Abs(param.AsDouble() - ch.NewDouble) <= 1e-6;
+                return Math.Abs(param.AsDouble() - ch.NewDouble) <= ValueEpsilon;
             return true; // other storage types aren't written by Transom
         }
         catch { return false; }
@@ -4218,7 +4430,8 @@ public sealed class Importer
 
     /// <summary>True when a parameter already holds the value a change would write (within unit tolerance).
     /// Lets the bulk-instance path skip already-applied writes so a re-preview after an option-1 vary apply
-    /// doesn't re-propose the change (string trimmed to match Revit's storage trim, doubles to 1e-9).</summary>
+    /// doesn't re-propose the change (string trimmed to match Revit's storage trim, doubles to
+    /// <see cref="ValueEpsilon"/>).</summary>
     private static bool AlreadyHas(Parameter p, bool isString, string str, bool isInt, int iv, double dbl)
     {
         try
@@ -4228,7 +4441,7 @@ public sealed class Importer
             if (p.StorageType == StorageType.Integer && isInt)
                 return p.AsInteger() == iv;
             if (p.StorageType == StorageType.Double && !isString && !isInt)
-                return Math.Abs(p.AsDouble() - dbl) <= 1e-9;
+                return Math.Abs(p.AsDouble() - dbl) <= ValueEpsilon;
             return false;
         }
         catch { return false; }
@@ -4326,7 +4539,8 @@ public sealed class Importer
     }
 
     /// <summary>Re-reads a parameter and confirms a <see cref="ParsedVal"/> persisted (ParsedVal variant of
-    /// <see cref="VerifyWrite"/> — string trimmed to match Revit's storage trim, doubles to 1e-6).</summary>
+    /// <see cref="VerifyWrite"/> — string trimmed to match Revit's storage trim, doubles to
+    /// <see cref="ValueEpsilon"/>).</summary>
     private static bool VerifyParsed(Parameter param, ParsedVal v)
     {
         try
@@ -4336,7 +4550,7 @@ public sealed class Importer
             if (param.StorageType == StorageType.Integer)
                 return param.AsInteger() == v.Int;
             if (param.StorageType == StorageType.Double)
-                return Math.Abs(param.AsDouble() - v.Dbl) <= 1e-6;
+                return Math.Abs(param.AsDouble() - v.Dbl) <= ValueEpsilon;
             return true;
         }
         catch { return false; }
@@ -4389,10 +4603,21 @@ public sealed class Importer
             System.Globalization.CultureInfo.InvariantCulture, out value);
     }
 
+    /// <summary>
+    ///     Resolves a type-bound change's host element uid-first. A UniqueId is globally unique, so in the
+    ///     wrong (or since-changed) document it resolves to null and the change fails safely; a raw ElementId
+    ///     exists in essentially every model and would resolve to an unrelated element. The raw-id path is
+    ///     kept ONLY for change sets that predate <see cref="ProposedChange.TypeUniqueId"/> (empty uid).
+    /// </summary>
+    private static Element? ResolveTypeHost(Document doc, ProposedChange ch) =>
+        !string.IsNullOrEmpty(ch.TypeUniqueId)
+            ? doc.GetElement(ch.TypeUniqueId)
+            : doc.GetElement(new ElementId(ch.TypeId));
+
     private static ProposedChange TypeChange((long, int) key, TypeCandidate tc, string newDisp,
         bool isString, string str, double dbl) => new()
     {
-        TypeId = key.Item1, ParameterId = key.Item2, Binding = "type", ElementName = tc.TypeName,
+        TypeId = key.Item1, TypeUniqueId = tc.TypeUid, ParameterId = key.Item2, Binding = "type", ElementName = tc.TypeName,
         Field = tc.Col.FieldName, OldValue = tc.CurDisplay, NewValue = newDisp, InstancesAffected = tc.Cells.Count,
         IsString = isString, NewString = str, NewDouble = dbl,
     };
@@ -4423,6 +4648,12 @@ public sealed class Importer
     private static string CurrentDisplay(Parameter param) =>
         param.StorageType == StorageType.String ? (param.AsString() ?? "") : (param.AsValueString() ?? "");
 
+    /// <summary>
+    ///     True when the model's CURRENT value differs from the exported baseline — the "changed since
+    ///     export" safety warning. Every storage type is covered: returning false for Integer (which
+    ///     includes every Yes/No checkbox) and for spec-less Doubles meant those parameters could never
+    ///     raise the warning, so a value someone else changed between export and import went unflagged.
+    /// </summary>
     private static bool Drifted(Parameter param, string baseline, Units units, string? spec)
     {
         if (param.StorageType == StorageType.String)
@@ -4433,6 +4664,16 @@ public sealed class Importer
                 return Math.Abs(param.AsDouble() - b) > 1e-9;
             return (param.AsValueString() ?? "") != baseline;
         }
+        if (param.StorageType == StorageType.Integer)
+        {
+            // Same parser the integer write path uses, so drift and write agree on Yes/No spellings.
+            if (TryParseInteger(IsYesNo(param), baseline, out int bi))
+                return param.AsInteger() != bi;
+            return (param.AsValueString() ?? param.AsInteger().ToString(System.Globalization.CultureInfo.InvariantCulture)) != baseline;
+        }
+        // Double with no measurable spec: fall back to the same display-text comparison used above.
+        if (param.StorageType == StorageType.Double)
+            return (param.AsValueString() ?? "") != baseline;
         return false;
     }
 

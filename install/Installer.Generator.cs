@@ -12,6 +12,7 @@ public static partial class Generator
     public static WixEntity[] GenerateWixEntities(string[] args)
     {
         var versionStorages = new Dictionary<string, List<WixEntity>>();
+        var seenDirectories = new Dictionary<string, string>();   // Revit year → the directory that claimed it
         var revitFeature = new Feature
         {
             Name = "Revit Add-in",
@@ -37,14 +38,21 @@ public static partial class Generator
             revitFeature.Add(feature);
 
             var files = new Files(feature, $@"{directory}\*.*");
-            if (versionStorages.TryGetValue(fileVersion, out var storage))
+            if (versionStorages.TryGetValue(fileVersion, out _))
             {
-                storage.Add(files);
+                // FAIL LOUDLY. Two source trees resolving to the same Revit year (the classic case: a stale
+                // bin\Debug.R25\publish sitting beside bin\Release.R25\publish — TryParseVersion only reads
+                // trailing digits, so Debug vs Release is invisible to it) get merged into one Dir, and the
+                // identical relative paths then produce DUPLICATE WiX component IDs. That surfaces much
+                // later as an opaque WiX failure; naming both directories here explains it immediately.
+                throw new Exception(
+                    $"Two payload directories both resolve to Revit {fileVersion}: '{seenDirectories[fileVersion]}' " +
+                    $"and '{directoryInfo.FullName}'. Delete the stale one (usually a leftover Debug publish " +
+                    "folder next to the Release one) and rebuild — merging them yields duplicate WiX component IDs.");
             }
-            else
-            {
-                versionStorages.Add(fileVersion, [files]);
-            }
+
+            seenDirectories[fileVersion] = directoryInfo.FullName;
+            versionStorages.Add(fileVersion, [files]);
 
             LogFeatureFiles(directory, fileVersion);
         }

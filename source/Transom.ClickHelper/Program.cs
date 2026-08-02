@@ -207,10 +207,20 @@ internal static class Program
         AutomationElement? match = null;
         do
         {
-            // Name match: exact uses a server-side PropertyCondition (fast); substring scans descendants.
-            AutomationElementCollection hits = exact
-                ? root!.FindAll(TreeScope.Descendants, new PropertyCondition(AutomationElement.NameProperty, name))
-                : root!.FindAll(TreeScope.Descendants, Condition.TrueCondition);
+            // PERF-03: narrow SERVER-SIDE before walking. TreeScope.Descendants + Condition.TrueCondition
+            // materialises EVERY element under the window — Revit's ribbon alone is thousands — and each
+            // property read in the loop below is a cross-process COM call. This walk is also the DEFAULT path
+            // (substring match) and it sits inside the 150 ms retry loop, so a 4 s timeout could repeat it ~25
+            // times. UIA has no substring condition, but when --control is given the provider can prune by
+            // ControlType before anything crosses the process boundary.
+            Condition scan = exact
+                ? new PropertyCondition(AutomationElement.NameProperty, name)
+                : Condition.TrueCondition;
+            var typeCond = ControlTypeCondition(wantType);
+            if (typeCond != null)
+                scan = ReferenceEquals(scan, Condition.TrueCondition) ? typeCond : new AndCondition(scan, typeCond);
+
+            AutomationElementCollection hits = root!.FindAll(TreeScope.Descendants, scan);
 
             var candidates = new List<AutomationElement>();
             foreach (AutomationElement e in hits)
@@ -242,14 +252,17 @@ internal static class Program
         // LITERAL mouse click at the UIA rect centre (DPI-correct physical coords) — the requested real click.
         var rect = SafeRect(match);
         string how;
+        int clickedX = 0, clickedY = 0;   // the coords actually used — reported, not re-measured after the click
         if (rect is { Width: > 0, Height: > 0 })
         {
             int cx = (int)Math.Round(rect.Value.Left + rect.Value.Width / 2);
             int cy = (int)Math.Round(rect.Value.Top + rect.Value.Height / 2);
+            clickedX = cx; clickedY = cy;
             TryActivate(proc!);                       // control must be on a foreground, non-occluded window
             GetCursorPos(out var savedX, out var savedY);
-            ClickAt(cx, cy);
+            bool moved = ClickAt(cx, cy);
             if (!args.Has("--keep-cursor")) SetCursorPos(savedX, savedY);
+            if (!moved) return Fail($"cursor could not be moved to ({cx},{cy}) — click not sent (blocked or virtualized SetCursorPos)", 6);
             how = "MouseClick";
         }
         else
@@ -260,7 +273,6 @@ internal static class Program
             how = viaHow;
         }
 
-        var rc2 = SafeRect(match);
         var (winDpi, scalePct) = WindowDpi(ResolveTargetWindow(args, proc!));
         var result = new Dictionary<string, object?>
         {
@@ -268,8 +280,11 @@ internal static class Program
             ["name"] = SafeName(match),
             ["controlType"] = SafeProp(match, AutomationElement.ControlTypeProperty),
             ["how"] = how,
-            ["x"] = rc2 is { } r ? (int)Math.Round(r.Left + r.Width / 2) : 0,
-            ["y"] = rc2 is { } r2 ? (int)Math.Round(r2.Top + r2.Height / 2) : 0,
+            // Where the click ACTUALLY went. These used to come from a rect re-read AFTER the click, so a
+            // control that moved as a result of being clicked (a dialog closing, a grid re-laying out)
+            // reported coordinates that were never used — useless for reproducing the interaction.
+            ["x"] = clickedX,
+            ["y"] = clickedY,
             ["dpiAwareness"] = _dpiAwareness,
             ["scalePct"] = scalePct,
             ["pid"] = proc!.Id,
@@ -282,6 +297,28 @@ internal static class Program
     /// a real rect, smallest area first (a tight control, not a big container that merely CONTAINS the text).
     /// If none are on-screen with a rect, fall back to the enabled &gt; on-screen &gt; invokable scorer so an
     /// offscreen-but-invokable match can still be Invoked.</summary>
+    /// <summary>
+    ///     PERF-03: maps a <c>--control</c> local name ("Button", "Edit", "MenuItem") to a UIA
+    ///     <see cref="ControlType"/> condition, so the provider prunes the tree instead of us materialising
+    ///     every descendant and filtering client-side. Returns null for an unrecognised name, which leaves the
+    ///     existing client-side substring filter as the only gate — i.e. exactly the old behaviour.
+    /// </summary>
+    private static Condition? ControlTypeCondition(string? localName)
+    {
+        if (string.IsNullOrWhiteSpace(localName)) return null;
+        try
+        {
+            var f = typeof(ControlType).GetField(
+                localName!.Trim(),
+                System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static
+                | System.Reflection.BindingFlags.IgnoreCase);
+            if (f?.GetValue(null) is ControlType ct)
+                return new PropertyCondition(AutomationElement.ControlTypeProperty, ct);
+        }
+        catch { /* unrecognised — fall back to the client-side filter */ }
+        return null;
+    }
+
     private static AutomationElement? PickSmallestOnScreen(List<AutomationElement> els)
     {
         AutomationElement? best = null;
@@ -363,8 +400,10 @@ internal static class Program
         }
 
         GetCursorPos(out int savedX, out int savedY);
-        ClickAt(sx, sy);
+        bool clickLanded = ClickAt(sx, sy);
         if (!args.Has("--keep-cursor")) SetCursorPos(savedX, savedY);
+        if (!clickLanded)
+            return Fail($"cursor could not be moved to ({sx},{sy}) — click not sent (blocked or virtualized SetCursorPos)", 6);
 
         var result = new Dictionary<string, object?>
         {
@@ -431,16 +470,22 @@ internal static class Program
             ["revit"] = $"{revitRect.x},{revitRect.y},{revitRect.w},{revitRect.h}",
             ["other"] = movedOther ? $"{otherRect.x},{otherRect.y},{otherRect.w},{otherRect.h}" : "none",
             ["otherHwnd"] = other.ToInt64(),
+            // Name what was actually moved — a caller can otherwise not tell WHICH window was repositioned,
+            // or that Claude was never found and only Revit was tiled.
+            ["otherTitle"] = movedOther ? GetTitle(other) : "",
+            ["otherFound"] = movedOther,
             ["pid"] = proc.Id,
         });
     }
 
-    /// <summary>Finds the window to tile opposite Revit — prefers the Claude desktop app, else the largest non-Revit window.</summary>
+    /// <summary>Finds the Claude window to tile opposite Revit. Returns Zero when Claude is not found —
+    /// deliberately NOT "the largest other window", which un-minimised and repositioned whatever the user
+    /// happened to have open (Outlook, Explorer, another CAD app) with no confirmation and no report that
+    /// detection had failed. Callers tile Revit alone in that case; --other &lt;hwnd&gt; targets explicitly.</summary>
     private static IntPtr FindOtherWindow(Process revit)
     {
         uint rpid = (uint)revit.Id;
-        IntPtr claude = IntPtr.Zero, largest = IntPtr.Zero;
-        long bestArea = 0;
+        IntPtr claude = IntPtr.Zero;
         EnumWindows((h, _) =>
         {
             GetWindowThreadProcessId(h, out uint wpid);
@@ -453,15 +498,9 @@ internal static class Program
             if (cls.StartsWith("Chrome_WidgetWin", StringComparison.OrdinalIgnoreCase) &&
                 title.IndexOf("claude", StringComparison.OrdinalIgnoreCase) >= 0)
             { claude = h; return false; }   // found Claude — stop
-
-            if (GetWindowRect(h, out var r))
-            {
-                long a = (long)(r.Right - r.Left) * (r.Bottom - r.Top);
-                if (a > bestArea) { bestArea = a; largest = h; }
-            }
             return true;
         }, IntPtr.Zero);
-        return claude != IntPtr.Zero ? claude : largest;
+        return claude;
     }
 
     private static bool GetWorkArea(IntPtr hwnd, out RECT wa)
@@ -516,8 +555,10 @@ internal static class Program
         // steal focus in between. --at=X,Y clicks that screen point (e.g. an empty canvas spot for a view
         // shortcut); with no --at we click the active view tab.
         if (!MaybeClickAt(proc, args)) FocusByClick(proc);
-        Keyboard.TypeVkSequence(seq);
-        return Ok(new() { ["action"] = "keys", ["keys"] = seq });
+        uint sentKeys = Keyboard.TypeVkSequence(seq);
+        if (sentKeys == 0)
+            return Fail("no keystrokes were injected (SendInput blocked by UIPI, a low-level hook, or a locked session)", 6);
+        return Ok(new() { ["action"] = "keys", ["keys"] = seq, ["sentEvents"] = (int)sentKeys });
     }
 
     /// <summary>
@@ -534,10 +575,24 @@ internal static class Program
         // the field focus between a separate click and the type. Pass --at=X,Y with the field's screen
         // coords (the cell you want to fill). Without --at we just type to whatever currently has focus.
         IntPtr revit = IntPtr.Zero;
+        uint revitPid = 0;
         if (TryGetRevitRoot(args, out _, out var proc, out _) && proc is not null)
-        { MaybeClickAt(proc, args); revit = GetBestRevitWindow(proc); }
+        { MaybeClickAt(proc, args); revit = GetBestRevitWindow(proc); revitPid = (uint)proc.Id; }
 
         IntPtr fg = GetForegroundWindow();          // who actually receives the keystrokes?
+        // PRE-FLIGHT: typing goes to whatever holds focus. If focus was stolen (the documented failure mode
+        // — a permission prompt pulls it off Revit mid-sequence) the text would land in another application.
+        // Refuse instead of writing user data somewhere unknown; --force types anyway.
+        //
+        // The test is "does the foreground window belong to the REVIT PROCESS", not "is it Revit's main
+        // frame". Transom's own Hub, and Revit's modal dialogs, are separate top-level HWNDs in the same
+        // process — comparing against the main-frame handle alone refused legitimate typing into them.
+        uint fgPid = 0;
+        if (fg != IntPtr.Zero) GetWindowThreadProcessId(fg, out fgPid);
+        bool fgIsRevit = revitPid != 0 && fgPid == revitPid;
+        if (!fgIsRevit && !args.Has("--force"))
+            return Fail($"foreground window is not Revit (hwnd {fg.ToInt64()}, pid {fgPid}) — the text would go to " +
+                        "another application. Pass --at=X,Y to click the field first, or --force to type anyway.", 7);
         uint sent = Keyboard.TypeText(text);        // SendInput returns how many events it injected
         // --enter commits the field in the SAME process (a separate `key enter` would refocus the view tab
         // and discard the just-typed value).
@@ -548,7 +603,7 @@ internal static class Program
             ["text"] = text,
             ["committed"] = args.Has("--enter"),
             ["sentEvents"] = (int)sent,
-            ["fgIsRevit"] = fg == revit && revit != IntPtr.Zero,
+            ["fgIsRevit"] = fgIsRevit,
             ["fgHwnd"] = fg.ToInt64(),
             ["revitHwnd"] = revit.ToInt64(),
         });
@@ -627,15 +682,22 @@ internal static class Program
     /// (exact AutomationId). Prefers an on-screen, enabled match. Null if none.</summary>
     private static AutomationElement? FindOne(AutomationElement root, string? name, string? autoId)
     {
-        AutomationElement? best = null;
+        // Preference order (what the summary promises, matching PickSmallestOnScreen): on-screen+enabled,
+        // then first on-screen, then first match at all. Previously enabled was never consulted, so a
+        // disabled on-screen control could win and set-field would write into it.
+        AutomationElement? first = null, firstOnScreen = null;
         foreach (AutomationElement e in root.FindAll(TreeScope.Descendants, Condition.TrueCondition))
         {
             if (autoId != null && SafeProp(e, AutomationElement.AutomationIdProperty) != autoId) continue;
             if (name != null && !(SafeName(e).ToLowerInvariant().Contains(name.ToLowerInvariant()))) continue;
-            if (best == null) best = e;
-            if (!SafeBool(e, AutomationElement.IsOffscreenProperty)) { best = e; break; } // prefer on-screen
+            first ??= e;
+            if (!SafeBool(e, AutomationElement.IsOffscreenProperty))
+            {
+                firstOnScreen ??= e;
+                if (SafeBool(e, AutomationElement.IsEnabledProperty)) return e;
+            }
         }
-        return best;
+        return firstOnScreen ?? first;
     }
 
     /// <summary>read-text: dump a control's text/state (Name, ValuePattern value, TextPattern text, IsEnabled,
@@ -723,18 +785,23 @@ internal static class Program
             return Fail("target control does not support ValuePattern (not an editable field).", 5);
         var vp = (ValuePattern)vpObj;
         if (vp.Current.IsReadOnly) return Fail("target field is read-only.", 5);
+        if (!SafeBool(el, AutomationElement.IsEnabledProperty)) return Fail("target field is disabled.", 5);
         try { el.SetFocus(); } catch { }
         try { vp.SetValue(text); }
         catch (Exception ex) { return Fail("SetValue failed: " + ex.Message, 5); }
         string after = "";
         try { after = vp.Current.Value ?? ""; } catch { }
-        return Ok(new()
+        // A SetValue the pattern accepted can still not stick (coerced value, WPF binding revert) —
+        // report ok honestly AND exit non-zero so both channels agree the write failed.
+        bool landed = after == text;
+        Ok(new()
         {
             ["action"] = isClear ? "clear-field" : "set-field",
             ["name"] = SafeName(el), ["automationId"] = SafeProp(el, AutomationElement.AutomationIdProperty),
-            ["requested"] = text, ["valueAfter"] = after, ["ok"] = after == text,
+            ["requested"] = text, ["valueAfter"] = after, ["ok"] = landed,
             ["window"] = args.GetString("--window") ?? "(main)",
         });
+        return landed ? 0 : 5;
     }
 
     /// <summary>
@@ -763,30 +830,14 @@ internal static class Program
         // The hardware-accelerated 3D viewport may come back blank this way; pass --screen to instead bring
         // Revit forward and grab the composited screen (faithful viewport, but it takes focus).
         bool useScreen = args.Has("--screen");
-        string method = useScreen ? "screen" : "printwindow";
 
-        using (var bmp = new System.Drawing.Bitmap(w, h, System.Drawing.Imaging.PixelFormat.Format32bppArgb))
-        {
-            using (var g = System.Drawing.Graphics.FromImage(bmp))
-            {
-                bool captured = false;
-                if (!useScreen)
-                {
-                    IntPtr hdc = g.GetHdc();
-                    try { captured = PrintWindow(hwnd, hdc, PW_RENDERFULLCONTENT); }
-                    finally { g.ReleaseHdc(hdc); }
-                }
-                if (!captured)
-                {
-                    // Screen-grab fallback needs Revit visible and on top.
-                    TryActivate(proc);
-                    using var g2 = System.Drawing.Graphics.FromImage(bmp);
-                    g2.CopyFromScreen(rc.Left, rc.Top, 0, 0, new System.Drawing.Size(w, h));
-                    method = useScreen ? "screen" : "screen-fallback";
-                }
-            }
-            bmp.Save(outPath, System.Drawing.Imaging.ImageFormat.Png);
-        }
+        // DEAD-07: the capture was written out a second time here, inline, and the copy still carried the exact
+        // bug CaptureRevitWindow documents as fixed — it opened a SECOND Graphics over a Bitmap that already had
+        // a live one ("Object is currently in use elsewhere"), on the --screen path where that fallback branch
+        // ALWAYS runs. Two implementations, one of them broken, with divergent error handling (this one let the
+        // exception escape; the other returns ""). One implementation now.
+        string method = CaptureRevitWindow(hwnd, proc, outPath, useScreen);
+        if (method.Length == 0) return Fail("Could not capture the Revit window.", 5);
 
         var (winDpi, scalePct) = WindowDpi(hwnd);
         return Ok(new()
@@ -836,8 +887,11 @@ internal static class Program
                 if (!captured)
                 {
                     TryActivate(proc);
-                    using var g2 = System.Drawing.Graphics.FromImage(bmp);
-                    g2.CopyFromScreen(rc.Left, rc.Top, 0, 0, new System.Drawing.Size(w, h));
+                    // Reuse `g` — its HDC was already released above. Creating a SECOND Graphics over a
+                    // Bitmap that still has a live one is the classic source of
+                    // "InvalidOperationException: Object is currently in use elsewhere", and on the
+                    // --screen path (where PrintWindow is skipped) this branch always ran.
+                    g.CopyFromScreen(rc.Left, rc.Top, 0, 0, new System.Drawing.Size(w, h));
                     method = useScreen ? "screen" : "screen-fallback";
                 }
             }
@@ -1014,7 +1068,10 @@ internal static class Program
     /// <summary>
     ///     Visible top-level windows owned by the process, excluding its main window — i.e. Revit's native
     ///     modal dialogs. Skips .NET WinForms helper windows (pyRevit output monitor, telemetry, etc.,
-    ///     class "WindowsForms10.*") and tiny/parked windows, so a default safe-dismiss never clicks them.
+    ///     class "WindowsForms10.*"), tiny/parked windows, and TRANSOM'S OWN WINDOWS, so a default
+    ///     safe-dismiss never clicks them. The Hub is a WPF window with a footer "Close" button, so without
+    ///     the last exclusion `click-dialog` with no button name could close the Hub — discarding staged
+    ///     import state — and report it as having dismissed a Revit dialog.
     /// </summary>
     private static List<IntPtr> ProcessDialogWindows(Process proc)
     {
@@ -1030,6 +1087,7 @@ internal static class Program
 
             var cls = GetClass(h);
             if (cls.StartsWith("WindowsForms", StringComparison.OrdinalIgnoreCase)) return true; // helper windows
+            if (IsTransomOwnWindow(h)) return true;      // our own Hub/dialogs are not Revit modals
             if (GetWindowRect(h, out var r))
             {
                 int w = r.Right - r.Left, ht = r.Bottom - r.Top;
@@ -1039,6 +1097,15 @@ internal static class Program
             return true;
         }, IntPtr.Zero);
         return list;
+    }
+
+    /// <summary>True for Transom's own WPF windows (the Schedule Hub and its dialogs), matched by title.
+    /// They live in the Revit process and pass every "is this a modal dialog" test, so they must be
+    /// excluded explicitly from dialog enumeration and auto-dismiss.</summary>
+    private static bool IsTransomOwnWindow(IntPtr h)
+    {
+        var t = WindowTitle(h);
+        return t.StartsWith("Transom", StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>
@@ -1474,20 +1541,23 @@ internal static class Program
     /// <summary>The visible top-level window whose title contains <paramref name="substring"/>
     /// (case-insensitive) — used by --window to target an owned window (e.g. the "Transom" Schedule Hub window,
     /// a SIBLING top-level HWND of the main Revit frame under the same pid) instead of Revit's main frame.
-    /// PASS 1: windows owned by <paramref name="proc"/>. PASS 2 (fallback): ANY process's window — the Hub is a
-    /// WPF HwndWrapper and its window→pid association via GetWindowThreadProcessId is normally proc's pid, but
-    /// fall back globally so a hosting quirk can't hide it (this was the bug: --window resolved to the main
-    /// frame and find/screenshot walked the wrong subtree). Smallest-but-nonzero match preferred when the
-    /// substring is specific (the Hub is smaller than the main frame); largest otherwise. Zero if none.</summary>
+    /// SCOPED TO <paramref name="proc"/>: the old global pass-2 fallback could resolve to ANOTHER process's
+    /// window (a browser tab, an Explorer folder, an editor) and then set-field/click-xy would write into it.
+    /// EXACT title match wins over substring, and among substring matches the SMALLEST non-zero window wins —
+    /// the Hub is smaller than the main frame, and the frame's title carries the document name, so a model
+    /// named e.g. "Transom-Test.rvt" also matches the needle and a largest-wins rule picked the wrong window
+    /// (the bug this targeting was introduced to fix). Zero if none.</summary>
     private static IntPtr GetWindowByTitle(Process proc, string substring)
     {
         var needle = substring.ToLowerInvariant();
-        IntPtr ownedBest = IntPtr.Zero; long ownedArea = -1;
-        IntPtr anyBest = IntPtr.Zero; long anyArea = -1;
+        IntPtr exactBest = IntPtr.Zero; long exactArea = long.MaxValue;
+        IntPtr subBest = IntPtr.Zero; long subArea = long.MaxValue;
         uint target = (uint)proc.Id;
         EnumWindows((h, _) =>
         {
             if (!IsWindowVisible(h)) return true;
+            GetWindowThreadProcessId(h, out uint wpid);
+            if (wpid != target) return true;            // never leave the Revit process
             int len = GetWindowTextLength(h);
             if (len == 0) return true;
             var sb = new StringBuilder(len + 1);
@@ -1496,12 +1566,12 @@ internal static class Program
             if (!title.Contains(needle)) return true;
             if (!GetWindowRect(h, out var r)) return true;
             long area = (long)(r.Right - r.Left) * (r.Bottom - r.Top);
-            GetWindowThreadProcessId(h, out uint wpid);
-            if (wpid == target) { if (area > ownedArea) { ownedArea = area; ownedBest = h; } }
-            if (area > anyArea) { anyArea = area; anyBest = h; }
+            if (area <= 0) return true;
+            if (title == needle) { if (area < exactArea) { exactArea = area; exactBest = h; } }
+            else if (area < subArea) { subArea = area; subBest = h; }
             return true;
         }, IntPtr.Zero);
-        return ownedBest != IntPtr.Zero ? ownedBest : anyBest;
+        return exactBest != IntPtr.Zero ? exactBest : subBest;
     }
 
     /// <summary>Title of a window (best-effort), for diagnostics.</summary>
@@ -1585,7 +1655,15 @@ internal static class Program
         if (rect is { Width: > 1 } r)
         { cx = (int)(r.Left + r.Width / 2); cy = (int)(r.Top + r.Height / 2); }
         else if (GetWindowRect(h, out var wr))
-        { cx = wr.Left + (wr.Right - wr.Left) / 2; cy = wr.Top + 10; }
+        {
+            // CLIENT AREA, not the caption row. `wr.Top + 10` landed in the title bar — the exact region
+            // this method's own summary says to avoid, because on Revit it hosts the Quick Access Toolbar
+            // (Save/Undo/Redo/Synchronize). This fallback runs before EVERY `key`/`keys` without --at, so
+            // an accidental Undo would land mid-automation with nothing recording it. The window centre is
+            // the drawing canvas: focusing it has no model side effects.
+            cx = wr.Left + (wr.Right - wr.Left) / 2;
+            cy = wr.Top + (wr.Bottom - wr.Top) / 2;
+        }
         else return;
 
         GetCursorPos(out int sx, out int sy);
@@ -1640,7 +1718,9 @@ internal static class Program
 
     private static int Ok(Dictionary<string, object?> data)
     {
-        data["ok"] = true;
+        // TryAdd, not overwrite: set-field computes its own honest "ok" (did the value actually stick)
+        // and an unconditional assignment here silently replaced that answer with true.
+        data.TryAdd("ok", true);
         if (_json) Console.WriteLine(Json.Object(data));
         else
         {
@@ -1766,12 +1846,18 @@ internal static class Program
     private const uint MOUSEEVENTF_LEFTUP = 0x0004;
     private const uint MOUSEEVENTF_WHEEL = 0x0800;
 
-    private static void ClickAt(int x, int y)
+    /// <returns>False when the cursor did not actually reach (x,y) — a blocked or virtualized SetCursorPos
+    /// would otherwise fire the click wherever the cursor already was while callers report the intended
+    /// coordinates. No click is sent in that case.</returns>
+    private static bool ClickAt(int x, int y)
     {
         SetCursorPos(x, y);
         Thread.Sleep(30);
+        GetCursorPos(out int ax, out int ay);
+        if (Math.Abs(ax - x) > 2 || Math.Abs(ay - y) > 2) return false;
         mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, UIntPtr.Zero);
         mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, UIntPtr.Zero);
+        return true;
     }
 }
 
@@ -1859,7 +1945,9 @@ internal static class Keyboard
     ///     like "tl". Letters and digits only; other characters are skipped. Case-insensitive (Revit
     ///     shortcuts are), so no Shift is sent.
     /// </summary>
-    public static void TypeVkSequence(string text)
+    /// <returns>How many input events were actually injected. 0 means SendInput was BLOCKED (UIPI, a
+    /// low-level hook, a locked session) and nothing was typed — callers must not report success on 0.</returns>
+    public static uint TypeVkSequence(string text)
     {
         var seq = new List<INPUT>();
         foreach (char ch in text)
@@ -1872,7 +1960,7 @@ internal static class Keyboard
             seq.Add(Vk(vk, up: false));
             seq.Add(Vk(vk, up: true));
         }
-        if (seq.Count > 0) SendInput((uint)seq.Count, seq.ToArray(), Marshal.SizeOf<INPUT>());
+        return seq.Count > 0 ? SendInput((uint)seq.Count, seq.ToArray(), Marshal.SizeOf<INPUT>()) : 0;
     }
 
     /// <summary>Sends a combo like "ctrl+a", "ctrl+shift+enter", "enter", "esc", "tab", "f2".</summary>
@@ -1904,7 +1992,10 @@ internal static class Keyboard
         seq.Add(Vk(key.Value, up: true));
         for (int i = mods.Count - 1; i >= 0; i--) seq.Add(Vk(mods[i], up: true));
 
-        SendInput((uint)seq.Count, seq.ToArray(), Marshal.SizeOf<INPUT>());
+        // SendInput returns 0 when injection is blocked (UIPI / low-level hook / locked session) — report
+        // that as a failure instead of claiming the combo was sent.
+        uint sent = SendInput((uint)seq.Count, seq.ToArray(), Marshal.SizeOf<INPUT>());
+        if (sent == 0) { error = "SendInput injected nothing (blocked by UIPI, a low-level hook, or a locked session)"; return false; }
         return true;
     }
 

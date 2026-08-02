@@ -196,20 +196,51 @@ public sealed partial class TransomViewModel : ObservableObject
     /// OnPropertyChanged(nameof(CanApply)) wherever _lastChangeSet is set/nulled, a pending row is confirmed,
     /// discarded, or added (conflict resolution), the grid is refilled, OR a schedule's selection flips.</summary>
     public bool CanApply => _lastChangeSet != null
-        && (Changes.Count > 0 || _lastChangeSet.HeaderChanges.Count > 0)   // a 0-change preview produces a change set but nothing to apply → keep Apply greyed
+        && !_importBusy                                                    // a raise is outstanding — see _importBusy
+        // Count header changes by the SAME predicate ApplyHeaderChanges uses (Importer: skips !Selected or
+        // OutcomeNote=="skipped"). The raw list length left Apply enabled for a preview whose only header
+        // renames were deselected — pressing it ran a transaction that wrote nothing.
+        && (Changes.Count > 0 || _lastChangeSet.HeaderChanges.Any(h => h.Selected && h.OutcomeNote != "skipped"))
         && !Changes.Any(PendingBlocksApply);
+
+    /// <summary>
+    ///     True from the moment an import ExternalEvent is raised until its callback returns. REQUIRED:
+    ///     <see cref="ImportEventHandler"/> holds its request in single scalar fields with no queue, so two
+    ///     raises COALESCE into one Execute against the second request. Without this gate the corrections
+    ///     re-preview was the live case — Apply stayed enabled while a re-preview raise was outstanding, so
+    ///     clicking it discarded the user's corrections and applied the pre-correction change set, reporting
+    ///     an ordinary success. (docs/design-notes/revit-api-research-notes.md: handlers must not assume 1:1.)
+    /// </summary>
+    private bool _importBusy;
+
+    private void SetImportBusy(bool busy)
+    {
+        if (_importBusy == busy) return;
+        _importBusy = busy;
+        OnPropertyChanged(nameof(CanApply));
+    }
 
     /// <summary>True for a pending row whose schedule is still selected — the rows the confirm-or-discard gate
     /// counts. A pending row in a fully-deselected schedule is excluded everywhere the gate looks.</summary>
     private bool PendingBlocksApply(ProposedChange c) => c.NeedsConfirm && ScheduleSelectedFor(c);
+
+    /// <summary>
+    ///     THE schedule-identity rule, used by every site that has to decide "is this the same schedule".
+    ///     Uid-first (rename-safe), name fallback — and the uid comparison only counts when the uid is
+    ///     NON-EMPTY. That guard is the whole point: a workbook exported without schedule uids leaves every
+    ///     uid "", so a bare `a.Uid == b.Uid` matches the FIRST row for everything, and per-schedule
+    ///     selection silently applies one schedule's answer to all of them.
+    /// </summary>
+    private static bool SameSchedule(string uidA, string nameA, string uidB, string nameB) =>
+        (!string.IsNullOrEmpty(uidA) && !string.IsNullOrEmpty(uidB) && uidA == uidB)
+        || (!string.IsNullOrEmpty(nameA) && nameA == nameB);
 
     /// <summary>Whether the change's source schedule is selected (checked or mixed). No per-schedule row (single-
     /// schedule import / unattributable) ⇒ selected, fail-open — matches ResolveSelectedAndFinalize's rule.</summary>
     private bool ScheduleSelectedFor(ProposedChange c)
     {
         var row = AffectedSchedules.FirstOrDefault(r =>
-            (!string.IsNullOrEmpty(c.SourceScheduleUid) && r.ScheduleUid == c.SourceScheduleUid)
-            || r.ScheduleName == c.SourceScheduleName);
+            SameSchedule(c.SourceScheduleUid, c.SourceScheduleName, r.ScheduleUid, r.ScheduleName));
         return row == null || row.SelectionState != false;
     }
     /// <summary>Conflict choices the user already made, keyed by (typeId, parameterId), remembered ACROSS a re-Preview
@@ -291,9 +322,11 @@ public sealed partial class TransomViewModel : ObservableObject
         _scheduleLoadHandler = scheduleLoadHandler;
 
         _exportHandler.ReportStatus = s => _ui.Invoke(() => Status = s);
-        _importHandler.OnPreview = cs => _ui.BeginInvoke(() => ShowPreview(cs));
+        // Every import callback clears the busy flag — the raise is done once one of these has run.
+        _importHandler.OnPreview = cs => _ui.BeginInvoke(() => { SetImportBusy(false); ShowPreview(cs); });
         _importHandler.OnApplied = s => _ui.Invoke(() =>
         {
+            SetImportBusy(false);
             // Option-2 old-values cleanup (user-directed 2026-07-18): grouped members the disposition couldn't
             // write via the API were collected during apply (only VERIFIED targets); stage them for Claude now —
             // after apply, because only now is it known which new-param copies actually landed. Runs before
@@ -318,7 +351,7 @@ public sealed partial class TransomViewModel : ObservableObject
             OnPropertyChanged(nameof(CanApply));   // applied → no change set → re-grey Apply until next Preview
         });
         _importHandler.OnAppliedLog = log => _ui.Invoke(() => _diagnosticLog = log);
-        _importHandler.OnError = s => _ui.Invoke(() => ImportStatus = "Error: " + s);
+        _importHandler.OnError = s => _ui.Invoke(() => { SetImportBusy(false); ImportStatus = "Error: " + s; });
         _scheduleLoadHandler.OnLoaded = (activeId, scheds) => _ui.Invoke(() => SetSchedules(activeId, scheds));
 
         // Cross-update (UX_SPEC §5 C-3): when a per-CELL checkbox in the changes grid toggles a change's Selected,
@@ -345,6 +378,14 @@ public sealed partial class TransomViewModel : ObservableObject
         SetSchedules(activeScheduleId, schedules);
         _initialized = true;
     }
+
+    /// <summary>
+    ///     Unhooks this viewmodel from the static <see cref="ProposedChange.SelectionChanged"/> event.
+    ///     MUST be called when the Hub window closes: the static event otherwise roots the viewmodel for
+    ///     the whole Revit session, and each reopened Hub adds another dead subscriber that re-runs the
+    ///     row/selection refresh (against stale, possibly closed-document state) on every checkbox click.
+    /// </summary>
+    public void Detach() => ProposedChange.SelectionChanged -= OnAnyChangeSelectionChanged;
 
     private void SetSchedules(long activeId, List<(long id, string name)> schedules)
     {
@@ -644,6 +685,8 @@ public sealed partial class TransomViewModel : ObservableObject
     /// picker is never shown twice (§16.3).</summary>
     private void RunAnalysis()
     {
+        // Never stack a second request on an outstanding raise — they coalesce and one is silently lost.
+        if (_importBusy) { ImportStatus = "Still analysing — wait for the current pass to finish."; return; }
         _importHandler.RequestedMode = ImportEventHandler.Mode.Preview;
         _importHandler.WorkbookPath = WorkbookPath;
         _importHandler.DocTitle = SelectedProject;
@@ -660,6 +703,7 @@ public sealed partial class TransomViewModel : ObservableObject
             })
             .ToList();
         ImportStatus = "Analysing…";
+        SetImportBusy(true);
         _importEvent.Raise();
         MaybeEncourage();
     }
@@ -766,6 +810,15 @@ public sealed partial class TransomViewModel : ObservableObject
     [RelayCommand]
     private void Apply()
     {
+        // BUSY GATE (belt for a programmatic invoke; CanApply greys the button): applying while a preview
+        // raise is outstanding coalesces the two requests, so the preview never runs and the apply proceeds
+        // against the pre-correction change set.
+        if (_importBusy)
+        {
+            ImportStatus = "Still analysing — wait for the current pass to finish, then Apply.";
+            return;
+        }
+
         // CONFIRM-OR-DISCARD GATE: Apply is blocked outright while any pending (NeedsConfirm) row remains in a
         // SELECTED schedule — every such row must be confirmed or discarded first (they sit at the TOP of the grid
         // so they can't hide below the fold, the original silent-skip complaint). Pending rows in deselected
@@ -794,6 +847,26 @@ public sealed partial class TransomViewModel : ObservableObject
                 ? "No schedules selected — tick at least one schedule to import."
                 : "Nothing selected to apply.";
             return;
+        }
+
+        // CROSS-MODEL GATE: a workbook exported from a different model matches rows by NAME, so values can
+        // land on same-named elements that are not the ones the user edited. That must never happen on a
+        // warning string alone (the pre-fix behaviour) — require an explicit opt-in per Apply.
+        if (_lastChangeSet?.CrossModel == true)
+        {
+            var proceed = System.Windows.MessageBox.Show(
+                "This workbook was exported from a DIFFERENT model than the one you're applying to" +
+                (string.IsNullOrEmpty(SelectedProject) ? "" : $" (\"{SelectedProject}\")") + ".\n\n" +
+                "Rows were matched by name, so values can land on same-named elements that are not the " +
+                "ones you edited in Excel.\n\nApply to this model anyway?",
+                "Transom — different source model",
+                System.Windows.MessageBoxButton.YesNo, System.Windows.MessageBoxImage.Warning,
+                System.Windows.MessageBoxResult.No);
+            if (proceed != System.Windows.MessageBoxResult.Yes)
+            {
+                ImportStatus = "Apply cancelled — the workbook came from a different model.";
+                return;
+            }
         }
 
         // Clear any stale resolutions from a prior Apply — these ProposedChange objects are shared with the
@@ -1091,6 +1164,7 @@ public sealed partial class TransomViewModel : ObservableObject
         _importHandler.DocTitle = SelectedProject;
         string hdrNote = selectedHeaderChanges.Count > 0 ? $" + {selectedHeaderChanges.Count} heading rename(s)" : "";
         ImportStatus = $"Applying {toApplyList.Count} selected change(s){hdrNote}…";
+        SetImportBusy(true);
         _importEvent.Raise();
         MaybeEncourage();
     }
@@ -1259,8 +1333,10 @@ public sealed partial class TransomViewModel : ObservableObject
                        "an EMPTY 'group' means the element is NOT in a model group, so it is ALWAYS a plain per-instance " +
                        "write via set_parameter (no group-edit-mode, no definition-swap) — this holds REGARDLESS of the " +
                        "parameterId sign. The parameterId rules below apply ONLY to entries WITH a non-empty 'group':\n" +
-                       "  • parameterId >= 0 = PROJECT/SHARED params: writable per group instance after enabling 'vary " +
-                       "by group instance', or via the bridge set_parameter (which handles group members directly).\n" +
+                       "  • parameterId >= 0 = PROJECT/SHARED params: writable per group instance ONLY after 'vary by " +
+                       "group instance' is enabled for the parameter — bridge set_parameter writes it once vary is on, " +
+                       "and refuses with an actionable error when it is not (the vary flag is a one-way door the " +
+                       "bridge never sets itself).\n" +
                        "  • parameterId < 0 = BUILT-IN params on a GROUP member: a direct write is rejected ('Changes to " +
                        "groups are allowed only in group edit mode') and the API can't edit a group member — so apply " +
                        "these by driving Revit's 'Edit Group' MODE in the UI with the Transom UI-Assist (ClickHelper) " +
@@ -1288,11 +1364,30 @@ public sealed partial class TransomViewModel : ObservableObject
         catch { return null; }
     }
 
+    // _bulkSelecting is REQUIRED here for the same reason BulkSetAffected sets it: each Selected assignment
+    // raises the static ProposedChange.SelectionChanged, whose handler refreshes every affected-schedule row,
+    // and each row's SelectionState getter re-enumerates the whole Changes collection. Without the guard one
+    // click costs O(changes × rows × changes) — ~2.5M enumerations on a 500-change / 10-schedule import, on
+    // the UI thread. The refresh runs once at the end instead.
     [RelayCommand]
-    private void SelectAll() { foreach (var c in Changes) if (c.Selectable) c.Selected = true; RefreshChanges(); }
+    private void SelectAll() => BulkSetChanges(true);
 
     [RelayCommand]
-    private void SelectNone() { foreach (var c in Changes) c.Selected = false; RefreshChanges(); }
+    private void SelectNone() => BulkSetChanges(false);
+
+    private void BulkSetChanges(bool selected)
+    {
+        _bulkSelecting = true;
+        try
+        {
+            foreach (var c in Changes)
+                if (!selected || c.Selectable) c.Selected = selected;
+        }
+        finally { _bulkSelecting = false; }
+
+        OnAnyChangeSelectionChanged();   // single refresh of rows/helpers after the bulk set
+        RefreshChanges();
+    }
 
     private void RefreshChanges()
     {
@@ -1306,9 +1401,7 @@ public sealed partial class TransomViewModel : ObservableObject
     /// <summary>The changes a schedule "owns": uid-first match (rename-safe), name fallback when uid is empty
     /// (cross-model / legacy) — same precedence the importer uses (ResolveSchedule). UX_SPEC §5 C-2.</summary>
     private IReadOnlyList<ProposedChange> ChangesForSchedule(SheetSummary s) =>
-        Changes.Where(c => !string.IsNullOrEmpty(s.ScheduleUid)
-            ? c.SourceScheduleUid == s.ScheduleUid
-            : c.SourceScheduleName == s.ScheduleName).ToList();
+        Changes.Where(c => SameSchedule(c.SourceScheduleUid, c.SourceScheduleName, s.ScheduleUid, s.ScheduleName)).ToList();
 
     /// <summary>Header (caption) renames to apply, scoped to the SELECTED schedules. Header edits have no per-row
     /// checkbox — each rides its schedule's selection in the affected-schedules list. A schedule counts as selected
@@ -1531,13 +1624,13 @@ public sealed partial class TransomViewModel : ObservableObject
         // affected-keyed — is treated as selected, fail-open, since its changes still honour their own Selected).
         bool ScheduleSelected(string uid, string name)
         {
-            var row = AffectedSchedules.FirstOrDefault(r => r.ScheduleUid == uid || r.ScheduleName == name);
+            var row = AffectedSchedules.FirstOrDefault(r => SameSchedule(uid, name, r.ScheduleUid, r.ScheduleName));
             return row == null || row.SelectionState != false;   // null (mixed) or true ⇒ selected
         }
 
         // CHANGE 2 §3b: the tab a conflict belongs to (so its skip is attributable for the skip-log scoping).
         string ConflictTab(string uid, string name) =>
-            cs.SheetSummaries.FirstOrDefault(s => s.ScheduleUid == uid || s.ScheduleName == name)?.SheetTabName ?? "";
+            cs.SheetSummaries.FirstOrDefault(s => SameSchedule(uid, name, s.ScheduleUid, s.ScheduleName))?.SheetTabName ?? "";
 
         // §8.4: resolve each conflict only when its schedule is selected; else skip it without a dialog.
         foreach (var conflict in cs.Conflicts)
@@ -1618,7 +1711,7 @@ public sealed partial class TransomViewModel : ObservableObject
                 if (string.IsNullOrEmpty(tab)) return true;   // genuinely unresolvable → show (fail-open)
                 var ss = cs.SheetSummaries.FirstOrDefault(s => s.SheetTabName == tab);
                 if (ss == null) return true;                  // unresolvable → show (fail-open)
-                var row = AffectedSchedules.FirstOrDefault(r => r.ScheduleUid == ss.ScheduleUid || r.ScheduleName == ss.ScheduleName);
+                var row = AffectedSchedules.FirstOrDefault(r => SameSchedule(ss.ScheduleUid, ss.ScheduleName, r.ScheduleUid, r.ScheduleName));
                 if (row != null) return row.SelectionState != false;   // affected → by its checkbox
                 return false;                                  // real but non-selected (skip-only) schedule → HIDE
             }
@@ -1664,7 +1757,7 @@ public sealed partial class TransomViewModel : ObservableObject
             if (!subset || string.IsNullOrEmpty(tab)) return true;
             var ss = cs.SheetSummaries.FirstOrDefault(s => s.SheetTabName == tab);
             if (ss == null) return true;
-            var row = AffectedSchedules.FirstOrDefault(r => r.ScheduleUid == ss.ScheduleUid || r.ScheduleName == ss.ScheduleName);
+            var row = AffectedSchedules.FirstOrDefault(r => SameSchedule(ss.ScheduleUid, ss.ScheduleName, r.ScheduleUid, r.ScheduleName));
             return row != null ? row.SelectionState != false : false;
         }
         var selDiags = cs.Diagnostics.Where(d => DiagSelected(d.SheetTabName)).ToList();
@@ -1845,12 +1938,28 @@ public sealed partial class TransomViewModel : ObservableObject
         // not per keystroke.
         if (IsClaudeAssistEnabled)
         {
-            _ = Task.Run(() =>
+            // Report failures the way the Assist toggle does. This path used to discard the setup Result,
+            // the Start() error string AND any exception (`_ =` plus a ContinueWith that never observed the
+            // antecedent) — so typing a port already in use left the bridge stopped while the UI said
+            // nothing, and the only symptom was Claude tools quietly not working.
+            _ = Task.Run(async () =>
             {
-                ClaudeSetup.EnsureAll(_settings);
-                BridgeRuntime.Stop();
-                BridgeRuntime.Start(value);
-            }).ContinueWith(_ => RefreshClaudeStatusAsync());
+                string? failure = null;
+                try
+                {
+                    ClaudeSetup.EnsureAll(_settings);
+                    BridgeRuntime.Stop();
+                    var startError = BridgeRuntime.Start(value);
+                    if (!string.IsNullOrEmpty(startError)) failure = startError;
+                }
+                catch (Exception ex) { failure = ex.Message; }
+
+                if (failure != null)
+                    _ui.Invoke(() => ClaudeStatusFooter =
+                        $"Bridge could not restart on port {value}: {failure}  ·  pick a different port.");
+
+                await RefreshClaudeStatusAsync();
+            });
         }
         else
         {

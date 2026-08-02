@@ -18,7 +18,7 @@ Repo: `Dave5264/transom-revit`. Default branch: `main`. Primary dev path on the 
 | `install/` | WixSharp installer (`Installer.cs`, `ShimRefresh.cs` custom action). |
 | `build/` | ModularPipelines build project (`dotnet run -- pack`) — **flaky, see §3; prefer the manual runbook**. |
 | `claude/` | Drop-in guidance shipped with the add-in: `CLAUDE.md` + `transom-connect.md` (the USER's Claude client guidance, different from this file). The ClickHelper UI-automation guidance now lives in the `transom-ui-assist` MCP server's `instructions` + the staged how-to (`ClaudeGuideMarkdown`), not a shipped playbook file. |
-| `docs/design-notes/` · `tools/` | Design rationale behind shipped fixes (import idempotency, Option-2 heading/rollback, Hub doc-rebind) and standalone dev tools (`transom_verify.py`). |
+| `docs/` | `design-notes/export-legend-copy.md` (the **copy source of truth** for the cell-colour legend — edit wording there first, then mirror into `TransomView.xaml` + `ExportLegendDialog.xaml`), `design-notes/revit-api-research-notes.md` (live-verified Revit API behaviour cited from the code), `parity-tool-status.md` (bridge-tool review state; named in a user-visible error, so it must resolve on GitHub). **Historical design notes and install post-mortems were archived out of the repo on 2026-08-01** — see `dev/Revit Coding/Transom-dev-notes-archive/` on the maintainer's machine. Don't re-add development notes here; this repo is public. |
 
 ---
 
@@ -35,7 +35,10 @@ Repo: `Dave5264/transom-revit`. Default branch: `main`. Primary dev path on the 
 - The registration entry in `~/.claude.json` should include `"type":"stdio"` alongside `command`/`args` (Code treats command-bearing entries as stdio by default, but include `type` explicitly).
 - **Smoke test:** `source/Transom.McpShim/smoke-test.ps1` pipes newline-delimited `initialize`+`tools/list` into the built exes and asserts the framing + echoed version + tool list. **Run it after any shim change.**
 
-**Quick manual connect check (no Revit needed — proves the handshake):** launch the published `%LocalAppData%\Transom\mcp\Transom.McpShim.exe`, write `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"x","version":"1"}}}\n` then `{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}\n` to its stdin, read stdout → expect two single-line JSON responses, `protocolVersion` echoed, 5 tools. (A full `status` *call* additionally needs Revit open + bridge ON.)
+**Quick manual connect check (no Revit needed — proves the handshake):** launch the published `%LocalAppData%\Transom\mcp\Transom.McpShim.exe`, write `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"x","version":"1"}}}\n` then `{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}\n` to its stdin, read stdout → expect two single-line JSON responses, `protocolVersion` echoed, and **~40 tools** —
+the 6 core ones (`status`, `list_schedules`, `read_schedule`, `set_parameter`, `set_parameters`,
+`execute_revit_code`) plus `ParityTools.AddTo`'s enabled parity surface. Assert a **subset**, never an exact count
+(`smoke-test.ps1` does it this way); "5 tools" was the pre-parity expectation and now reads as a failure. (A full `status` *call* additionally needs Revit open + bridge ON.)
 
 ---
 
@@ -55,7 +58,7 @@ A plain `dotnet build source/Transom/Transom.csproj -c Debug.R2x` **is** the loc
 - **Every build auto-deploys the add-in DLL** (`DeployAddin=true`) to `%AppData%\Autodesk\Revit\Addins\<ver>\` — so **Revit MUST be CLOSED** before building, or the copy fails (locked DLL). Re-confirm Revit is closed immediately before each build. Never force-kill Revit; the user closes it.
 - **A published GitHub release version is IMMUTABLE.** Never re-publish a different binary under an existing version tag — bump `AppInfo.Version` to a new number.
 - **Do NOT use `dotnet run -- pack`** — its CompileProjectModule dies silently building 3 Revit configs back-to-back, and an exit-0 can mask a dropped config/MSI. Use the **csproj-direct** runbook below.
-- **Build the CSPROJ per config, never the .sln.** Building `Transom.sln -c Release.R26` mis-maps the project (the .sln has no `.Build.0` for `Release.R26|Any CPU`) → NO `bin/Release.R26` → the installer silently omits Revit-2026. csproj-direct resolves the right OutDir/PublishDir for all three configs.
+- **Build the CSPROJ per config for a release.** The `.sln` R26/Release mappings were REPAIRED on 2026-07-31 (they used to point `Debug.R26`, `Release.R26` and plain `Release` at `Debug.R25`, so the project was built as **Debug.R25** — not "not built" — and a debug DLL was deployed into the live **2025** add-ins folder while `bin/Release.R26` never appeared and the installer silently omitted Revit-2026). The solution now builds each configuration correctly, but the release runbook still goes csproj-direct: it resolves the right OutDir/PublishDir per config and keeps one stale `publish` folder from colliding with another (see the duplicate-component-ID note in step 2).
 - **Toolchain (all three required on the build machine):**
   - **.NET SDK 10** (per `global.json`, rollForward latestMinor). R25/R26 target .NET 8, R27 targets .NET 10 — all three build standalone.
   - **WiX 7.x on PATH** — check `wix --version` (this machine: `wix 7.0.0`, global tool at `~/.dotnet/tools`). If building `Installer.csproj` complains about a missing UI extension, run `wix extension add -g WixToolset.UI.wixext`.

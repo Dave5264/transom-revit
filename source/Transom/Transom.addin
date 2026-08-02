@@ -4,8 +4,8 @@
         <Assembly>Transom\Transom.dll</Assembly>
         <AddInId>B59E3D1E-A238-48E6-AC46-516BA56D9F33</AddInId>
         <FullClassName>Transom.Application</FullClassName>
-        <VendorId>Development</VendorId>
-        <VendorDescription></VendorDescription>
+        <VendorId>Transom</VendorId>
+        <VendorDescription>Transom — Revit schedules to Excel and back</VendorDescription>
     </AddIn>
     <ManifestSettings>
         <UseRevitContext>False</UseRevitContext>

@@ -5,6 +5,7 @@
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:viewModel="clr-namespace:Transom.ViewModels"
+    xmlns:views="clr-namespace:Transom.Views"
     mc:Ignorable="d"
     d:DataContext="{d:DesignInstance viewModel:TransomViewModel}"
     ResizeMode="CanResize"
@@ -331,15 +332,41 @@
                         </DockPanel>
 
                         <Border BorderBrush="{DynamicResource Line}" BorderThickness="1" CornerRadius="6" MinHeight="120">
-                            <ListBox ItemsSource="{Binding FilteredSchedules}" BorderThickness="0" Background="Transparent">
+                            <!-- UI-07: the CheckBox is only as wide as its box + label, so clicking the empty right-hand
+                                 part of a row (or the ListBoxItem's own padding) used to highlight the row and leave
+                                 IsChecked untouched — pure false feedback, since nothing binds SelectedItem. Binding
+                                 ListBoxItem.IsSelected to IsChecked makes the whole row the hit target; SelectionMode
+                                 must be Multiple or single-select would UNTICK the previously-checked row on every
+                                 click. Clicking the CheckBox itself still works: ToggleButton marks the mouse event
+                                 handled, so ListBoxItem doesn't also toggle selection and the two can't cancel out. -->
+                            <ListBox ItemsSource="{Binding FilteredSchedules}" BorderThickness="0" Background="Transparent"
+                                     SelectionMode="Multiple">
                                 <ListBox.ItemTemplate>
                                     <DataTemplate>
-                                        <CheckBox IsChecked="{Binding IsChecked, Mode=TwoWay}" Content="{Binding Name}" />
+                                        <CheckBox IsChecked="{Binding IsChecked, Mode=TwoWay}" Content="{Binding Name}"
+                                                  HorizontalAlignment="Stretch">
+                                            <!-- DEAD-09: the right-click copy entry point. It MUST live in the
+                                                 DataTemplate, not in a ContextMenu Setter on the ItemContainerStyle:
+                                                 event handlers inside an inline Style's Setter.Value can't be routed
+                                                 through IStyleConnector, so the XAML compiler hoists them to the
+                                                 nearest connected ancestor and emits `((TabItem)target).AddHandler(...)`,
+                                                 which throws "Set connectionId threw an exception" and takes the whole
+                                                 window's InitializeComponent down with it. In a DataTemplate the
+                                                 handlers compile to a proper MenuItem cast (IStyleConnector). -->
+                                            <CheckBox.ContextMenu>
+                                                <ContextMenu>
+                                                    <MenuItem Header="Copy name" Click="CopyScheduleName_Click" />
+                                                    <MenuItem Header="Copy all names" Click="CopyAllScheduleNames_Click" />
+                                                </ContextMenu>
+                                            </CheckBox.ContextMenu>
+                                        </CheckBox>
                                     </DataTemplate>
                                 </ListBox.ItemTemplate>
                                 <ListBox.ItemContainerStyle>
                                     <Style TargetType="ListBoxItem">
                                         <Setter Property="Padding" Value="4,3" />
+                                        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                                        <Setter Property="IsSelected" Value="{Binding IsChecked, Mode=TwoWay}" />
                                     </Style>
                                 </ListBox.ItemContainerStyle>
                             </ListBox>
@@ -509,7 +536,12 @@
                                 <!-- §3b surface-4: section header with a subtle "(selected schedules only)" hint in subset mode -->
                                 <TextBlock DockPanel.Dock="Top" Margin="0,0,0,3" FontSize="11" FontWeight="SemiBold"
                                            Foreground="{DynamicResource Warn}">
-                                    <Run Text="Skipped" /><Run Text=" (selected schedules only)" FontWeight="Normal"
+                                    <!-- No local Text here: a local value outranks a style trigger in WPF's
+                                         property precedence, so setting Text as an attribute made the
+                                         DataTrigger below dead and the hint showed even when the skip log
+                                         covered the WHOLE workbook. The Setter supplies the default instead
+                                         (same pattern as the toggle label and the status glyphs below). -->
+                                    <Run Text="Skipped" /><Run FontWeight="Normal"
                                          Foreground="{DynamicResource Hint}">
                                         <Run.Style>
                                             <Style TargetType="Run">
@@ -654,6 +686,13 @@
                                     <ItemsControl.ItemTemplate>
                                         <DataTemplate>
                                             <StackPanel Margin="0,1">
+                                                <!-- DEAD-09: the other half of the right-click copy feature's entry point. -->
+                                                <StackPanel.ContextMenu>
+                                                    <ContextMenu>
+                                                        <MenuItem Header="Copy name" Click="CopyScheduleName_Click" />
+                                                        <MenuItem Header="Copy all names" Click="CopyAllScheduleNames_Click" />
+                                                    </ContextMenu>
+                                                </StackPanel.ContextMenu>
                                                 <DockPanel>
                                                     <!-- Disclosure toggle for the dependent subtree (only when there are dependents);
                                                          glyph swaps ▸/▾ via a trigger on IsChecked (no converter needed) -->
@@ -843,7 +882,11 @@
             </TabItem>
             <!-- CLAUDE SKILLS (user request 2026-07-18): a library of reusable Claude workflow .md files.
                  Greyed out while Claude Assist is off — the skills only make sense with a connected session. -->
+            <!-- UI-10: ToolTipService.ShowOnDisabled defaults to False, so this tooltip — the only thing that tells
+                 the user WHY the tab is greyed — was hidden exactly when the tab was disabled, i.e. the only time it
+                 is useful. -->
             <TabItem Header="Claude Skills" IsEnabled="{Binding IsClaudeAssistEnabled}"
+                     ToolTipService.ShowOnDisabled="True"
                      ToolTip="Reusable Claude workflow skills — turn Claude Assist on in Settings to enable">
                 <Border Background="{DynamicResource Surface}" BorderBrush="{DynamicResource Line}" BorderThickness="1" CornerRadius="6" Padding="16" Margin="0,10,0,0">
                     <DockPanel>
@@ -969,6 +1012,12 @@
             </TabItem>
             <TabItem Header="Settings">
                 <Border Background="{DynamicResource Surface}" BorderBrush="{DynamicResource Line}" BorderThickness="1" CornerRadius="6" Padding="16" Margin="0,10,0,0">
+                    <!-- UI-09: a StackPanel gives its children unlimited height and does not scroll, so on a display
+                         where the Hub is clamped shorter than 880 DIP (see StartupCommand.CenterOnRevit) everything
+                         past the bottom edge was clipped and unreachable by any means — including the Bridge port
+                         field, the only UI for changing the port, and the Preferences checkbox. Same treatment the
+                         Import tab already uses for its long lists. -->
+                    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
                     <StackPanel>
                         <DockPanel>
                             <Button DockPanel.Dock="Right" Content="How Claude Code works" Height="28" Padding="12,0"
@@ -1139,11 +1188,25 @@
                             </Expander.Header>
                             <StackPanel Margin="0,8,0,0">
                                 <TextBlock Text="Bridge port" Foreground="{DynamicResource Muted}" FontSize="13" Margin="0,0,0,4" />
+                                <!-- UI-11: this was bound with UpdateSourceTrigger=LostFocus, so merely clicking into
+                                     the field, typing a digit and clicking away restarted the LIVE bridge and rewrote
+                                     the Claude Code registration — no Apply, no confirmation. And the binding had no
+                                     validation: a non-numeric or out-of-range entry failed conversion silently, so the
+                                     box kept the bad text, the property kept its old value, and the user was told
+                                     nothing. Now the box is display-only until Apply, which validates the range and
+                                     confirms before touching a running bridge. -->
                                 <DockPanel>
                                     <TextBlock DockPanel.Dock="Right" Text="Changing the port re-registers Claude Code and restarts the bridge."
                                                Foreground="{DynamicResource Hint}" FontSize="11" VerticalAlignment="Center" Margin="8,0,0,0" TextWrapping="Wrap" />
-                                    <TextBox Text="{Binding BridgePort, UpdateSourceTrigger=LostFocus}" Width="110" HorizontalAlignment="Left" />
+                                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Left">
+                                        <TextBox x:Name="BridgePortBox" Text="{Binding BridgePort, Mode=OneWay}" Width="110" />
+                                        <Button Content="Apply" Width="70" Height="24" Margin="6,0,0,0"
+                                                Click="BridgePortApply_Click"
+                                                ToolTip="Validate and apply the port. Nothing changes until you click this." />
+                                    </StackPanel>
                                 </DockPanel>
+                                <TextBlock x:Name="BridgePortError" Foreground="{DynamicResource LegendRed}" FontSize="11"
+                                           TextWrapping="Wrap" Visibility="Collapsed" Margin="0,4,0,0" />
                             </StackPanel>
                         </Expander>
 
@@ -1154,6 +1217,7 @@
                         <TextBlock Text="A little pick-me-up that occasionally appears after you export or import."
                                    Foreground="{DynamicResource Hint}" FontSize="11" TextWrapping="Wrap" Margin="24,2,0,0" />
                     </StackPanel>
+                    </ScrollViewer>
                 </Border>
             </TabItem>
         </TabControl>

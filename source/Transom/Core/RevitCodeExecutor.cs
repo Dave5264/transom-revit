@@ -30,8 +30,11 @@ namespace Transom.Core;
 ///     write attempt then fails as Revit requires an open transaction — that's the intended guard).
 ///
 ///     TIMEOUT: a CancellationToken with a hard cap is passed to the scripting engine; it cancels cooperatively
-///     between statements / at awaits. A pathological tight CPU loop with no statement boundary can still run to
-///     the cap on the API thread (managed code can't be force-aborted) — documented limit, not a guarantee.
+///     between statements / at awaits. A synchronous loop with no statement boundary (<c>while (true) { }</c>)
+///     never observes the token, so it does NOT stop at the cap — it holds the Revit API thread INDEFINITELY:
+///     the UI freezes, the bridge can serve nothing else, and the only recovery is killing Revit (unsaved work
+///     lost). Managed code on the API thread cannot be force-aborted; this is a hard limit of the design, not
+///     a timeout that eventually wins.
 /// </summary>
 public static class RevitCodeExecutor
 {
@@ -79,7 +82,20 @@ public static class RevitCodeExecutor
             tx.Start();
             var result = Run(code, globals, cts.Token, readOnly: false);
             bool ok = result.TryGetValue("ok", out var okv) && okv is true;
-            if (ok && tx.GetStatus() == TransactionStatus.Started) tx.Commit();
+            if (ok && tx.GetStatus() == TransactionStatus.Started)
+            {
+                // Commit() returns RolledBack without throwing when Revit discards the transaction on an
+                // error-severity failure — an unchecked commit would report the discarded write as success.
+                TransactionStatus st;
+                try { st = tx.Commit(); } catch { st = TransactionStatus.RolledBack; }
+                if (st != TransactionStatus.Committed)
+                    return new Dictionary<string, object?>
+                    {
+                        ["ok"] = false,
+                        ["error"] = "Revit rolled back the transaction at commit — no changes were applied",
+                        ["log"] = globals.LogText,
+                    };
+            }
             else if (tx.GetStatus() == TransactionStatus.Started) tx.RollBack();
             return result;
         }
@@ -162,8 +178,10 @@ public static class RevitCodeExecutor
         }
     }
 
-    /// <summary>Best-effort JSON-friendly description of the snippet's return value (ids, counts, strings).</summary>
-    private static object? Describe(object? value)
+    /// <summary>Best-effort JSON-friendly description of the snippet's return value (ids, counts, strings).
+    /// Depth-bounded: a self-referential collection (<c>l.Add(l)</c>) would otherwise recurse to a
+    /// StackOverflowException, which .NET cannot catch — it would kill Revit with unsaved work.</summary>
+    private static object? Describe(object? value, int depth = 0)
     {
         switch (value)
         {
@@ -175,8 +193,9 @@ public static class RevitCodeExecutor
                 try { return new Dictionary<string, object?> { ["id"] = el.Id.Value, ["name"] = el.Name, ["category"] = el.Category?.Name }; }
                 catch { return new Dictionary<string, object?> { ["id"] = el.Id.Value }; }
             case System.Collections.IEnumerable seq:
+                if (depth >= 8) return "…(nesting too deep)";
                 var items = new List<object?>();
-                foreach (var item in seq) { items.Add(Describe(item)); if (items.Count >= 500) { items.Add("…(truncated)"); break; } }
+                foreach (var item in seq) { items.Add(Describe(item, depth + 1)); if (items.Count >= 500) { items.Add("…(truncated)"); break; } }
                 return items;
             default:
                 try { return value.ToString(); } catch { return value.GetType().Name; }

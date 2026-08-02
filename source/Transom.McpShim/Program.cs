@@ -75,9 +75,10 @@ internal static class Program
             }
             catch (Exception ex)
             {
-                // Never crash on a single bad message.
+                // Never crash on a single bad message — but a request WITH an id must still get a reply,
+                // or the client waits on that id until its own timeout with only a stderr line to go on.
                 Log($"Error handling message: {ex.Message}");
-                response = null;
+                response = ErrorReplyFor(line, ex);
             }
 
             if (response is not null)
@@ -85,6 +86,18 @@ internal static class Program
                 WriteMessage(stdout, response);
             }
         }
+    }
+
+    /// <summary>Best-effort error reply for a message that threw during dispatch: carries the request's
+    /// id when one can still be parsed out of the raw line, else null (a notification gets no reply).</summary>
+    private static JsonNode? ErrorReplyFor(string body, Exception ex)
+    {
+        try
+        {
+            var id = (JsonNode.Parse(body) as JsonObject)?["id"];
+            return id is null ? null : Error(id, -32603, $"Internal error: {ex.Message}");
+        }
+        catch { return null; }
     }
 
     // ----------------------------------------------------------------- framing
@@ -122,7 +135,9 @@ internal static class Program
             return Error(null, -32600, "Invalid Request");
         }
 
-        string? method = obj["method"]?.GetValue<string>();
+        // TryGetValue, not GetValue: a non-string "method" (e.g. a number) must produce the Invalid
+        // Request reply below, not throw past the id-bearing-request-always-answers rule.
+        string? method = obj["method"] is JsonValue mv && mv.TryGetValue<string>(out var methodStr) ? methodStr : null;
         JsonNode? id = obj["id"];
         bool isNotification = id is null;
 
@@ -305,7 +320,7 @@ internal static class Program
 
     private static JsonObject HandleToolsCall(JsonObject? prms)
     {
-        string? name = prms?["name"]?.GetValue<string>();
+        string? name = prms?["name"] is JsonValue nv && nv.TryGetValue<string>(out var nameStr) ? nameStr : null;
         if (string.IsNullOrEmpty(name))
         {
             return ToolError("tools/call is missing the 'name' parameter.");

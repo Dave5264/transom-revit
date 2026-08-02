@@ -6,8 +6,10 @@ namespace Transom.Core;
 ///     Entry point to the spreadsheet/document engine (Transom.Office.dll), loaded into a dedicated
 ///     AssemblyLoadContext so the NPOI closure (NPOI, SharpZipLib, BouncyCastle, MathNet, ImageSharp, …)
 ///     binds privately and can never clash with another add-in's copy in Revit's shared default context —
-///     the same isolation pattern as <see cref="ScriptIsolation"/>/Roslyn. See
-///     docs/design-notes/dependency-isolation-brief.md for the survey and rules.
+///     the same isolation pattern as <see cref="ScriptIsolation"/>/Roslyn. The rule that keeps it working is
+///     stated on <see cref="IOfficeEngine"/> and in Transom.Scripting.csproj's header: those two projects are
+///     the ONLY ones allowed to reference their respective closures, and no closure type may cross the
+///     boundary in a signature.
 ///     Transom.Office compiles against Transom.dll, but at run time the context delegates Transom*/RevitAPI*/
 ///     framework binds back to the default context, so <see cref="IOfficeEngine"/> and the DTOs keep a single
 ///     type identity across the boundary — the cast below is safe and calls are ordinary interface dispatch.

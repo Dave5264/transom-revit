@@ -41,10 +41,12 @@ it deadlocks/no-ops. A separate process clicks while Revit's pump is free, so th
 ## How it ships (part of Transom)
 
 Both exes are published self-contained and bundled next to `Transom.dll`
-(`build/Modules/PublishClickHelperModule.cs`). In Revit, the **"Claude UI Assist"** ribbon button
-(`UiAssistSetupCommand`) does a one-time install to `%LocalAppData%\Transom\mcp\` and merges a
-`transom-ui-assist` entry into the user's Claude configs (`ClickHelperRegistration`, admin-free,
-idempotent). It **never auto-runs**, so Transom stays standalone for users without Claude.
+(`build/Modules/PublishClickHelperModule.cs`). In Revit, turning **Claude Assist** on (Schedule Hub →
+Settings tab) does a one-time install to `%LocalAppData%\Transom\mcp\` and merges a
+`transom-ui-assist` entry into the user's Claude configs (`ClickHelperRegistration` via
+`ClaudeSetup.EnsureAll`, admin-free, idempotent). It **never auto-runs**, so Transom stays standalone for
+users without Claude. (The **"Claude UI Assist"** ribbon button and its `UiAssistSetupCommand` were deleted
+in the v1.7.0 Claude-UI consolidation — `grep UiAssistSetupCommand source/` returns nothing.)
 
 ## MCP tools
 
@@ -63,7 +65,7 @@ idempotent). It **never auto-runs**, so Transom stays standalone for users witho
 | `revit_screenshot` | `screen?`, `pid?` | `screenshot` — returns an MCP **image** |
 
 The MCP `initialize` reply ships a condensed **operating manual** (the `instructions` field) so Claude
-uses the field-tested techniques. The full detail is in [`LEARNING_LOG.md`](LEARNING_LOG.md). Key rules:
+uses the field-tested techniques. These are the rules that survived contact with the real Revit UI:
 
 - **Tile first.** Keyboard/clicks go to the visible foreground window.
 - **The Revit API is dead inside Edit Group mode** — select/read/write via the API only before/after.

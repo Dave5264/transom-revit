@@ -11,7 +11,7 @@ Model Context Protocol on stdin/stdout and HTTP to `127.0.0.1`.
 
 ```
 Claude Desktop / Code
-   |  MCP (stdio, JSON-RPC 2.0, Content-Length framed)
+   |  MCP (stdio, JSON-RPC 2.0, newline-delimited — NOT Content-Length framed; see v1.4.7)
    v
 Transom.McpShim   (this self-contained exe)
    |  HTTP POST 127.0.0.1:<port>/call   {"tool":name,"args":{...}}
@@ -26,6 +26,8 @@ text content item. `isError` is set when the bridge replies with `"ok": false`
 
 ### Tools advertised
 
+These five are declared inline in `Program.cs` — the **schedule** surface this shim was built for:
+
 | tool             | args                                                              |
 |------------------|------------------------------------------------------------------|
 | `status`         | (none)                                                            |
@@ -33,6 +35,14 @@ text content item. `isError` is set when the bridge replies with `"ok": false`
 | `read_schedule`  | `{ id?: number, name?: string }`                                  |
 | `set_parameter`  | `{ uniqueId, parameterId?, fieldName?, value, binding? }`         |
 | `set_parameters` | `{ edits: [ { uniqueId, parameterId?, fieldName?, value, binding? } ] }` |
+
+They are **not the whole list**. `ParityTools.AddTo` appends the ported parity surface — element
+query/filter/modify, transforms, views, sheets, levels, rooms, dimensions, tagging, materials,
+colour splash and more — so `tools/list` returns roughly forty entries, not five. `ParityTools.Disabled`
+gates a few off (`check_clashes`, `load_family`, `place_family`, `list_families`, `export_document`,
+`export_ifc`, `save_document`); the bridge refuses those independently, so a stale shim can't reach them.
+`ParityTools.cs` is the authoritative list — read it rather than extending this table, which will
+drift again.
 
 The actual Revit work (binding resolution, group-aware writes, read-only
 refusal, verify/rollback) lives in the in-Revit bridge (F2); this shim is a
@@ -60,8 +70,9 @@ You normally don't launch it by hand; the MCP client spawns it (see below).
 
 Add a `transom` server entry to the **user-level** MCP config (no admin). For
 Claude Desktop that is `%APPDATA%\Claude\claude_desktop_config.json`; Claude
-Code uses its own user config. The installer wiring / idempotent merge is
-feature **F4** (`install/MCP_CONFIG_MERGE.md`).
+Code uses its own user config. The installer wiring / idempotent merge is feature **F4**, implemented in
+`source/Transom/Core/McpRegistration.cs` — one-time `.transom.bak` backup, `.tmp` write + atomic
+`File.Replace`, and a hard refusal to touch a config that doesn't parse.
 
 ```jsonc
 {

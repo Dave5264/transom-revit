@@ -29,7 +29,7 @@
         <TextBlock x:Name="HeadingText" FontSize="14" FontWeight="Medium" Foreground="{DynamicResource Text}" TextWrapping="Wrap" />
         <TextBlock x:Name="SubText" Foreground="{DynamicResource Muted}" FontSize="12" TextWrapping="Wrap" Margin="0,6,0,12" />
 
-        <Border Background="{DynamicResource Surface}" BorderBrush="{DynamicResource Line}" BorderThickness="1" CornerRadius="6" Padding="12">
+        <Border x:Name="OptionsBorder" Background="{DynamicResource Surface}" BorderBrush="{DynamicResource Line}" BorderThickness="1" CornerRadius="6" Padding="12">
             <StackPanel x:Name="OptionsPanel" />
         </Border>
 
@@ -37,7 +37,7 @@
 
         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">
             <Button Content="Cancel import" Height="32" Padding="12,0" Margin="0,0,8,0" Click="Cancel_Click" />
-            <Button Content="Apply choice" Height="32" Padding="18,0" Background="{DynamicResource Accent}" Foreground="White"
+            <Button x:Name="ApplyButton" Content="Apply choice" Height="32" Padding="18,0" Background="{DynamicResource Accent}" Foreground="White"
                     BorderThickness="0" Click="Apply_Click" />
         </StackPanel>
     </StackPanel>
