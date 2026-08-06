@@ -119,8 +119,9 @@ screen.
 Point it at a folder and **Scan Folder**, or drag images and folders straight onto the list. Tick the ones you
 want and the estimate follows your ticks. `.png`, `.jpg`, `.jpeg` and `.webp` go in; `<name>_enhanced.png`
 comes out. AIRE skips its own outputs, so re-scanning a folder you have already enhanced won't enhance — or
-re-bill — them a second time. Pick the model (`gpt-image-2` through `gpt-image-1-mini`), the resolution (up to
-**3840×2160** on gpt-image-2) and the quality; the default prompt is written for architectural renders and is
+re-bill — them a second time. It runs on **`gpt-image-2`** by default, at 3840×2160 and high quality;
+`gpt-image-1.5`, `gpt-image-1` and `gpt-image-1-mini` are selectable too, but only gpt-image-2 offers the 4K
+and 2K tiers — the rest top out at 1536×1024. The default prompt is written for architectural renders and is
 yours to edit.
 
 **Nothing is spent without a confirmation.** Before a batch starts, AIRE shows the image count, model,
