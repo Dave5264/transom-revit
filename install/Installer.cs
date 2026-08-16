@@ -67,6 +67,53 @@ AssertEngineHarvested(args[1..]);
 
 project.RemoveDialogsBetween(NativeDialogs.WelcomeDlg, NativeDialogs.CustomizeDlg);
 
+// AIRE STANDALONE — an optional, per-user Start Menu shortcut to the AI Render Enhancer running in its own
+// process, so renders can be enhanced with Revit closed. It rides the existing WixUI_FeatureTree: a Feature
+// shows up in CustomizeDlg as a checkbox with this Description in the pane beside it, and ConfigurableDir
+// lights up that dialog's Browse button so the install location can be changed or simply clicked past —
+// the same treatment the per-Revit-year add-in folders already get.
+// SingleUser MSI ONLY, for the same reason as the shim custom action: %LocalAppDataFolder% and the per-user
+// Start Menu resolve to the INSTALLING user, and a per-machine MSI runs as SYSTEM, where both would be wrong.
+const string aireAppPublish = @"source\Transom.Aire.App\bin\Release\net8.0-windows\win-x64\publish";
+AssertAireAppPublished();
+
+var aireFeature = new Feature
+{
+    Name = "AIRE standalone app",
+    Description =
+        "AIRE (AI Render Enhancer) batch-improves architectural renders — grass, planting, lighting, "
+        + "concrete — through OpenAI's image API, keeping your camera angle and geometry. It is always "
+        + "available on Revit's Transom ribbon; tick this to ALSO get a Start Menu shortcut that runs it "
+        + "on its own, so you can enhance renders without opening Revit. "
+        + "Needs your own OpenAI API key, and every batch spends real credit — AIRE shows an estimate and "
+        + "asks before it starts. About 0.4 MB.",
+    Display = FeatureDisplay.expand,
+    ConfigurableDir = "AIREDIR"
+};
+
+// The payload lives in ONE per-user location rather than inside each Revit-year add-in folder: three copies
+// would otherwise be installed, and the shortcut would point at whichever year's folder happened to be
+// chosen — breaking if that Revit version were later removed.
+Dir[] AireDirs() =>
+[
+    new Dir(new Id("AIREDIR"), @"%LocalAppDataFolder%\Transom\aire",
+        new Files(aireFeature, $@"{aireAppPublish}\*.*", f => !f.EndsWith(".pdb"))),
+    new Dir(@"%ProgramMenuFolder%\Transom",
+        new ExeFileShortcut(aireFeature, "AIRE — AI Render Enhancer", "[AIREDIR]Transom.Aire.App.exe", ""))
+];
+
+// Same spirit as AssertEngineHarvested: a feature that is advertised in the UI but whose files were never
+// published would install a shortcut to nothing. Fail the pack instead.
+void AssertAireAppPublished()
+{
+    var exe = System.IO.Path.Combine(aireAppPublish, "Transom.Aire.App.exe");
+    if (!System.IO.File.Exists(exe))
+        throw new Exception(
+            $"AIRE standalone app MISSING from the payload: '{exe}' was not found. Publish it first —\n" +
+            "  dotnet publish source/Transom.Aire.App/Transom.Aire.App.csproj -c Release -r win-x64 --self-contained false\n" +
+            "Refusing to ship an installer that offers an AIRE shortcut pointing at nothing.");
+}
+
 // #105 (seamless MCP, MUST-FIX): a DEFERRED, IMPERSONATED managed custom action that copies the shim trio from the
 // install dir into %LocalAppData%\Transom\mcp\ at install time (see ShimRefresh) — so the Claude client launches the
 // CURRENT shim WITHOUT needing Revit opened first (protocol-skew hazard otherwise). SingleUser (per-user) ONLY: that
@@ -139,7 +186,8 @@ void BuildSingleUserMsi()
     project.OutFileName = $"{outputName}-{versioning.Version}-SingleUser";
     project.Dirs =
     [
-        new InstallDir(@"%AppDataFolder%\Autodesk\Revit\Addins\", wixEntities)
+        new InstallDir(@"%AppDataFolder%\Autodesk\Revit\Addins\", wixEntities),
+        ..AireDirs() // optional AIRE standalone shortcut — per-user MSI only (see above)
     ];
     project.Actions = [refreshShim]; // #105: install-time %LocalAppData% shim refresh — per-user MSI only
     project.BuildMsi();
