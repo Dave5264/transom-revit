@@ -202,6 +202,88 @@ public static class AireJobManager
     private static readonly object Gate = new();
     private static readonly List<AireJob> Jobs = new();
 
+    /// <summary>
+    ///     Cross-process spend guard. <see cref="Gate"/> only stops the AIRE window and the Claude bridge
+    ///     from double-starting inside ONE process; it says nothing about a second process. Once AIRE can be
+    ///     launched standalone, Revit's copy and the standalone app are two processes that would each think
+    ///     they were the only one — and each start a batch against the same paid account.
+    ///     <para>
+    ///     A lock FILE, not a named mutex or semaphore: the OS drops the handle when a process dies, so a
+    ///     killed Revit cannot leave AIRE permanently wedged. A <see cref="System.Threading.Mutex"/> is also
+    ///     thread-affine (release must happen on the acquiring thread), which an async run loop that hops
+    ///     thread-pool threads cannot honour.
+    ///     </para>
+    /// </summary>
+    private static FileStream? _spendLock;
+
+    private static string SpendLockPath => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Transom", "aire.job.lock");
+
+    /// <summary>
+    ///     Takes the cross-process lock. Returns false only when another process demonstrably holds it —
+    ///     any other failure (odd profile, permissions) returns true, because refusing to spend is the
+    ///     caller's decision to make and a guard file must never become the reason a batch can't run.
+    /// </summary>
+    private static bool TryAcquireSpendLock(out string holder)
+    {
+        holder = "";
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(SpendLockPath)!);
+            // Read so a blocked process can still see who holds it; Delete because DeleteOnClose leaves the
+            // file delete-pending, and Windows then refuses ANY later open whose share mode omits
+            // FILE_SHARE_DELETE — without it the "who holds it?" read below always fails. Withholding
+            // Write is what actually does the excluding.
+            _spendLock = new FileStream(SpendLockPath, FileMode.Create, FileAccess.ReadWrite,
+                FileShare.Read | FileShare.Delete, 1, FileOptions.DeleteOnClose);
+            var stamp = Encoding.UTF8.GetBytes(
+                $"{CurrentProcessLabel()} since {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
+            _spendLock.Write(stamp, 0, stamp.Length);
+            _spendLock.Flush();
+            return true;
+        }
+        catch (IOException)
+        {
+            holder = ReadSpendLockHolder();
+            return false;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            holder = ReadSpendLockHolder();
+            return false;
+        }
+        catch
+        {
+            _spendLock = null;
+            return true;
+        }
+    }
+
+    private static string CurrentProcessLabel()
+    {
+        try { return $"{Process.GetCurrentProcess().ProcessName} (pid {Environment.ProcessId})"; }
+        catch { return $"pid {Environment.ProcessId}"; }
+    }
+
+    private static string ReadSpendLockHolder()
+    {
+        try
+        {
+            using var fs = new FileStream(SpendLockPath, FileMode.Open, FileAccess.Read,
+                FileShare.ReadWrite | FileShare.Delete);
+            using var reader = new StreamReader(fs, Encoding.UTF8);
+            var text = reader.ReadToEnd().Trim();
+            return text.Length > 0 ? text : "another Transom process on this machine";
+        }
+        catch { return "another Transom process on this machine"; }
+    }
+
+    private static void ReleaseSpendLock()
+    {
+        try { _spendLock?.Dispose(); } catch { /* the handle dies with the process anyway */ }
+        _spendLock = null;
+    }
+
     /// <summary>The most recently started job, or null.</summary>
     public static AireJob? Latest { get { lock (Gate) return Jobs.LastOrDefault(); } }
 
@@ -223,9 +305,27 @@ public static class AireJobManager
                 return null;
             }
 
+            if (!TryAcquireSpendLock(out var holder))
+            {
+                error = $"An AIRE job is already running — {holder}. "
+                        + "Wait for it to finish, or cancel it there first.";
+                return null;
+            }
+
             var job = new AireJob(inputFiles, outputFolder, prompt, model, size, quality);
             Jobs.Add(job);
             if (Jobs.Count > 16) Jobs.RemoveAt(0); // keep memory bounded; old finished jobs age out
+
+            // Hand the lock back the moment the run ends, however it ends. Attached BEFORE Start so a job
+            // that fails instantly still releases.
+            void ReleaseWhenFinished(AireJob finished)
+            {
+                if (!finished.IsFinished) return;
+                finished.Progress -= ReleaseWhenFinished;
+                lock (Gate) ReleaseSpendLock();
+            }
+            job.Progress += ReleaseWhenFinished;
+
             job.Start(apiKey);
             error = "";
             return job;
