@@ -10,7 +10,8 @@
 </pre></td></tr></table>
 
 
-**Edit Revit schedules anywhere and import them back safely — and drive the live model from Claude Code.**
+**Edit Revit schedules anywhere and import them back safely, drive the live model from Claude Code, and
+enhance your renders with AI.**
 
 [![Latest release](https://img.shields.io/github/v/release/Dave5264/transom-revit?label=latest%20release&color=2ea44f&logo=github)](https://github.com/Dave5264/transom-revit/releases/latest)
 
@@ -22,13 +23,15 @@ Double-click the `.msi`, then start Revit. Supports **Revit 2025, 2026 & 2027**.
 </div>
 
 Transom is an Autodesk Revit add-in that facilitates **schedule editing** and provides **integration with
-Claude Code**. Most project schedules can be exported, edited anywhere, and imported back into the model
-safely — and the export **color-codes every cell by what can actually be written back**, so you know before
-you type. The awkward Revit cases are handled rather than excluded: type parameters, group headers,
-non-itemized rows, and parameters on elements inside model groups each have a defined path back.
+Claude Code**, alongside an **AI render enhancer**. Most project schedules can be exported, edited anywhere,
+and imported back into the model safely — and the export **color-codes every cell by what can actually be
+written back**, so you know before you type. The awkward Revit cases are handled rather than excluded: type
+parameters, group headers, non-itemized rows, and parameters on elements inside model groups each have a
+defined path back.
 
-Both halves stand alone — the round-trip needs no Claude client, and the Claude layer works on any part of the
-model, schedules or not. Neither needs administrator rights.
+Each part stands alone — the round-trip needs no Claude client, the Claude layer works on any part of the
+model whether schedules are involved or not, and the render enhancer works on image files with nothing open
+at all. None of them needs administrator rights.
 
 ### Schedules — export, edit anywhere, import back
 
@@ -105,6 +108,51 @@ can run in a fresh project while you watch. The supported client is **Claude Cod
 VM that can't reach a host-side bridge), and it should run with bypass permissions on — otherwise its
 permission prompts steal focus from Revit and UI-assist clicks silently miss.
 
+### AI render enhancement — AIRE
+
+**AI Render Enhancer** has its own ribbon button and batch-enhances architectural renders through OpenAI's
+image models — photoreal grass, planting, lighting and concrete texture, with the camera angle, perspective,
+geometry, mullions, trim lines and overall composition held exactly as Revit produced them. It works on image
+**files**, not on the model, so it needs no open project and the button stays live even on Revit's Home
+screen.
+
+Point it at a folder and **Scan Folder**, or drag images and folders straight onto the list. Tick the ones you
+want and the estimate follows your ticks. `.png`, `.jpg`, `.jpeg` and `.webp` go in; `<name>_enhanced.png`
+comes out. AIRE skips its own outputs, so re-scanning a folder you have already enhanced won't enhance — or
+re-bill — them a second time. It runs on **`gpt-image-2`** by default, at 3840×2160 and high quality;
+`gpt-image-1.5`, `gpt-image-1` and `gpt-image-1-mini` are selectable too, but only gpt-image-2 offers the 4K
+and 2K tiers — the rest top out at 1536×1024. The default prompt is written for architectural renders and is
+yours to edit.
+
+**Nothing is spent without a confirmation.** Before a batch starts, AIRE shows the image count, model,
+resolution, quality and an estimated cost, and waits for a yes. Every batch writes
+`logs\enhancement_log_<timestamp>.csv` beside the outputs — one row per image with its input resolution, the
+settings used, status, elapsed time, estimated cost and any error message. Treat the figure as what it is: a
+token-based approximation for deciding whether to press go, not a bill. OpenAI's usage page is the authority,
+and an **Open OpenAI Billing** button goes straight there.
+
+Bring your own **OpenAI API key** — a built-in walkthrough covers creating one. It is encrypted per Windows
+user (DPAPI) in `%AppData%\Transom\aire.json`, never written in plain text, and goes nowhere but
+`api.openai.com`.
+
+Claude can drive AIRE over the same bridge: `aire_enhance` starts a batch and returns a job id plus the cost
+estimate immediately, `aire_job_status` polls progress, and `aire_cancel_job` stops a run — which is currently
+the **only** way to cancel one, as the window itself has no cancel button. The key is deliberately *not* a
+tool argument; the bridge reads it from your encrypted store, so it never passes through Claude, the shim or
+the socket. One batch runs at a time no matter which way it was started, so the window and Claude can't spend
+twice at once, and a batch Claude started reports its progress in the window as soon as you open it.
+
+<!-- Screenshot placeholder. Capture the AIRE window (queue populated, cost estimate visible) to
+     docs/images/aire.jpg and uncomment:
+<table>
+<tr><td><img src="docs/images/aire.jpg" alt="Transom AI Render Enhancer window: input and output folder pickers, OpenAI API key field, prompt box, model/resolution/quality selectors, a checkable queue of render images with their resolutions, the estimated cost for the checked images, and a progress bar" width="100%"></td></tr>
+<tr><td><em><b>AI Render Enhancer</b> — the queue, the settings that drive cost, and the estimate for exactly what you have ticked.</em></td></tr>
+</table>
+-->
+
+*AIRE is far newer than the schedule round-trip and has had much less mileage. Treat early batches as a
+trial, and check the first cost estimates against your real OpenAI usage.*
+
 > **Status:** v1.9.10 (Revit 2025/2026/2027) — two deployment/robustness fixes on top of v1.9.9. The bundled
 > helper executables are now refreshed on every Revit start **even while Claude Code holds them open** (they
 > are running processes, so the old plain-overwrite silently failed and left you on the previous build's
@@ -114,12 +162,8 @@ permission prompts steal focus from Revit and UI-assist clicks silently miss.
 > the image may already have been generated and billed.
 >
 > v1.9.9 was a **correctness and honesty release** from a full line-by-line
-> audit of the codebase, plus a new tool: **AI Render Enhancer (AIRE)** batch-enhances architectural renders
-> through OpenAI's image models, with model/resolution/quality control, an estimated cost you confirm before
-> anything is spent, and a CSV log per batch. It needs your own OpenAI API key (there is a built-in
-> walkthrough for creating one; the key is DPAPI-encrypted per user and goes nowhere but OpenAI), works on
-> image files with or without a model open, and Claude can drive it over the bridge. AIRE is new in this
-> release and has had far less mileage than the schedule round-trip — treat the first batches as a trial.
+> audit of the codebase, plus a new tool — the [**AI Render Enhancer**](#ai-render-enhancement--aire)
+> described above.
 > The most important v1.9.9 audit fixes: a multi-row schedule split by a hidden group field (a window
 > schedule grouped by Level, say) could write your edits to a *different* row's instances when the level names
 > sorted "1, 10, 2" — that ordering is now numeric, direction-aware, and refuses to guess rather than writing to
@@ -202,6 +246,7 @@ installer that silently omits a whole Revit version.
 | Path | Description |
 |------|-------------|
 | `source/Transom/` | the add-in (commands, views, view-models, core logic) |
+| `source/Transom/Core/Aire/` | the AIRE engine, batch runner and encrypted settings (Revit-free — files + HTTPS) |
 | `build/`, `install/` | ModularPipelines build + WiX installer |
 | `branding/` | ribbon icon + generator |
 | `docs/` | `design-notes/` (legend copy source of truth + Revit-API research notes), `parity-tool-status.md` (bridge-tool review state), `images/` (screenshots on this page) |
