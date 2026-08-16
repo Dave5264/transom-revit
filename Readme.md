@@ -125,7 +125,9 @@ and 2K tiers — the rest top out at 1536×1024. The default prompt is written f
 yours to edit.
 
 **Nothing is spent without a confirmation.** Before a batch starts, AIRE shows the image count, model,
-resolution, quality and an estimated cost, and waits for a yes. Every batch writes
+resolution, quality and an estimated cost, and waits for a yes. **Cancel Batch** stops a run already under
+way — the image being generated at that moment may still complete and be billed, but nothing after it is
+attempted, and the log still covers everything done up to that point. Every batch writes
 `logs\enhancement_log_<timestamp>.csv` beside the outputs — one row per image with its input resolution, the
 settings used, status, elapsed time, estimated cost and any error message. Treat the figure as what it is: a
 token-based approximation for deciding whether to press go, not a bill. OpenAI's usage page is the authority,
@@ -136,11 +138,11 @@ user (DPAPI) in `%AppData%\Transom\aire.json`, never written in plain text, and 
 `api.openai.com`.
 
 Claude can drive AIRE over the same bridge: `aire_enhance` starts a batch and returns a job id plus the cost
-estimate immediately, `aire_job_status` polls progress, and `aire_cancel_job` stops a run — which is currently
-the **only** way to cancel one, as the window itself has no cancel button. The key is deliberately *not* a
-tool argument; the bridge reads it from your encrypted store, so it never passes through Claude, the shim or
-the socket. One batch runs at a time no matter which way it was started, so the window and Claude can't spend
-twice at once, and a batch Claude started reports its progress in the window as soon as you open it.
+estimate immediately, `aire_job_status` polls progress, and `aire_cancel_job` stops a run — the same thing the
+window's **Cancel Batch** button does. The key is deliberately *not* a tool argument; the bridge reads it from
+your encrypted store, so it never passes through Claude, the shim or the socket. One batch runs at a time no
+matter which way it was started, so the window and Claude can't spend twice at once, and a batch Claude
+started reports its progress in the window as soon as you open it.
 
 <!-- Screenshot placeholder. Capture the AIRE window (queue populated, cost estimate visible) to
      docs/images/aire.jpg and uncomment:

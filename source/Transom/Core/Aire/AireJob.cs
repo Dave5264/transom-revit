@@ -75,6 +75,9 @@ public sealed class AireJob
 
     public void Cancel() => _cts.Cancel();
 
+    /// <summary>True once a cancel has been requested — the run may still be finishing its current image.</summary>
+    public bool CancelRequested => _cts.IsCancellationRequested;
+
     /// <summary>Starts the run on the thread pool. The api key stays inside the closure — never on job state.</summary>
     internal Task Start(string apiKey) => Task.Run(() => RunAsync(apiKey));
 
@@ -95,7 +98,10 @@ public sealed class AireJob
 
             for (int i = 0; i < InputFiles.Count; i++)
             {
-                _cts.Token.ThrowIfCancellationRequested();
+                // Break, don't throw: an exception here escapes to the outer catch and skips WriteCsv,
+                // losing the log for images already generated and billed. Cancelling before the first
+                // image hit that path every time — rare from the bridge, easy to hit with a Cancel button.
+                if (_cts.Token.IsCancellationRequested) break;
                 var inputPath = InputFiles[i];
                 CurrentFile = Path.GetFileName(inputPath);
                 Notify();

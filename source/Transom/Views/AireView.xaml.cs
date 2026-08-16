@@ -25,6 +25,9 @@ public sealed partial class AireView
     private readonly ObservableCollection<AireQueueItem> _queue = new();
     private AireJob? _job;
 
+    /// <summary>Set when Cancel is pressed, so progress text stops claiming the batch is still processing.</summary>
+    private bool _cancelRequested;
+
     public AireView()
     {
         InitializeComponent();
@@ -52,6 +55,7 @@ public sealed partial class AireView
         ApiKeyHelpOpenButton.Click += (_, _) => OpenUrl(AireEngine.OpenAiApiKeysUrl);
         ScanButton.Click += (_, _) => ScanInputFolder();
         ProcessButton.Click += (_, _) => ProcessChecked();
+        CancelButton.Click += (_, _) => CancelBatch();
         RemoveButton.Click += (_, _) => RemoveChecked();
         ClearButton.Click += (_, _) => ClearList();
         OpenOutputButton.Click += (_, _) => OpenOutputFolder();
@@ -286,10 +290,27 @@ public sealed partial class AireView
         Attach(job);
     }
 
+    /// <summary>
+    ///     Requests cancellation of the running batch. The run loop stops before the next image; the one
+    ///     already in flight is abandoned locally but may still be generated — and billed — by OpenAI, so
+    ///     say so rather than implying the spend stops dead.
+    /// </summary>
+    private void CancelBatch()
+    {
+        var job = _job;
+        if (job == null || job.IsFinished) return;
+        _cancelRequested = true;
+        CancelButton.IsEnabled = false; // one press is enough; the run loop does the rest
+        ProgressLabel.Text = "Cancelling — the image already generating may still finish (and be billed)...";
+        job.Cancel();
+    }
+
     /// <summary>Subscribes the window to a job (freshly started here, or one already running via the bridge).</summary>
     private void Attach(AireJob job)
     {
         _job = job;
+        // A bridge-started job may already have been cancelled by Claude before this window attached.
+        _cancelRequested = job.CancelRequested;
         SetBusy(true);
         RenderJobState(job);
         job.Progress += OnJobProgress;
@@ -312,8 +333,10 @@ public sealed partial class AireView
     private void RenderJobState(AireJob job)
     {
         JobProgressBar.Value = job.Total == 0 ? 0 : job.Done * 100.0 / job.Total;
-        if (!job.IsFinished)
-            ProgressLabel.Text = job.CurrentFile.Length > 0
+        if (job.IsFinished) return;
+        ProgressLabel.Text = _cancelRequested || job.CancelRequested
+            ? "Cancelling — the image already generating may still finish (and be billed)..."
+            : job.CurrentFile.Length > 0
                 ? $"Processing {Math.Min(job.Done + 1, job.Total)}/{job.Total}: {job.CurrentFile}"
                 : "Starting...";
     }
@@ -324,6 +347,8 @@ public sealed partial class AireView
         ProcessButton.IsEnabled = !busy;
         RemoveButton.IsEnabled = !busy;
         ClearButton.IsEnabled = !busy;
+        // Cancel is the one control that is live only DURING a batch, and only until it has been pressed.
+        CancelButton.IsEnabled = busy && !_cancelRequested;
     }
 
     private void ShowSummary(AireJob job)
@@ -335,12 +360,19 @@ public sealed partial class AireView
                 MessageBoxButton.OK, MessageBoxImage.Error);
             return;
         }
-        var message = $"Batch complete.\n\nSuccess: {job.SuccessCount}\nFailed: {job.FailureCount}"
+        // A cancelled batch still reaches "completed" (it stops cleanly and writes its log), so report it
+        // as cancelled rather than complete — and account for the images that were never attempted.
+        var cancelled = job.CancelRequested;
+        var notAttempted = Math.Max(0, job.Total - job.Done);
+        var message = (cancelled ? "Batch cancelled." : "Batch complete.")
+                      + $"\n\nSuccess: {job.SuccessCount}\nFailed: {job.FailureCount}"
+                      + (cancelled && notAttempted > 0 ? $"\nNot attempted: {notAttempted}" : "")
                       + $"\nTotal time: {AireEngine.SecondsToText(job.TotalTimeSeconds)}"
                       + $"\nEstimated successful cost: ${job.EstimatedCostUsd:0.0000}"
                       + $"\n\nLog saved to:\n{job.LogFile}";
         ProgressLabel.Text = message;
-        MessageBox.Show(this, message, "Batch complete", MessageBoxButton.OK, MessageBoxImage.Information);
+        MessageBox.Show(this, message, cancelled ? "Batch cancelled" : "Batch complete",
+            MessageBoxButton.OK, MessageBoxImage.Information);
     }
 
     // ---- theming -------------------------------------------------------------
