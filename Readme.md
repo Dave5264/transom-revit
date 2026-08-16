@@ -15,7 +15,7 @@ enhance your renders with AI.**
 
 [![Latest release](https://img.shields.io/github/v/release/Dave5264/transom-revit?label=latest%20release&color=2ea44f&logo=github)](https://github.com/Dave5264/transom-revit/releases/latest)
 
-### ⬇ [Download the installer](https://github.com/Dave5264/transom-revit/releases/download/v1.9.11/Transom-1.9.11-SingleUser.msi)
+### ⬇ [Download the installer](https://github.com/Dave5264/transom-revit/releases/download/v1.9.12/Transom-1.9.12-SingleUser.msi)
 
 **One click, no admin rights** — installs into your per-user Revit add-ins folder.
 Double-click the `.msi`, then start Revit. Supports **Revit 2025, 2026 & 2027**. Free.
@@ -144,6 +144,13 @@ your encrypted store, so it never passes through Claude, the shim or the socket.
 matter which way it was started, so the window and Claude can't spend twice at once, and a batch Claude
 started reports its progress in the window as soon as you open it.
 
+**AIRE also runs without Revit.** It only ever touches image files and the OpenAI API, so the installer
+offers an optional Start Menu shortcut that opens the same window on its own — enhance a folder of renders
+without waiting for Revit and a model to load. Tick **AIRE standalone app** when installing; it goes to
+`%LocalAppData%\Transom\aire` by default and the installer's Browse button will put it elsewhere. It shares
+one settings file and one encrypted key with the ribbon version, so it is the same AIRE either way, and only
+one batch can run at a time across both.
+
 <table>
 <tr><td><img src="docs/images/aire.jpg" alt="Transom AI Render Enhancer window: input and output folder pickers, OpenAI API key field, prompt box, model/resolution/quality selectors, a checkable queue of render images with their resolutions, the estimated cost for the checked images, and a progress bar" width="100%"></td></tr>
 <tr><td><em><b>AI Render Enhancer</b> — the queue, the settings that drive cost, and the estimate for exactly what you have ticked.</em></td></tr>
@@ -152,7 +159,16 @@ started reports its progress in the window as soon as you open it.
 *AIRE is far newer than the schedule round-trip and has had much less mileage. Treat early batches as a
 trial, and check the first cost estimates against your real OpenAI usage.*
 
-> **Status:** v1.9.11 (Revit 2025/2026/2027) — AIRE gains a **Cancel Batch** button. Until now the only way
+> **Status:** v1.9.12 (Revit 2025/2026/2027) — **AIRE without Revit.** The installer now offers an optional
+> Start Menu shortcut that runs the AI Render Enhancer as its own app, so a folder of renders can be enhanced
+> without opening Revit at all. Same window, same settings, same encrypted key as the ribbon version; a second
+> launch brings the existing window forward rather than opening AIRE twice.
+>
+> Making that safe also closed a real hole that predates it: AIRE's "one batch at a time" guard only ever
+> applied *within one process*, so two Transom processes — Revit 2025 and 2026 open together, say — could each
+> start a batch against the same paid OpenAI account. That guard now holds across processes.
+>
+> v1.9.11 gave AIRE a **Cancel Batch** button. Until then the only way
 > to stop a running batch was to ask Claude (`aire_cancel_job`); the window itself had no way out. Stopping a
 > run also used to throw away the CSV log for the images it had already generated *and billed for*, and report
 > the batch as failed — cancelling before the first image did that every single time. A cancelled batch now
