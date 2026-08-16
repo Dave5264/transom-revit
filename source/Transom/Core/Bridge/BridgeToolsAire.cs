@@ -129,6 +129,9 @@ public static partial class BridgeTools
             ["ok"] = true,
             ["job_id"] = job.Id,
             ["status"] = job.Status,
+            // A cancelled batch still ends as "completed" (it stops cleanly and writes its log), so the
+            // caller needs this to tell "ran to the end" from "stopped early".
+            ["cancelled"] = job.CancelRequested,
             ["done"] = job.Done,
             ["total"] = job.Total,
             ["current_file"] = job.CurrentFile,

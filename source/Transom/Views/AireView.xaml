@@ -566,7 +566,16 @@
 
                 <Border Grid.Row="2" Style="{StaticResource Card}">
                     <StackPanel>
-                        <TextBlock Style="{StaticResource SectionTitle}" Text="Processing Status" Margin="0,0,0,8"/>
+                        <Grid Margin="0,0,0,8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Style="{StaticResource SectionTitle}"
+                                       Text="Processing Status" VerticalAlignment="Center"/>
+                            <Button Grid.Column="1" x:Name="CancelButton" Style="{StaticResource DangerButton}"
+                                    Content="Cancel Batch" IsEnabled="False"/>
+                        </Grid>
                         <ProgressBar x:Name="JobProgressBar" Style="{StaticResource AireProgress}" Minimum="0" Maximum="100"/>
                         <TextBlock x:Name="ProgressLabel" Style="{StaticResource SmallMuted}" Margin="0,8,0,0"
                                    Text="Ready." TextWrapping="Wrap"/>

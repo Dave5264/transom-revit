@@ -775,8 +775,9 @@ internal static class ParityTools
             "aire_job_status",
             "Progress of an AIRE enhancement job started with aire_enhance: status "
             + "(queued/running/completed/failed), done/total counts, current file, per-image results, "
-            + "estimated cost so far, and the CSV log path when finished. Poll this instead of waiting — "
-            + "a 4K image can take minutes.",
+            + "estimated cost so far, and the CSV log path when finished. A batch stopped early still ends "
+            + "as 'completed' — check the 'cancelled' flag to tell a full run from a cancelled one. Poll "
+            + "this instead of waiting — a 4K image can take minutes.",
             Schema(
                 new JsonObject
                 {
