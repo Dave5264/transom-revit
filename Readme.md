@@ -15,7 +15,7 @@ enhance your renders with AI.**
 
 [![Latest release](https://img.shields.io/github/v/release/Dave5264/transom-revit?label=latest%20release&color=2ea44f&logo=github)](https://github.com/Dave5264/transom-revit/releases/latest)
 
-### ⬇ [Download the installer](https://github.com/Dave5264/transom-revit/releases/download/v1.9.10/Transom-1.9.10-SingleUser.msi)
+### ⬇ [Download the installer](https://github.com/Dave5264/transom-revit/releases/download/v1.9.11/Transom-1.9.11-SingleUser.msi)
 
 **One click, no admin rights** — installs into your per-user Revit add-ins folder.
 Double-click the `.msi`, then start Revit. Supports **Revit 2025, 2026 & 2027**. Free.
@@ -144,18 +144,22 @@ your encrypted store, so it never passes through Claude, the shim or the socket.
 matter which way it was started, so the window and Claude can't spend twice at once, and a batch Claude
 started reports its progress in the window as soon as you open it.
 
-<!-- Screenshot placeholder. Capture the AIRE window (queue populated, cost estimate visible) to
-     docs/images/aire.jpg and uncomment:
 <table>
 <tr><td><img src="docs/images/aire.jpg" alt="Transom AI Render Enhancer window: input and output folder pickers, OpenAI API key field, prompt box, model/resolution/quality selectors, a checkable queue of render images with their resolutions, the estimated cost for the checked images, and a progress bar" width="100%"></td></tr>
 <tr><td><em><b>AI Render Enhancer</b> — the queue, the settings that drive cost, and the estimate for exactly what you have ticked.</em></td></tr>
 </table>
--->
 
 *AIRE is far newer than the schedule round-trip and has had much less mileage. Treat early batches as a
 trial, and check the first cost estimates against your real OpenAI usage.*
 
-> **Status:** v1.9.10 (Revit 2025/2026/2027) — two deployment/robustness fixes on top of v1.9.9. The bundled
+> **Status:** v1.9.11 (Revit 2025/2026/2027) — AIRE gains a **Cancel Batch** button. Until now the only way
+> to stop a running batch was to ask Claude (`aire_cancel_job`); the window itself had no way out. Stopping a
+> run also used to throw away the CSV log for the images it had already generated *and billed for*, and report
+> the batch as failed — cancelling before the first image did that every single time. A cancelled batch now
+> always writes its log, reports itself as cancelled rather than complete, and counts the images it never
+> attempted.
+>
+> v1.9.10 was two deployment/robustness fixes on top of v1.9.9. The bundled
 > helper executables are now refreshed on every Revit start **even while Claude Code holds them open** (they
 > are running processes, so the old plain-overwrite silently failed and left you on the previous build's
 > helpers indefinitely). And AIRE now retries a request that OpenAI rejected as rate-limited or that failed
