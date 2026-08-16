@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <!-- AIRE's engine, job runner, settings and window. Deliberately free of RevitAPI and of any Transom
+             type: nothing in here imports anything but the BCL, which is what lets the SAME code run inside
+             Revit (Transom.dll references this) and in the standalone AIRE app with Revit closed. Keep it
+             that way — a Revit reference here would make the standalone app impossible to ship. -->
+        <TargetFrameworks>net8.0-windows;net10.0-windows</TargetFrameworks>
+        <UseWPF>true</UseWPF>
+        <!-- Mirror Transom's Revit-per-config names so csproj-direct builds of Transom resolve this
+             ProjectReference under the same configuration (same reason as Transom.Scripting). -->
+        <Configurations>Debug;Release;Debug.R25;Debug.R26;Debug.R27;Release.R25;Release.R26;Release.R27</Configurations>
+        <Optimize Condition="$(Configuration.StartsWith('Release'))">true</Optimize>
+        <Nullable>enable</Nullable>
+        <LangVersion>latest</LangVersion>
+    </PropertyGroup>
+
+</Project>

@@ -42,6 +42,12 @@
              Microsoft.CodeAnalysis OR Transom.Scripting type directly — reflection into ScriptHost only. -->
         <ProjectReference Include="..\Transom.Scripting\Transom.Scripting.csproj"/>
 
+        <!-- AIRE (engine + job runner + window). Extracted out of Transom so the SAME code can also run in
+             the standalone AIRE app with Revit closed; unlike Scripting/Office this is an ORDINARY reference
+             loaded into the default context — it has no conflicting dependency closure to isolate (BCL only),
+             and AireCommand/BridgeToolsAire use its types directly. -->
+        <ProjectReference Include="..\Transom.Aire\Transom.Aire.csproj"/>
+
         <!-- Development Dependencies -->
         <PackageReference Include="JetBrains.Annotations" Version="2025.2.4" PrivateAssets="all"/>
         <PackageReference Include="Polyfill" Version="10.5.1" PrivateAssets="all"/>

@@ -1,0 +1,34 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <!-- The standalone AIRE app: the same AireView the Revit ribbon opens, hosted in its own process so
+             renders can be enhanced with Revit closed. All the behaviour lives in Transom.Aire. -->
+        <OutputType>WinExe</OutputType>
+        <TargetFramework>net8.0-windows</TargetFramework>
+        <UseWPF>true</UseWPF>
+        <Nullable>enable</Nullable>
+        <LangVersion>latest</LangVersion>
+        <AssemblyName>Transom.Aire.App</AssemblyName>
+        <RootNamespace>Transom.Aire.App</RootNamespace>
+        <Configurations>Debug;Release;Debug.R25;Debug.R26;Debug.R27;Release.R25;Release.R26;Release.R27</Configurations>
+        <Optimize Condition="$(Configuration.StartsWith('Release'))">true</Optimize>
+
+        <!-- Framework-dependent ON PURPOSE, with roll-forward. Self-contained would add ~100 MB of WPF runtime
+             to an MSI that is already ~139 MB, for every user, whether or not they tick this feature. Targeting
+             net8.0 alone would instead break the Revit-2027-only user, who has the .NET 10 desktop runtime but
+             may have no .NET 8 at all. LatestMajor makes the same small exe run on whichever desktop runtime
+             the machine actually has - 8, 9 or 10 - which for a Revit box is always at least one of them. -->
+        <RollForward>LatestMajor</RollForward>
+
+        <!-- The Transom product icon; there is no AIRE-specific .ico yet (the ribbon art is 16/32 px PNG,
+             too small to upscale cleanly for a Start Menu tile). -->
+        <ApplicationIcon>..\..\install\Resources\Icons\ShellIcon.ico</ApplicationIcon>
+        <Product>AIRE — AI Render Enhancer</Product>
+        <AssemblyTitle>AIRE — AI Render Enhancer</AssemblyTitle>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="..\Transom.Aire\Transom.Aire.csproj"/>
+    </ItemGroup>
+
+</Project>
