@@ -235,6 +235,28 @@ def save(img, name, size):
     print("wrote", name)
 
 
+def save_ico(name, sizes=(16, 24, 32, 48, 64, 128, 256)):
+    """
+    Multi-size .ico for the standalone AIRE app (Start Menu / taskbar / Alt-Tab, which reach for 256).
+    Every frame is rendered from the 256px master rather than upscaled from Aire32.png. The 16 and 24
+    frames use the `small` geometry for the same reason Aire16.png does: the full-detail drawing turns
+    to mush at that size.
+    """
+    large = make_aire(False)
+    small = make_aire(True)
+    # The BASE image must be the 256 master: Pillow's ICO writer silently drops any requested size
+    # larger than the base, so passing the 16px frame first yields a one-frame .ico. Every frame is
+    # pre-rendered here and handed over via append_images, which Pillow matches up by size.
+    frames = [(small if s <= 24 else large).resize((s, s), Image.LANCZOS) for s in sizes]
+    large.save(
+        os.path.join(OUT, name),
+        format="ICO",
+        sizes=[(s, s) for s in sizes],
+        append_images=frames,
+    )
+    print("wrote", name, "sizes", ",".join(str(s) for s in sizes))
+
+
 if __name__ == "__main__":
     save(make_settings(False), "Settings32.png", 32)
     save(make_settings(True), "Settings16.png", 16)
@@ -244,3 +266,4 @@ if __name__ == "__main__":
     save(make_uiassist(True), "UiAssist16.png", 16)
     save(make_aire(False), "Aire32.png", 32)
     save(make_aire(True), "Aire16.png", 16)
+    save_ico("Aire.ico")

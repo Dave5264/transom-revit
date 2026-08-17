@@ -15,7 +15,7 @@ enhance your renders with AI.**
 
 [![Latest release](https://img.shields.io/github/v/release/Dave5264/transom-revit?label=latest%20release&color=2ea44f&logo=github)](https://github.com/Dave5264/transom-revit/releases/latest)
 
-### ⬇ [Download the installer](https://github.com/Dave5264/transom-revit/releases/download/v1.9.12/Transom-1.9.12-SingleUser.msi)
+### ⬇ [Download the installer](https://github.com/Dave5264/transom-revit/releases/download/v1.9.13/Transom-1.9.13-SingleUser.msi)
 
 **One click, no admin rights** — installs into your per-user Revit add-ins folder.
 Double-click the `.msi`, then start Revit. Supports **Revit 2025, 2026 & 2027**. Free.
@@ -159,7 +159,11 @@ one batch can run at a time across both.
 *AIRE is far newer than the schedule round-trip and has had much less mileage. Treat early batches as a
 trial, and check the first cost estimates against your real OpenAI usage.*
 
-> **Status:** v1.9.12 (Revit 2025/2026/2027) — **AIRE without Revit.** The installer now offers an optional
+> **Status:** v1.9.13 (Revit 2025/2026/2027) — the standalone AIRE shortcut gets its own icon, generated at
+> 16 through 256 px from the same master as the ribbon art, so the Start Menu, taskbar and Alt-Tab each show a
+> real frame rather than an upscaled one. No functional change from v1.9.12.
+>
+> v1.9.12 brought **AIRE without Revit.** The installer offers an optional
 > Start Menu shortcut that runs the AI Render Enhancer as its own app, so a folder of renders can be enhanced
 > without opening Revit at all. Same window, same settings, same encrypted key as the ribbon version; a second
 > launch brings the existing window forward rather than opening AIRE twice.

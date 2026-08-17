@@ -20,9 +20,10 @@
              the machine actually has - 8, 9 or 10 - which for a Revit box is always at least one of them. -->
         <RollForward>LatestMajor</RollForward>
 
-        <!-- The Transom product icon; there is no AIRE-specific .ico yet (the ribbon art is 16/32 px PNG,
-             too small to upscale cleanly for a Start Menu tile). -->
-        <ApplicationIcon>..\..\install\Resources\Icons\ShellIcon.ico</ApplicationIcon>
+        <!-- AIRE's own icon, 16/24/32/48/64/128/256 so the Start Menu, taskbar and Alt-Tab each get a real
+             frame instead of an upscale. Generated from the same 256px master as the ribbon art by
+             branding/icons-v2/generate_icons.py (save_ico) — regenerate there, then copy, don't hand-edit. -->
+        <ApplicationIcon>Resources\Aire.ico</ApplicationIcon>
         <Product>AIRE — AI Render Enhancer</Product>
         <AssemblyTitle>AIRE — AI Render Enhancer</AssemblyTitle>
     </PropertyGroup>
