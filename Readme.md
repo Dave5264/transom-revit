@@ -113,57 +113,32 @@ permission prompts steal focus from Revit and UI-assist clicks silently miss.
 **AI Render Enhancer** has its own ribbon button and batch-enhances architectural renders through OpenAI's
 image models — photoreal grass, planting, lighting and concrete texture, with the camera angle, perspective,
 geometry, mullions, trim lines and overall composition held exactly as Revit produced them. It works on image
-**files**, not on the model, so it needs no open project and the button stays live even on Revit's Home
-screen.
-
-Point it at a folder and **Scan Folder**, or drag images and folders straight onto the list. Tick the ones you
-want and the estimate follows your ticks. `.png`, `.jpg`, `.jpeg` and `.webp` go in; `<name>_enhanced.png`
-comes out. AIRE skips its own outputs, so re-scanning a folder you have already enhanced won't enhance — or
-re-bill — them a second time. It runs on **`gpt-image-2`** by default, at 3840×2160 and high quality;
-`gpt-image-1.5`, `gpt-image-1` and `gpt-image-1-mini` are selectable too, but only gpt-image-2 offers the 4K
-and 2K tiers — the rest top out at 1536×1024. The default prompt is written for architectural renders and is
-yours to edit.
-
-**Prompts are worth keeping.** Once you have wording that works for a given kind of render, name it and
-**Save** it — it joins a dropdown you can pick from on any later run, on this machine, in Revit or in the
-standalone app. Saved prompts are written to disk immediately, not when the window closes. And because the
-prompt box shares the left column with the settings, there is a **Pop Out** button beside it: the same prompt
-in a resizable window, edited live in both places at once, for when you are working on a long one.
-
-**Nothing is spent without a confirmation.** Before a batch starts, AIRE shows the image count, model,
-resolution, quality and an estimated cost, and waits for a yes. **Cancel Batch** stops a run already under
-way — the image being generated at that moment may still complete and be billed, but nothing after it is
-attempted, and the log still covers everything done up to that point. Every batch writes
-`logs\enhancement_log_<timestamp>.csv` beside the outputs — one row per image with its input resolution, the
-settings used, status, elapsed time, estimated cost and any error message. Treat the figure as what it is: a
-token-based approximation for deciding whether to press go, not a bill. OpenAI's usage page is the authority,
-and an **Open OpenAI Billing** button goes straight there.
-
-Bring your own **OpenAI API key** — a built-in walkthrough covers creating one. It is encrypted per Windows
-user (DPAPI) in `%AppData%\Transom\aire.json`, never written in plain text, and goes nowhere but
-`api.openai.com`. If you work across more than one OpenAI account, save a **named key** for each and switch
-between them from the **Saved Keys** dropdown; every key is encrypted separately, and picking one makes it the
-key in use straight away — including for anything Claude runs through the bridge, so a batch can never quietly
-bill the account you just switched away from.
-
-Claude can drive AIRE over the same bridge: `aire_enhance` starts a batch and returns a job id plus the cost
-estimate immediately, `aire_job_status` polls progress, and `aire_cancel_job` stops a run — the same thing the
-window's **Cancel Batch** button does. The key is deliberately *not* a tool argument; the bridge reads it from
-your encrypted store, so it never passes through Claude, the shim or the socket. One batch runs at a time no
-matter which way it was started, so the window and Claude can't spend twice at once, and a batch Claude
-started reports its progress in the window as soon as you open it.
-
-**AIRE also runs without Revit.** It only ever touches image files and the OpenAI API, so the installer
-offers an optional Start Menu shortcut that opens the same window on its own — enhance a folder of renders
-without waiting for Revit and a model to load. Tick **AIRE standalone app** when installing; it goes to
-`%LocalAppData%\Transom\aire` by default and the installer's Browse button will put it elsewhere. It shares
-one settings file and one encrypted key with the ribbon version, so it is the same AIRE either way, and only
-one batch can run at a time across both.
+**files**, not on the model, so it needs no open project — and it runs without Revit at all: tick **AIRE
+standalone app** when installing and the same window gets a Start Menu shortcut of its own.
 
 <table>
-<tr><td><img src="docs/images/aire.jpg" alt="Transom AI Render Enhancer window: input and output folder pickers, OpenAI API key field, prompt box, model/resolution/quality selectors, a checkable queue of render images with their resolutions, the estimated cost for the checked images, and a progress bar" width="100%"></td></tr>
+<tr><td><img src="docs/images/aire.jpg" alt="Transom AI Render Enhancer window: an API key field with a Saved Keys dropdown, input and output folder pickers, model/resolution/quality selectors, a Prompt card with a saved-prompt dropdown and a Pop Out button, a checkable queue of render images with their resolutions, the estimated cost for the checked images, and a progress bar" width="100%"></td></tr>
 <tr><td><em><b>AI Render Enhancer</b> — the queue, the settings that drive cost, and the estimate for exactly what you have ticked.</em></td></tr>
 </table>
+
+- **Point and tick.** **Scan Folder**, or drag images and folders straight onto the list. `.png`, `.jpg`,
+  `.jpeg` and `.webp` go in; `<name>_enhanced.png` comes out. AIRE skips its own outputs, so re-scanning a
+  folder you have already enhanced won't re-bill it. Defaults are **`gpt-image-2`** at 3840×2160 and high
+  quality; the older `gpt-image-1.5`, `-1` and `-1-mini` are selectable but top out at 1536×1024.
+- **Nothing is spent without a confirmation.** The image count, model, resolution, quality and an estimated
+  cost are shown before a batch starts, and **Cancel Batch** stops one already under way. Every batch writes
+  `logs\enhancement_log_<timestamp>.csv` beside the outputs — a row per image with settings, status, elapsed
+  time and estimated cost. Treat the figure as an approximation for deciding whether to press go, not a bill;
+  **Open OpenAI Billing** goes to the authority.
+- **Prompts and keys are worth keeping.** Name a prompt that works and **Save** it, then pick it back out of
+  the dropdown on any later run; **Pop Out** edits the same text in a resizable window. Keys work the same
+  way — save one per OpenAI account and switch from **Saved Keys**, each encrypted separately.
+- **Bring your own key.** A built-in walkthrough covers creating one. It is encrypted per Windows user (DPAPI)
+  in `%AppData%\Transom\aire.json`, never written in plain text, and goes nowhere but `api.openai.com`.
+- **Claude can drive it** over the same bridge: `aire_enhance` starts a batch and returns a job id plus the
+  cost estimate, `aire_job_status` polls it, `aire_cancel_job` stops it. The key is deliberately not a tool
+  argument — the bridge reads it from your encrypted store, so it never passes through Claude or the socket.
+  One batch runs at a time no matter which way it was started.
 
 *AIRE is far newer than the schedule round-trip and has had much less mileage. Treat early batches as a
 trial, and check the first cost estimates against your real OpenAI usage.*
