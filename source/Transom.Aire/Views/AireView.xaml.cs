@@ -28,6 +28,14 @@ public sealed partial class AireView
     /// <summary>Set when Cancel is pressed, so progress text stops claiming the batch is still processing.</summary>
     private bool _cancelRequested;
 
+    /// <summary>The open pop-out prompt editor, or null. One at a time — a second would be two views of one
+    /// bound string arguing over the caret.</summary>
+    private PromptEditorWindow? _promptEditor;
+
+    /// <summary>Set while the preset dropdowns are being rebuilt. Assigning ItemsSource/SelectedItem raises
+    /// SelectionChanged, which would otherwise "load" a preset over the text the user just saved.</summary>
+    private bool _suppressPresetEvents;
+
     public AireView()
     {
         InitializeComponent();
@@ -53,6 +61,13 @@ public sealed partial class AireView
         ApiKeyHelpButton.Click += (_, _) => ApiKeyHelpOverlay.Visibility = System.Windows.Visibility.Visible;
         ApiKeyHelpCloseButton.Click += (_, _) => ApiKeyHelpOverlay.Visibility = System.Windows.Visibility.Collapsed;
         ApiKeyHelpOpenButton.Click += (_, _) => OpenUrl(AireEngine.OpenAiApiKeysUrl);
+        PopOutPromptButton.Click += (_, _) => PopOutPrompt();
+        PromptPresetCombo.SelectionChanged += (_, _) => LoadSelectedPrompt();
+        SavePromptButton.Click += (_, _) => SaveCurrentPrompt();
+        DeletePromptButton.Click += (_, _) => DeleteSelectedPrompt();
+        ApiKeyPresetCombo.SelectionChanged += (_, _) => LoadSelectedApiKey();
+        SaveApiKeyButton.Click += (_, _) => SaveCurrentApiKey();
+        DeleteApiKeyButton.Click += (_, _) => DeleteSelectedApiKey();
         ScanButton.Click += (_, _) => ScanInputFolder();
         ProcessButton.Click += (_, _) => ProcessChecked();
         CancelButton.Click += (_, _) => CancelBatch();
@@ -88,6 +103,9 @@ public sealed partial class AireView
         if (SizeCombo.Items.Contains(s.Size)) SizeCombo.SelectedItem = s.Size;
         QualityCombo.SelectedItem = AireEngine.QualityOptions.Contains(s.Quality) ? s.Quality : AireEngine.DefaultQuality;
         ThemeCombo.SelectedItem = s.Theme == "Dark" ? "Dark" : "Light";
+        PromptNameBox.Text = s.SelectedPromptName;
+        ApiKeyNameBox.Text = s.SelectedApiKeyName;
+        RefreshPresetCombos(s, s.SelectedPromptName, s.SelectedApiKeyName);
         ApplyTheme(s.Theme == "Dark");
     }
 
@@ -95,8 +113,14 @@ public sealed partial class AireView
     /// aire_enhance tool reads, so saving here is what makes Claude able to run AIRE at all.</summary>
     private void SaveSettings()
     {
+        // Reloaded from disk rather than kept in a field on purpose: the prompt/key libraries below are
+        // written the moment they change, and a second AIRE (the standalone app alongside Revit's) may have
+        // added to them since this window opened. Re-reading means closing this window preserves those
+        // instead of writing back a stale copy.
         var s = AireSettings.Load();
         s.SetApiKey(ApiKeyBox.Password);
+        s.SelectedPromptName = PromptPresetCombo.SelectedItem as string ?? "";
+        s.SelectedApiKeyName = ApiKeyPresetCombo.SelectedItem as string ?? "";
         s.InputFolder = InputFolderBox.Text.Trim();
         s.OutputFolder = OutputFolderBox.Text.Trim();
         s.Prompt = PromptBox.Text;
@@ -114,6 +138,195 @@ public sealed partial class AireView
         var sizes = AireEngine.ModelSizeOptions.TryGetValue(model, out var list) ? list : new[] { "auto" };
         SizeCombo.ItemsSource = sizes;
         SizeCombo.SelectedItem = current != null && sizes.Contains(current) ? current : sizes[0];
+    }
+
+    // ---- saved prompts & API keys --------------------------------------------
+
+    /// <summary>
+    ///     Rebuilds both preset dropdowns from a settings snapshot and re-selects by name (case-insensitively,
+    ///     since the stored entry keeps its original casing when overwritten). Always guarded — see
+    ///     <see cref="_suppressPresetEvents"/>.
+    /// </summary>
+    private void RefreshPresetCombos(AireSettings s, string? promptName = null, string? keyName = null)
+    {
+        _suppressPresetEvents = true;
+        try
+        {
+            var prompts = s.SavedPrompts.Select(p => p.Name).ToList();
+            PromptPresetCombo.ItemsSource = prompts;
+            PromptPresetCombo.SelectedItem = MatchName(prompts, promptName);
+
+            var keys = s.SavedApiKeys.Select(k => k.Name).ToList();
+            ApiKeyPresetCombo.ItemsSource = keys;
+            ApiKeyPresetCombo.SelectedItem = MatchName(keys, keyName);
+        }
+        finally { _suppressPresetEvents = false; }
+    }
+
+    private static string? MatchName(List<string> names, string? wanted) =>
+        string.IsNullOrWhiteSpace(wanted)
+            ? null
+            : names.FirstOrDefault(n => string.Equals(n, wanted.Trim(), StringComparison.OrdinalIgnoreCase));
+
+    private void LoadSelectedPrompt()
+    {
+        if (_suppressPresetEvents) return;
+        if (PromptPresetCombo.SelectedItem is not string name) return;
+        var entry = AireSettings.Load().FindPrompt(name);
+        if (entry == null) return;
+        PromptBox.Text = entry.Text; // TextChanged re-estimates, and the pop-out editor is bound to this box
+        PromptNameBox.Text = entry.Name; // so editing then re-Saving updates this preset instead of orphaning it
+        ProgressLabel.Text = $"Loaded saved prompt \"{entry.Name}\".";
+    }
+
+    private void SaveCurrentPrompt()
+    {
+        var name = PromptNameBox.Text.Trim();
+        if (name.Length == 0)
+        {
+            MessageBox.Show(this, "Type a name for this prompt first — that is what the dropdown will show.",
+                "Name the prompt", MessageBoxButton.OK, MessageBoxImage.Warning);
+            PromptNameBox.Focus();
+            return;
+        }
+
+        // Written straight to disk rather than waiting for SaveSettings on close: a prompt worth naming is
+        // worth surviving a crash, and it is also how the OTHER AIRE process gets to see it.
+        var s = AireSettings.Load();
+        if (s.FindPrompt(name) != null && MessageBox.Show(this,
+                $"A saved prompt called \"{name}\" already exists.\n\nReplace it?",
+                "Replace saved prompt", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes)
+            return;
+
+        s.UpsertPrompt(name, PromptBox.Text);
+        s.SelectedPromptName = name;
+        s.Save();
+        RefreshPresetCombos(s, name, ApiKeyPresetCombo.SelectedItem as string);
+        ProgressLabel.Text = $"Saved prompt \"{name}\".";
+    }
+
+    private void DeleteSelectedPrompt()
+    {
+        if (PromptPresetCombo.SelectedItem is not string name)
+        {
+            MessageBox.Show(this, "Pick a saved prompt in the dropdown first.", "Nothing selected",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+        if (MessageBox.Show(this, $"Delete the saved prompt \"{name}\"?\n\nThe text in the Prompt box is kept.",
+                "Delete saved prompt", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes)
+            return;
+
+        var s = AireSettings.Load();
+        s.RemovePrompt(name);
+        s.SelectedPromptName = "";
+        s.Save();
+        RefreshPresetCombos(s, null, ApiKeyPresetCombo.SelectedItem as string);
+        ProgressLabel.Text = $"Deleted saved prompt \"{name}\".";
+    }
+
+    /// <summary>
+    ///     Switches to a saved account key. Takes effect immediately — including in the stored settings —
+    ///     because the bridge's aire_enhance tool reads the stored key, so leaving the switch until the window
+    ///     closes would let a Claude-started batch spend against the account the user just moved away from.
+    /// </summary>
+    private void LoadSelectedApiKey()
+    {
+        if (_suppressPresetEvents) return;
+        if (ApiKeyPresetCombo.SelectedItem is not string name) return;
+
+        var s = AireSettings.Load();
+        var key = s.GetSavedApiKey(name);
+        if (key.Length == 0)
+        {
+            MessageBox.Show(this,
+                $"The saved key \"{name}\" could not be read.\n\nSaved keys are encrypted for one Windows user "
+                + "account, so a key saved under a different profile (or a copied settings file) cannot be "
+                + "decrypted here. Paste the key again and save it.",
+                "Key unavailable", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        ApiKeyBox.Password = key;
+        ApiKeyNameBox.Text = s.FindApiKey(name)?.Name ?? name;
+        s.SetApiKey(key);
+        s.SelectedApiKeyName = name;
+        s.Save();
+        ProgressLabel.Text = $"Now using API key \"{name}\".";
+    }
+
+    private void SaveCurrentApiKey()
+    {
+        var name = ApiKeyNameBox.Text.Trim();
+        var key = ApiKeyBox.Password.Trim();
+        if (name.Length == 0)
+        {
+            MessageBox.Show(this, "Type a name for this account first, e.g. Studio or Personal.",
+                "Name the key", MessageBoxButton.OK, MessageBoxImage.Warning);
+            ApiKeyNameBox.Focus();
+            return;
+        }
+        if (key.Length == 0)
+        {
+            MessageBox.Show(this, "Paste the key into the API Key box before saving it.", "No key to save",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+            ApiKeyBox.Focus();
+            return;
+        }
+
+        var s = AireSettings.Load();
+        if (s.FindApiKey(name) != null && MessageBox.Show(this,
+                $"A saved key called \"{name}\" already exists.\n\nReplace it?",
+                "Replace saved key", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes)
+            return;
+
+        s.UpsertApiKey(name, key);
+        s.SetApiKey(key); // the key just saved is also the one now in use
+        s.SelectedApiKeyName = name;
+        s.Save();
+        RefreshPresetCombos(s, PromptPresetCombo.SelectedItem as string, name);
+        ProgressLabel.Text = $"Saved API key \"{name}\".";
+    }
+
+    private void DeleteSelectedApiKey()
+    {
+        if (ApiKeyPresetCombo.SelectedItem is not string name)
+        {
+            MessageBox.Show(this, "Pick a saved key in the dropdown first.", "Nothing selected",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+        if (MessageBox.Show(this,
+                $"Delete the saved key \"{name}\"?\n\nThis only forgets it here — the key itself stays valid on "
+                + "your OpenAI account, and the key currently in the API Key box is left as it is.",
+                "Delete saved key", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes)
+            return;
+
+        var s = AireSettings.Load();
+        s.RemoveApiKey(name);
+        s.SelectedApiKeyName = "";
+        s.Save();
+        RefreshPresetCombos(s, PromptPresetCombo.SelectedItem as string, null);
+        ProgressLabel.Text = $"Deleted saved key \"{name}\".";
+    }
+
+    /// <summary>Opens (or re-fronts) the resizable prompt editor. It binds to PromptBox, so there is nothing
+    /// to copy back — see <see cref="PromptEditorWindow"/>.</summary>
+    private void PopOutPrompt()
+    {
+        if (_promptEditor != null)
+        {
+            // Spelled out: Window has its own WindowState PROPERTY, so the bare enum name binds to that
+            // instance member and does not compile (same trap as System.Windows.Visibility below).
+            if (_promptEditor.WindowState == System.Windows.WindowState.Minimized)
+                _promptEditor.WindowState = System.Windows.WindowState.Normal;
+            _promptEditor.Activate();
+            return;
+        }
+        var editor = new PromptEditorWindow(this, PromptBox);
+        editor.Closed += (_, _) => _promptEditor = null;
+        _promptEditor = editor;
+        editor.Show();
     }
 
     // ---- queue ---------------------------------------------------------------

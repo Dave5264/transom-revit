@@ -1,0 +1,47 @@
+<Window x:Class="Transom.Views.PromptEditorWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Prompt — AIRE"
+        Width="820" Height="600" MinWidth="380" MinHeight="240"
+        WindowStartupLocation="CenterOwner"
+        ShowInTaskbar="False"
+        FontFamily="Segoe UI" FontSize="14"
+        Background="{DynamicResource AppBg}"
+        Foreground="{DynamicResource TextPrimary}">
+
+    <!-- Deliberately EMPTY resources: the constructor merges the owner AireView's dictionary in, so this
+         window draws from the very same brush instances AireView.ApplyTheme mutates and follows a Light/Dark
+         switch made on the main window while this one is open. Every style/colour reference below must
+         therefore be a DynamicResource — a StaticResource is resolved while the XAML is parsed, before the
+         merge happens, and would fail to find these keys. -->
+
+    <Border Style="{DynamicResource Card}" Margin="16">
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+
+            <TextBlock Grid.Row="0" Style="{DynamicResource SectionTitle}" Text="Prompt"/>
+            <TextBlock Grid.Row="1" Style="{DynamicResource SmallMuted}" Margin="0,4,0,10"
+                       Text="Edits here appear in the AIRE window as you type — this is the same prompt, in a bigger box. Resize this window as needed; close it when you are done."/>
+
+            <TextBox Grid.Row="2" x:Name="EditorBox" Style="{DynamicResource AireTextBox}"
+                     TextWrapping="Wrap" AcceptsReturn="True" AcceptsTab="False" SpellCheck.IsEnabled="True"
+                     VerticalScrollBarVisibility="Auto" VerticalContentAlignment="Top"/>
+
+            <Grid Grid.Row="3" Margin="0,12,0,0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Grid.Column="0" x:Name="CountLabel" Style="{DynamicResource SmallMuted}"
+                           VerticalAlignment="Center"/>
+                <Button Grid.Column="1" x:Name="CloseButton" Style="{DynamicResource PrimaryButton}"
+                        Content="Done" MinWidth="90"/>
+            </Grid>
+        </Grid>
+    </Border>
+</Window>

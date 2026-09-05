@@ -15,7 +15,7 @@ enhance your renders with AI.**
 
 [![Latest release](https://img.shields.io/github/v/release/Dave5264/transom-revit?label=latest%20release&color=2ea44f&logo=github)](https://github.com/Dave5264/transom-revit/releases/latest)
 
-### ⬇ [Download the installer](https://github.com/Dave5264/transom-revit/releases/download/v1.9.13/Transom-1.9.13-SingleUser.msi)
+### ⬇ [Download the installer](https://github.com/Dave5264/transom-revit/releases/download/v1.9.14/Transom-1.9.14-SingleUser.msi)
 
 **One click, no admin rights** — installs into your per-user Revit add-ins folder.
 Double-click the `.msi`, then start Revit. Supports **Revit 2025, 2026 & 2027**. Free.
@@ -124,6 +124,12 @@ re-bill — them a second time. It runs on **`gpt-image-2`** by default, at 3840
 and 2K tiers — the rest top out at 1536×1024. The default prompt is written for architectural renders and is
 yours to edit.
 
+**Prompts are worth keeping.** Once you have wording that works for a given kind of render, name it and
+**Save** it — it joins a dropdown you can pick from on any later run, on this machine, in Revit or in the
+standalone app. Saved prompts are written to disk immediately, not when the window closes. And because the
+prompt box shares the left column with the settings, there is a **Pop Out** button beside it: the same prompt
+in a resizable window, edited live in both places at once, for when you are working on a long one.
+
 **Nothing is spent without a confirmation.** Before a batch starts, AIRE shows the image count, model,
 resolution, quality and an estimated cost, and waits for a yes. **Cancel Batch** stops a run already under
 way — the image being generated at that moment may still complete and be billed, but nothing after it is
@@ -135,7 +141,10 @@ and an **Open OpenAI Billing** button goes straight there.
 
 Bring your own **OpenAI API key** — a built-in walkthrough covers creating one. It is encrypted per Windows
 user (DPAPI) in `%AppData%\Transom\aire.json`, never written in plain text, and goes nowhere but
-`api.openai.com`.
+`api.openai.com`. If you work across more than one OpenAI account, save a **named key** for each and switch
+between them from the **Saved Keys** dropdown; every key is encrypted separately, and picking one makes it the
+key in use straight away — including for anything Claude runs through the bridge, so a batch can never quietly
+bill the account you just switched away from.
 
 Claude can drive AIRE over the same bridge: `aire_enhance` starts a batch and returns a job id plus the cost
 estimate immediately, `aire_job_status` polls progress, and `aire_cancel_job` stops a run — the same thing the
@@ -159,7 +168,15 @@ one batch can run at a time across both.
 *AIRE is far newer than the schedule round-trip and has had much less mileage. Treat early batches as a
 trial, and check the first cost estimates against your real OpenAI usage.*
 
-> **Status:** v1.9.13 (Revit 2025/2026/2027) — the standalone AIRE shortcut gets its own icon, generated at
+> **Status:** v1.9.14 (Revit 2025/2026/2027) — AIRE gets a **reusable prompt library, saved API keys, and a
+> pop-out prompt editor.** Name a prompt and save it, then pick it back out of a dropdown on any later run
+> instead of retyping or hunting for the wording that worked. Keys work the same way: save one per OpenAI
+> account and switch between them from a dropdown, each encrypted separately for your Windows user. And the
+> prompt box, which shares the left column with the settings and was never big enough for a long prompt, now
+> pops out into a resizable window that edits the same text live — no OK/Cancel, no copy-back. Saved prompts
+> and keys are written to disk the moment you save them, rather than waiting for the window to close.
+>
+> v1.9.13 gave the standalone AIRE shortcut its own icon, generated at
 > 16 through 256 px from the same master as the ribbon art, so the Start Menu, taskbar and Alt-Tab each show a
 > real frame rather than an upscaled one. No functional change from v1.9.12.
 >
