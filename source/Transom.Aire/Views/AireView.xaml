@@ -86,6 +86,11 @@
             <Setter Property="Foreground" Value="{DynamicResource MutedFg}"/>
             <Setter Property="TextWrapping" Value="Wrap"/>
         </Style>
+        <!-- The aspect-ratio warning: same size as SmallMuted, in the danger colour so it cannot be read as a hint. -->
+        <Style x:Key="WarningLabel" TargetType="TextBlock" BasedOn="{StaticResource SmallMuted}">
+            <Setter Property="Foreground" Value="{DynamicResource DangerFg}"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+        </Style>
         <Style x:Key="FieldLabel" TargetType="TextBlock">
             <Setter Property="Foreground" Value="{DynamicResource TextPrimary}"/>
             <Setter Property="VerticalAlignment" Value="Center"/>
@@ -274,7 +279,7 @@
                 <Setter.Value>
                     <ControlTemplate TargetType="ComboBoxItem">
                         <Border x:Name="Bd" Background="Transparent" CornerRadius="6" Padding="{TemplateBinding Padding}">
-                            <ContentPresenter/>
+                            <ContentPresenter TextElement.Foreground="{DynamicResource TextPrimary}"/>
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsHighlighted" Value="True">
@@ -317,7 +322,10 @@
                                     </ControlTemplate>
                                 </ToggleButton.Template>
                             </ToggleButton>
-                            <ContentPresenter Margin="11,0,30,0" VerticalAlignment="Center" IsHitTestVisible="False"
+                            <!-- Foreground pinned here rather than inherited: a host application (Revit) can carry
+                                 implicit text styles, and a disabled box must stay readable in both themes. -->
+                            <ContentPresenter x:Name="SelectionBox" Margin="11,0,30,0" VerticalAlignment="Center" IsHitTestVisible="False"
+                                              TextElement.Foreground="{DynamicResource TextPrimary}"
                                               Content="{TemplateBinding SelectionBoxItem}"
                                               ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}"/>
                             <Popup x:Name="PART_Popup" Placement="Bottom" AllowsTransparency="True"
@@ -332,6 +340,15 @@
                                 </Border>
                             </Popup>
                         </Grid>
+                        <ControlTemplate.Triggers>
+                            <!-- Disabled = "this model has no such setting": the text stays legible in the muted
+                                 colour and only the chrome dims. Fading the whole control made dark-theme text
+                                 unreadable. -->
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="SelectionBox" Property="TextElement.Foreground" Value="{DynamicResource MutedFg}"/>
+                                <Setter TargetName="Toggle" Property="Opacity" Value="0.6"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
                     </ControlTemplate>
                 </Setter.Value>
             </Setter>
@@ -399,6 +416,111 @@
             </Setter>
         </Style>
 
+        <!-- Tabs: pill headers on the page background, content with no chrome of its own (each tab lays out
+             its own cards exactly as the single-page window used to). Stock TabControl chrome is visibly wrong
+             against this palette, in both themes. -->
+        <Style x:Key="AireTabItem" TargetType="TabItem">
+            <Setter Property="Foreground" Value="{DynamicResource BtnFg}"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="FontSize" Value="14"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="TabItem">
+                        <Border x:Name="Bd" Background="{DynamicResource BtnBg}" BorderBrush="Transparent"
+                                BorderThickness="1" CornerRadius="10" Padding="20,7" Margin="0,0,8,0">
+                            <ContentPresenter ContentSource="Header" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource BtnHoverBg}"/>
+                                <Setter TargetName="Bd" Property="BorderBrush" Value="{DynamicResource BtnHoverBorder}"/>
+                            </Trigger>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource PrimaryBg}"/>
+                                <Setter TargetName="Bd" Property="BorderBrush" Value="{DynamicResource PrimaryBorder}"/>
+                                <Setter Property="Foreground" Value="{DynamicResource PrimaryFg}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="AireTabControl" TargetType="TabControl">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Padding" Value="0"/>
+            <Setter Property="ItemContainerStyle" Value="{StaticResource AireTabItem}"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="TabControl">
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="*"/>
+                            </Grid.RowDefinitions>
+                            <TabPanel Grid.Row="0" IsItemsHost="True" Margin="0,0,0,12"/>
+                            <ContentPresenter Grid.Row="1" ContentSource="SelectedContent"/>
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- Slider (camera-preset strength, 0–1): thin rounded track, filled portion in the accent, round thumb. -->
+        <Style x:Key="AireSlider" TargetType="Slider">
+            <Setter Property="Minimum" Value="0"/>
+            <Setter Property="Maximum" Value="1"/>
+            <Setter Property="TickFrequency" Value="0.05"/>
+            <Setter Property="IsSnapToTickEnabled" Value="True"/>
+            <Setter Property="IsMoveToPointEnabled" Value="True"/>
+            <Setter Property="Height" Value="24"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Slider">
+                        <Grid>
+                            <Border Height="6" CornerRadius="3" Background="{DynamicResource ProgressBg}" VerticalAlignment="Center"/>
+                            <Track x:Name="PART_Track">
+                                <Track.DecreaseRepeatButton>
+                                    <RepeatButton Command="Slider.DecreaseLarge" IsTabStop="False">
+                                        <RepeatButton.Template>
+                                            <ControlTemplate TargetType="RepeatButton">
+                                                <Border Height="6" CornerRadius="3" Background="{DynamicResource ProgressChunk}" VerticalAlignment="Center"/>
+                                            </ControlTemplate>
+                                        </RepeatButton.Template>
+                                    </RepeatButton>
+                                </Track.DecreaseRepeatButton>
+                                <Track.IncreaseRepeatButton>
+                                    <RepeatButton Command="Slider.IncreaseLarge" IsTabStop="False">
+                                        <RepeatButton.Template>
+                                            <ControlTemplate TargetType="RepeatButton">
+                                                <Border Background="Transparent"/>
+                                            </ControlTemplate>
+                                        </RepeatButton.Template>
+                                    </RepeatButton>
+                                </Track.IncreaseRepeatButton>
+                                <Track.Thumb>
+                                    <Thumb Width="16" Height="16" Cursor="Hand">
+                                        <Thumb.Template>
+                                            <ControlTemplate TargetType="Thumb">
+                                                <Ellipse Fill="{DynamicResource PrimaryBg}" Stroke="{DynamicResource CardBg}" StrokeThickness="2"/>
+                                            </ControlTemplate>
+                                        </Thumb.Template>
+                                    </Thumb>
+                                </Track.Thumb>
+                            </Track>
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.45"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
         <!-- Queue item content -->
         <DataTemplate x:Key="QueueItemTemplate">
             <CheckBox IsChecked="{Binding IsChecked, Mode=TwoWay}"
@@ -419,7 +541,7 @@
             <RowDefinition Height="*"/>
         </Grid.RowDefinitions>
 
-        <!-- Header hero card -->
+        <!-- Header hero card. The subtitle and the cost figure follow the selected tab. -->
         <Border Grid.Row="0" Style="{StaticResource HeroCard}" Margin="0,0,0,12">
             <Grid>
                 <Grid.ColumnDefinitions>
@@ -428,7 +550,7 @@
                 </Grid.ColumnDefinitions>
                 <StackPanel Grid.Column="0">
                     <TextBlock Style="{StaticResource TitleLabel}" Text="AI Render Enhancer"/>
-                    <TextBlock Style="{StaticResource SubtitleLabel}"
+                    <TextBlock x:Name="SubtitleLabel" Style="{StaticResource SubtitleLabel}"
                                Text="Batch-enhance architectural renders with controlled model, resolution, quality, and cost confirmation."/>
                 </StackPanel>
                 <TextBlock Grid.Column="1" x:Name="CostLabel" Style="{StaticResource CostLabel}"
@@ -436,243 +558,557 @@
             </Grid>
         </Border>
 
-        <!-- Two columns: settings/prompt | queue/progress -->
-        <Grid Grid.Row="1">
-            <Grid.ColumnDefinitions>
-                <!-- Wider than the original 430 to fit the saved-prompt / saved-key rows (dropdown + name
-                     box + Save + Delete) without squeezing the dropdown down to a few characters. -->
-                <ColumnDefinition Width="480" MinWidth="420"/>
-                <ColumnDefinition Width="14"/>
-                <ColumnDefinition Width="*"/>
-            </Grid.ColumnDefinitions>
+        <TabControl Grid.Row="1" x:Name="AireTabs" Style="{StaticResource AireTabControl}">
 
-            <!-- LEFT: Settings + Prompt -->
-            <Grid Grid.Column="0">
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="10"/>
-                    <RowDefinition Height="*"/>
-                </Grid.RowDefinitions>
+            <!-- ============================ ENHANCE ============================ -->
+            <TabItem x:Name="EnhanceTab" Header="Enhance">
+                <!-- Two columns: settings/prompt | queue/progress -->
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <!-- Wider than the original 430 to fit the saved-prompt / saved-key rows (dropdown + name
+                             box + Save + Delete) without squeezing the dropdown down to a few characters. -->
+                        <ColumnDefinition Width="480" MinWidth="420"/>
+                        <ColumnDefinition Width="14"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
 
-                <Border Grid.Row="0" Style="{StaticResource Card}">
-                    <StackPanel>
-                        <TextBlock Style="{StaticResource SectionTitle}" Text="Settings" Margin="0,0,0,8"/>
+                    <!-- LEFT: Settings + Prompt -->
+                    <Grid Grid.Column="0">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="10"/>
+                            <RowDefinition Height="*"/>
+                        </Grid.RowDefinitions>
 
-                        <!-- Label-beside-field rows, like the original app — keeps the card short enough
-                             that the Prompt card below gets real editing space at the default height. -->
-                        <Grid>
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="102"/>
-                                <ColumnDefinition Width="*"/>
-                                <ColumnDefinition Width="Auto"/>
-                            </Grid.ColumnDefinitions>
-                            <!-- Gaps tightened from the original 8/12 to 6/10 and the combos from 36 to 34:
-                                 the Saved Keys row has to come out of somewhere, and taking it out of the
-                                 Prompt box below (the star row) is what actually costs the user. -->
-                            <Grid.RowDefinitions>
-                                <RowDefinition Height="Auto"/>
-                                <RowDefinition Height="6"/>
-                                <RowDefinition Height="Auto"/>
-                                <RowDefinition Height="10"/>
-                                <RowDefinition Height="Auto"/>
-                                <RowDefinition Height="6"/>
-                                <RowDefinition Height="Auto"/>
-                                <RowDefinition Height="10"/>
-                                <RowDefinition Height="Auto"/>
-                                <RowDefinition Height="6"/>
-                                <RowDefinition Height="Auto"/>
-                                <RowDefinition Height="6"/>
-                                <RowDefinition Height="Auto"/>
-                                <RowDefinition Height="6"/>
-                                <RowDefinition Height="Auto"/>
-                            </Grid.RowDefinitions>
+                        <Border Grid.Row="0" Style="{StaticResource Card}">
+                            <StackPanel>
+                                <TextBlock Style="{StaticResource SectionTitle}" Text="Settings" Margin="0,0,0,8"/>
 
-                            <TextBlock Grid.Row="0" Grid.Column="0" Style="{StaticResource FieldLabel}" Text="API Key"/>
-                            <PasswordBox Grid.Row="0" Grid.Column="1" Grid.ColumnSpan="2" x:Name="ApiKeyBox"
-                                         Style="{StaticResource AirePasswordBox}"/>
+                                <!-- Label-beside-field rows, like the original app — keeps the card short enough
+                                     that the Prompt card below gets real editing space at the default height. -->
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="102"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <!-- Gaps tightened from the original 8/12 to 6/10 and the combos from 36 to 34:
+                                         the Saved Keys row has to come out of somewhere, and taking it out of the
+                                         Prompt box below (the star row) is what actually costs the user. -->
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="6"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="10"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="6"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="10"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="6"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="6"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="6"/>
+                                        <RowDefinition Height="Auto"/>
+                                    </Grid.RowDefinitions>
 
-                            <!-- Saved keys: one named key per OpenAI account. Picking one loads it into the box
-                                 above AND becomes the current key immediately, because that is the key the
-                                 bridge's aire_enhance tool reads — a selection that only took effect on close
-                                 would let Claude spend against the previous account. -->
-                            <TextBlock Grid.Row="2" Grid.Column="0" Style="{StaticResource FieldLabel}" Text="Saved Keys"/>
-                            <Grid Grid.Row="2" Grid.Column="1" Grid.ColumnSpan="2">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*" MinWidth="90"/>
-                                    <ColumnDefinition Width="6"/>
-                                    <ColumnDefinition Width="94"/>
-                                    <ColumnDefinition Width="6"/>
-                                    <ColumnDefinition Width="Auto"/>
-                                    <ColumnDefinition Width="6"/>
-                                    <ColumnDefinition Width="Auto"/>
-                                </Grid.ColumnDefinitions>
-                                <ComboBox Grid.Column="0" x:Name="ApiKeyPresetCombo" Style="{StaticResource AireCombo}"
-                                          Height="34" FontSize="13"
-                                          ToolTip="Switch to a saved account key."/>
-                                <TextBox Grid.Column="2" x:Name="ApiKeyNameBox" Style="{StaticResource AireTextBox}"
-                                         Height="34" FontSize="13"
-                                         ToolTip="Name for the key currently in the API Key box, e.g. Studio or Personal."/>
-                                <Button Grid.Column="4" x:Name="SaveApiKeyButton" Style="{StaticResource SmallButton}"
-                                        Content="Save" ToolTip="Save the key in the API Key box under this name."/>
-                                <Button Grid.Column="6" x:Name="DeleteApiKeyButton" Style="{StaticResource SmallDangerButton}"
-                                        Content="Delete" ToolTip="Forget the selected saved key."/>
+                                    <TextBlock Grid.Row="0" Grid.Column="0" Style="{StaticResource FieldLabel}" Text="API Key"/>
+                                    <PasswordBox Grid.Row="0" Grid.Column="1" Grid.ColumnSpan="2" x:Name="ApiKeyBox"
+                                                 Style="{StaticResource AirePasswordBox}"/>
+
+                                    <!-- Saved keys: one named key per OpenAI account. Picking one loads it into the box
+                                         above AND becomes the current key immediately, because that is the key the
+                                         bridge's aire_enhance tool reads — a selection that only took effect on close
+                                         would let Claude spend against the previous account. -->
+                                    <TextBlock Grid.Row="2" Grid.Column="0" Style="{StaticResource FieldLabel}" Text="Saved Keys"/>
+                                    <Grid Grid.Row="2" Grid.Column="1" Grid.ColumnSpan="2">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" MinWidth="90"/>
+                                            <ColumnDefinition Width="6"/>
+                                            <ColumnDefinition Width="94"/>
+                                            <ColumnDefinition Width="6"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="6"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <ComboBox Grid.Column="0" x:Name="ApiKeyPresetCombo" Style="{StaticResource AireCombo}"
+                                                  Height="34" FontSize="13"
+                                                  ToolTip="Switch to a saved account key."/>
+                                        <TextBox Grid.Column="2" x:Name="ApiKeyNameBox" Style="{StaticResource AireTextBox}" Padding="9,2"
+                                                 Height="34" FontSize="13"
+                                                 ToolTip="Name for the key currently in the API Key box, e.g. Studio or Personal."/>
+                                        <Button Grid.Column="4" x:Name="SaveApiKeyButton" Style="{StaticResource SmallButton}"
+                                                Content="Save" ToolTip="Save the key in the API Key box under this name."/>
+                                        <Button Grid.Column="6" x:Name="DeleteApiKeyButton" Style="{StaticResource SmallDangerButton}"
+                                                Content="Delete" ToolTip="Forget the selected saved key."/>
+                                    </Grid>
+
+                                    <TextBlock Grid.Row="4" Grid.Column="0" Style="{StaticResource FieldLabel}" Text="Input Folder"/>
+                                    <TextBox Grid.Row="4" Grid.Column="1" x:Name="InputFolderBox" Style="{StaticResource AireTextBox}"
+                                             ToolTip="Optional if using drag/drop."/>
+                                    <Button Grid.Row="4" Grid.Column="2" x:Name="InputBrowseButton" Style="{StaticResource AireButton}"
+                                            Content="Browse" Margin="8,0,0,0"/>
+
+                                    <TextBlock Grid.Row="6" Grid.Column="0" Style="{StaticResource FieldLabel}" Text="Output Folder"/>
+                                    <TextBox Grid.Row="6" Grid.Column="1" x:Name="OutputFolderBox" Style="{StaticResource AireTextBox}"/>
+                                    <Button Grid.Row="6" Grid.Column="2" x:Name="OutputBrowseButton" Style="{StaticResource AireButton}"
+                                            Content="Browse" Margin="8,0,0,0"/>
+
+                                    <TextBlock Grid.Row="8" Grid.Column="0" Style="{StaticResource FieldLabel}" Text="Model"/>
+                                    <ComboBox  Grid.Row="8" Grid.Column="1" Grid.ColumnSpan="2" x:Name="ModelCombo"
+                                               Style="{StaticResource AireCombo}" Height="34"/>
+                                    <TextBlock Grid.Row="10" Grid.Column="0" Style="{StaticResource FieldLabel}" Text="Resolution"/>
+                                    <ComboBox  Grid.Row="10" Grid.Column="1" Grid.ColumnSpan="2" x:Name="SizeCombo"
+                                               Style="{StaticResource AireCombo}" Height="34"/>
+                                    <TextBlock Grid.Row="12" Grid.Column="0" Style="{StaticResource FieldLabel}" Text="Quality"/>
+                                    <ComboBox  Grid.Row="12" Grid.Column="1" Grid.ColumnSpan="2" x:Name="QualityCombo"
+                                               Style="{StaticResource AireCombo}" Height="34"/>
+                                    <TextBlock Grid.Row="14" Grid.Column="0" Style="{StaticResource FieldLabel}" Text="Theme"/>
+                                    <ComboBox  Grid.Row="14" Grid.Column="1" Grid.ColumnSpan="2" x:Name="ThemeCombo"
+                                               Style="{StaticResource AireCombo}" Height="34"/>
+                                </Grid>
+
+                                <StackPanel Orientation="Horizontal" Margin="0,10,0,0" HorizontalAlignment="Left">
+                                    <Button x:Name="ApiKeyHelpButton" Style="{StaticResource SmallLinkButton}"
+                                            Content="How do I get an API key?"/>
+                                    <Button x:Name="BillingButton" Style="{StaticResource SmallLinkButton}"
+                                            Content="Open OpenAI Billing" Margin="8,0,0,0"/>
+                                </StackPanel>
+                            </StackPanel>
+                        </Border>
+
+                        <Border Grid.Row="2" Style="{StaticResource Card}">
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="*"/>
+                                </Grid.RowDefinitions>
+
+                                <Grid Grid.Row="0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Style="{StaticResource SectionTitle}" Text="Prompt"
+                                               VerticalAlignment="Center"/>
+                                    <Button Grid.Column="1" x:Name="PopOutPromptButton" Style="{StaticResource SmallButton}"
+                                            Content="Pop Out"
+                                            ToolTip="Edit this prompt in a larger, resizable window."/>
+                                </Grid>
+
+                                <TextBlock Grid.Row="1" Style="{StaticResource SmallMuted}" Margin="0,4,0,8"
+                                           Text="This prompt is applied to every checked image in the queue."/>
+
+                                <!-- Saved prompts: pick one to load it below, or name what is in the box and Save it. -->
+                                <Grid Grid.Row="2" Margin="0,0,0,8">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" MinWidth="90"/>
+                                        <ColumnDefinition Width="6"/>
+                                        <ColumnDefinition Width="112"/>
+                                        <ColumnDefinition Width="6"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="6"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <ComboBox Grid.Column="0" x:Name="PromptPresetCombo" Style="{StaticResource AireCombo}"
+                                              Height="34" FontSize="13"
+                                              ToolTip="Load a saved prompt into the box below."/>
+                                    <TextBox Grid.Column="2" x:Name="PromptNameBox" Style="{StaticResource AireTextBox}" Padding="9,2"
+                                             Height="34" FontSize="13"
+                                             ToolTip="Name to save the prompt below under, e.g. Exterior dusk."/>
+                                    <Button Grid.Column="4" x:Name="SavePromptButton" Style="{StaticResource SmallButton}"
+                                            Content="Save" ToolTip="Save the prompt below under this name."/>
+                                    <Button Grid.Column="6" x:Name="DeletePromptButton" Style="{StaticResource SmallDangerButton}"
+                                            Content="Delete" ToolTip="Forget the selected saved prompt."/>
+                                </Grid>
+
+                                <!-- No MinHeight: this box is the star row and must be free to shrink with the window.
+                                     A minimum here pushes the card past the bottom of the column and clips it. The
+                                     Pop Out button is the answer to a short box, not a floor on its height. -->
+                                <TextBox Grid.Row="3" x:Name="PromptBox" Style="{StaticResource AireTextBox}"
+                                         TextWrapping="Wrap" AcceptsReturn="True"
+                                         VerticalScrollBarVisibility="Auto" VerticalContentAlignment="Top"/>
                             </Grid>
-
-                            <TextBlock Grid.Row="4" Grid.Column="0" Style="{StaticResource FieldLabel}" Text="Input Folder"/>
-                            <TextBox Grid.Row="4" Grid.Column="1" x:Name="InputFolderBox" Style="{StaticResource AireTextBox}"
-                                     ToolTip="Optional if using drag/drop."/>
-                            <Button Grid.Row="4" Grid.Column="2" x:Name="InputBrowseButton" Style="{StaticResource AireButton}"
-                                    Content="Browse" Margin="8,0,0,0"/>
-
-                            <TextBlock Grid.Row="6" Grid.Column="0" Style="{StaticResource FieldLabel}" Text="Output Folder"/>
-                            <TextBox Grid.Row="6" Grid.Column="1" x:Name="OutputFolderBox" Style="{StaticResource AireTextBox}"/>
-                            <Button Grid.Row="6" Grid.Column="2" x:Name="OutputBrowseButton" Style="{StaticResource AireButton}"
-                                    Content="Browse" Margin="8,0,0,0"/>
-
-                            <TextBlock Grid.Row="8" Grid.Column="0" Style="{StaticResource FieldLabel}" Text="Model"/>
-                            <ComboBox  Grid.Row="8" Grid.Column="1" Grid.ColumnSpan="2" x:Name="ModelCombo"
-                                       Style="{StaticResource AireCombo}" Height="34"/>
-                            <TextBlock Grid.Row="10" Grid.Column="0" Style="{StaticResource FieldLabel}" Text="Resolution"/>
-                            <ComboBox  Grid.Row="10" Grid.Column="1" Grid.ColumnSpan="2" x:Name="SizeCombo"
-                                       Style="{StaticResource AireCombo}" Height="34"/>
-                            <TextBlock Grid.Row="12" Grid.Column="0" Style="{StaticResource FieldLabel}" Text="Quality"/>
-                            <ComboBox  Grid.Row="12" Grid.Column="1" Grid.ColumnSpan="2" x:Name="QualityCombo"
-                                       Style="{StaticResource AireCombo}" Height="34"/>
-                            <TextBlock Grid.Row="14" Grid.Column="0" Style="{StaticResource FieldLabel}" Text="Theme"/>
-                            <ComboBox  Grid.Row="14" Grid.Column="1" Grid.ColumnSpan="2" x:Name="ThemeCombo"
-                                       Style="{StaticResource AireCombo}" Height="34"/>
-                        </Grid>
-
-                        <StackPanel Orientation="Horizontal" Margin="0,10,0,0" HorizontalAlignment="Left">
-                            <Button x:Name="ApiKeyHelpButton" Style="{StaticResource SmallLinkButton}"
-                                    Content="How do I get an API key?"/>
-                            <Button x:Name="BillingButton" Style="{StaticResource SmallLinkButton}"
-                                    Content="Open OpenAI Billing" Margin="8,0,0,0"/>
-                        </StackPanel>
-                    </StackPanel>
-                </Border>
-
-                <Border Grid.Row="2" Style="{StaticResource Card}">
-                    <Grid>
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="*"/>
-                        </Grid.RowDefinitions>
-
-                        <Grid Grid.Row="0">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*"/>
-                                <ColumnDefinition Width="Auto"/>
-                            </Grid.ColumnDefinitions>
-                            <TextBlock Grid.Column="0" Style="{StaticResource SectionTitle}" Text="Prompt"
-                                       VerticalAlignment="Center"/>
-                            <Button Grid.Column="1" x:Name="PopOutPromptButton" Style="{StaticResource SmallButton}"
-                                    Content="Pop Out"
-                                    ToolTip="Edit this prompt in a larger, resizable window."/>
-                        </Grid>
-
-                        <TextBlock Grid.Row="1" Style="{StaticResource SmallMuted}" Margin="0,4,0,8"
-                                   Text="This prompt is applied to every checked image in the queue."/>
-
-                        <!-- Saved prompts: pick one to load it below, or name what is in the box and Save it. -->
-                        <Grid Grid.Row="2" Margin="0,0,0,8">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*" MinWidth="90"/>
-                                <ColumnDefinition Width="6"/>
-                                <ColumnDefinition Width="112"/>
-                                <ColumnDefinition Width="6"/>
-                                <ColumnDefinition Width="Auto"/>
-                                <ColumnDefinition Width="6"/>
-                                <ColumnDefinition Width="Auto"/>
-                            </Grid.ColumnDefinitions>
-                            <ComboBox Grid.Column="0" x:Name="PromptPresetCombo" Style="{StaticResource AireCombo}"
-                                      Height="34" FontSize="13"
-                                      ToolTip="Load a saved prompt into the box below."/>
-                            <TextBox Grid.Column="2" x:Name="PromptNameBox" Style="{StaticResource AireTextBox}"
-                                     Height="34" FontSize="13"
-                                     ToolTip="Name to save the prompt below under, e.g. Exterior dusk."/>
-                            <Button Grid.Column="4" x:Name="SavePromptButton" Style="{StaticResource SmallButton}"
-                                    Content="Save" ToolTip="Save the prompt below under this name."/>
-                            <Button Grid.Column="6" x:Name="DeletePromptButton" Style="{StaticResource SmallDangerButton}"
-                                    Content="Delete" ToolTip="Forget the selected saved prompt."/>
-                        </Grid>
-
-                        <!-- No MinHeight: this box is the star row and must be free to shrink with the window.
-                             A minimum here pushes the card past the bottom of the column and clips it. The
-                             Pop Out button is the answer to a short box, not a floor on its height. -->
-                        <TextBox Grid.Row="3" x:Name="PromptBox" Style="{StaticResource AireTextBox}"
-                                 TextWrapping="Wrap" AcceptsReturn="True"
-                                 VerticalScrollBarVisibility="Auto" VerticalContentAlignment="Top"/>
+                        </Border>
                     </Grid>
-                </Border>
-            </Grid>
 
-            <!-- RIGHT: Image Queue + Processing Status -->
-            <Grid Grid.Column="2">
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="*"/>
-                    <RowDefinition Height="14"/>
-                    <RowDefinition Height="Auto"/>
-                </Grid.RowDefinitions>
-
-                <Border Grid.Row="0" Style="{StaticResource Card}">
-                    <Grid>
+                    <!-- RIGHT: Image Queue + Processing Status -->
+                    <Grid Grid.Column="2">
                         <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
                             <RowDefinition Height="*"/>
+                            <RowDefinition Height="14"/>
                             <RowDefinition Height="Auto"/>
                         </Grid.RowDefinitions>
 
-                        <Grid Grid.Row="0" Margin="0,0,0,4">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*"/>
-                                <ColumnDefinition Width="Auto"/>
-                                <ColumnDefinition Width="Auto"/>
-                            </Grid.ColumnDefinitions>
-                            <TextBlock Grid.Column="0" Style="{StaticResource SectionTitle}" Text="Image Queue" VerticalAlignment="Center"/>
-                            <Button Grid.Column="1" x:Name="ScanButton" Style="{StaticResource AireButton}"
-                                    Content="Scan Folder" Margin="0,0,8,0"/>
-                            <Button Grid.Column="2" x:Name="ProcessButton" Style="{StaticResource PrimaryButton}"
-                                    Content="Process Checked"/>
-                        </Grid>
-                        <TextBlock Grid.Row="1" Style="{StaticResource SmallMuted}" Margin="0,0,0,8"
-                                   Text="Drag images or folders here. Nothing runs until you click Process Checked and confirm."/>
+                        <Border Grid.Row="0" Style="{StaticResource Card}">
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="*"/>
+                                    <RowDefinition Height="Auto"/>
+                                </Grid.RowDefinitions>
 
-                        <ListBox Grid.Row="2" x:Name="QueueList" Style="{StaticResource AireList}"
-                                 ItemContainerStyle="{StaticResource AireListItem}"
-                                 ItemTemplate="{StaticResource QueueItemTemplate}"
-                                 AllowDrop="True"/>
+                                <Grid Grid.Row="0" Margin="0,0,0,4">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Style="{StaticResource SectionTitle}" Text="Image Queue" VerticalAlignment="Center"/>
+                                    <Button Grid.Column="1" x:Name="ScanButton" Style="{StaticResource AireButton}"
+                                            Content="Scan Folder" Margin="0,0,8,0"/>
+                                    <Button Grid.Column="2" x:Name="ProcessButton" Style="{StaticResource PrimaryButton}"
+                                            Content="Process Checked"/>
+                                </Grid>
+                                <TextBlock Grid.Row="1" Style="{StaticResource SmallMuted}" Margin="0,0,0,8"
+                                           Text="Drag images or folders here. Nothing runs until you click Process Checked and confirm."/>
 
-                        <StackPanel Grid.Row="3" Orientation="Horizontal" Margin="0,10,0,0">
-                            <Button x:Name="RemoveButton" Style="{StaticResource AireButton}" Content="Remove Checked" Margin="0,0,8,0"/>
-                            <Button x:Name="ClearButton" Style="{StaticResource DangerButton}" Content="Clear List" Margin="0,0,8,0"/>
-                            <Button x:Name="OpenOutputButton" Style="{StaticResource AireButton}" Content="Open Output Folder"/>
-                        </StackPanel>
+                                <ListBox Grid.Row="2" x:Name="QueueList" Style="{StaticResource AireList}"
+                                         ItemContainerStyle="{StaticResource AireListItem}"
+                                         ItemTemplate="{StaticResource QueueItemTemplate}"
+                                         AllowDrop="True"/>
+
+                                <StackPanel Grid.Row="3" Orientation="Horizontal" Margin="0,10,0,0">
+                                    <Button x:Name="RemoveButton" Style="{StaticResource AireButton}" Content="Remove Checked" Margin="0,0,8,0"/>
+                                    <Button x:Name="ClearButton" Style="{StaticResource DangerButton}" Content="Clear List" Margin="0,0,8,0"/>
+                                    <Button x:Name="OpenOutputButton" Style="{StaticResource AireButton}" Content="Open Output Folder"/>
+                                </StackPanel>
+                            </Grid>
+                        </Border>
+
+                        <Border Grid.Row="2" Style="{StaticResource Card}">
+                            <StackPanel>
+                                <Grid Margin="0,0,0,8">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Style="{StaticResource SectionTitle}"
+                                               Text="Processing Status" VerticalAlignment="Center"/>
+                                    <Button Grid.Column="1" x:Name="CancelButton" Style="{StaticResource DangerButton}"
+                                            Content="Cancel Batch" IsEnabled="False"/>
+                                </Grid>
+                                <ProgressBar x:Name="JobProgressBar" Style="{StaticResource AireProgress}" Minimum="0" Maximum="100"/>
+                                <TextBlock x:Name="ProgressLabel" Style="{StaticResource SmallMuted}" Margin="0,8,0,0"
+                                           Text="Ready." TextWrapping="Wrap"/>
+                            </StackPanel>
+                        </Border>
                     </Grid>
-                </Border>
+                </Grid>
+            </TabItem>
 
-                <Border Grid.Row="2" Style="{StaticResource Card}">
-                    <StackPanel>
-                        <Grid Margin="0,0,0,8">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*"/>
-                                <ColumnDefinition Width="Auto"/>
-                            </Grid.ColumnDefinitions>
-                            <TextBlock Grid.Column="0" Style="{StaticResource SectionTitle}"
-                                       Text="Processing Status" VerticalAlignment="Center"/>
-                            <Button Grid.Column="1" x:Name="CancelButton" Style="{StaticResource DangerButton}"
-                                    Content="Cancel Batch" IsEnabled="False"/>
-                        </Grid>
-                        <ProgressBar x:Name="JobProgressBar" Style="{StaticResource AireProgress}" Minimum="0" Maximum="100"/>
-                        <TextBlock x:Name="ProgressLabel" Style="{StaticResource SmallMuted}" Margin="0,8,0,0"
-                                   Text="Ready." TextWrapping="Wrap"/>
-                    </StackPanel>
-                </Border>
-            </Grid>
-        </Grid>
+            <!-- ============================ VIDEO ============================ -->
+            <TabItem x:Name="VideoTab" Header="Video">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="480" MinWidth="420"/>
+                        <ColumnDefinition Width="14"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+
+                    <!-- LEFT: Higgsfield settings + Motion prompt -->
+                    <Grid Grid.Column="0">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="10"/>
+                            <RowDefinition Height="*"/>
+                        </Grid.RowDefinitions>
+
+                        <Border Grid.Row="0" Style="{StaticResource Card}">
+                            <StackPanel>
+                                <TextBlock Style="{StaticResource SectionTitle}" Text="Video Settings — Higgsfield" Margin="0,0,0,8"/>
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="102"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="6"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="10"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="10"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="6"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="10"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="6"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="4"/>
+                                        <RowDefinition Height="Auto"/>
+                                    </Grid.RowDefinitions>
+
+                                    <!-- Higgsfield credentials are a PAIR, on one row so the prompt box below keeps its
+                                         height: the id is not secret (it is shown); the secret is masked. -->
+                                    <TextBlock Grid.Row="0" Grid.Column="0" Style="{StaticResource FieldLabel}" Text="Credentials" VerticalAlignment="Bottom" Margin="0,0,10,9"/>
+                                    <Grid Grid.Row="0" Grid.Column="1" Grid.ColumnSpan="2">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="6"/>
+                                            <ColumnDefinition Width="*"/>
+                                        </Grid.ColumnDefinitions>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                        </Grid.RowDefinitions>
+                                        <TextBlock Grid.Row="0" Grid.Column="0" Style="{StaticResource SmallMuted}" Text="Key ID" Margin="4,0,0,2"/>
+                                        <TextBlock Grid.Row="0" Grid.Column="2" Style="{StaticResource SmallMuted}" Text="Secret" Margin="4,0,0,2"/>
+                                        <TextBox Grid.Row="1" Grid.Column="0" x:Name="VideoKeyIdBox" Style="{StaticResource AireTextBox}"
+                                                 ToolTip="Key ID: the Higgsfield API key id from cloud.higgsfield.ai (not secret)."/>
+                                        <PasswordBox Grid.Row="1" Grid.Column="2" x:Name="VideoSecretBox" Style="{StaticResource AirePasswordBox}"
+                                                     ToolTip="Secret: the matching API key secret. Stored encrypted (Windows DPAPI)."/>
+                                    </Grid>
+
+                                    <TextBlock Grid.Row="2" Grid.Column="0" Style="{StaticResource FieldLabel}" Text="Saved Keys"/>
+                                    <Grid Grid.Row="2" Grid.Column="1" Grid.ColumnSpan="2">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" MinWidth="90"/>
+                                            <ColumnDefinition Width="6"/>
+                                            <ColumnDefinition Width="94"/>
+                                            <ColumnDefinition Width="6"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="6"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <ComboBox Grid.Column="0" x:Name="VideoKeyPresetCombo" Style="{StaticResource AireCombo}"
+                                                  Height="34" FontSize="13" ToolTip="Switch to a saved Higgsfield key pair."/>
+                                        <TextBox Grid.Column="2" x:Name="VideoKeyNameBox" Style="{StaticResource AireTextBox}" Padding="9,2"
+                                                 Height="34" FontSize="13" ToolTip="Name for the pair above, e.g. Studio."/>
+                                        <Button Grid.Column="4" x:Name="SaveVideoKeyButton" Style="{StaticResource SmallButton}"
+                                                Content="Save" ToolTip="Save the Key ID and Secret above under this name (encrypted)."/>
+                                        <Button Grid.Column="6" x:Name="DeleteVideoKeyButton" Style="{StaticResource SmallDangerButton}"
+                                                Content="Delete" ToolTip="Forget the selected saved pair."/>
+                                    </Grid>
+
+                                    <TextBlock Grid.Row="4" Grid.Column="0" Style="{StaticResource FieldLabel}" Text="Output Folder"/>
+                                    <TextBox Grid.Row="4" Grid.Column="1" x:Name="VideoOutputFolderBox" Style="{StaticResource AireTextBox}"
+                                             ToolTip="Where the .mp4 lands. Defaults to the Enhance output folder, so the clip sits beside its render."/>
+                                    <Button Grid.Row="4" Grid.Column="2" x:Name="VideoOutputBrowseButton" Style="{StaticResource AireButton}"
+                                            Content="Browse" Margin="8,0,0,0"/>
+
+                                    <TextBlock Grid.Row="6" Grid.Column="0" Style="{StaticResource FieldLabel}" Text="Model"/>
+                                    <ComboBox Grid.Row="6" Grid.Column="1" Grid.ColumnSpan="2" x:Name="VideoModelCombo"
+                                              Style="{StaticResource AireCombo}" Height="34"
+                                              ToolTip="From the model catalog (generated from Higgsfield's API spec). Only the Higgsfield DoP models take camera presets."/>
+
+                                    <!-- The three per-model parameters share one row: each is enabled only when the
+                                         selected model declares it, and lists exactly the values the spec allows. -->
+                                    <TextBlock Grid.Row="8" Grid.Column="0" Style="{StaticResource FieldLabel}" Text="Clip"/>
+                                    <Grid Grid.Row="8" Grid.Column="1" Grid.ColumnSpan="2">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="6"/>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="6"/>
+                                            <ColumnDefinition Width="*"/>
+                                        </Grid.ColumnDefinitions>
+                                        <ComboBox Grid.Column="0" x:Name="VideoDurationCombo" Style="{StaticResource AireCombo}" Height="34" FontSize="13"
+                                                  ToolTip="Duration. Clips are seconds long — this is a hero shot with motion, not a walkthrough."/>
+                                        <ComboBox Grid.Column="2" x:Name="VideoResolutionCombo" Style="{StaticResource AireCombo}" Height="34" FontSize="13"
+                                                  ToolTip="Output resolution. Nothing here produces more than 1080p; the 4K source still feeds detail in."/>
+                                        <ComboBox Grid.Column="4" x:Name="VideoAspectCombo" Style="{StaticResource AireCombo}" Height="34" FontSize="13"
+                                                  ToolTip="Output aspect ratio, where the model offers one. A render at another ratio is cropped or padded."/>
+                                    </Grid>
+
+                                    <TextBlock Grid.Row="10" Grid.Column="0" Style="{StaticResource FieldLabel}" Text="Camera 1"/>
+                                    <Grid Grid.Row="10" Grid.Column="1" Grid.ColumnSpan="2">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" MinWidth="120"/>
+                                            <ColumnDefinition Width="10"/>
+                                            <ColumnDefinition Width="110"/>
+                                            <ColumnDefinition Width="6"/>
+                                            <ColumnDefinition Width="34"/>
+                                        </Grid.ColumnDefinitions>
+                                        <ComboBox Grid.Column="0" x:Name="VideoMotion1Combo" Style="{StaticResource AireCombo}" Height="34" FontSize="13"
+                                                  ToolTip="Camera preset (Higgsfield DoP models only)."/>
+                                        <Slider Grid.Column="2" x:Name="VideoMotion1Slider" Style="{StaticResource AireSlider}" Value="0.6"
+                                                ToolTip="Preset strength, 0–1. Low strength = gentle motion = straighter walls."/>
+                                        <TextBlock Grid.Column="4" x:Name="VideoMotion1Value" Style="{StaticResource SmallMuted}"
+                                                   VerticalAlignment="Center" Text="0.60"/>
+                                    </Grid>
+                                    <TextBlock Grid.Row="12" Grid.Column="0" x:Name="VideoMotion2Label" Style="{StaticResource FieldLabel}" Text="Camera 2"/>
+                                    <Grid Grid.Row="12" Grid.Column="1" Grid.ColumnSpan="2">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" MinWidth="120"/>
+                                            <ColumnDefinition Width="10"/>
+                                            <ColumnDefinition Width="110"/>
+                                            <ColumnDefinition Width="6"/>
+                                            <ColumnDefinition Width="34"/>
+                                        </Grid.ColumnDefinitions>
+                                        <ComboBox Grid.Column="0" x:Name="VideoMotion2Combo" Style="{StaticResource AireCombo}" Height="34" FontSize="13"
+                                                  ToolTip="Optional second preset — Higgsfield stacks at most two."/>
+                                        <Slider Grid.Column="2" x:Name="VideoMotion2Slider" Style="{StaticResource AireSlider}" Value="0.6"/>
+                                        <TextBlock Grid.Column="4" x:Name="VideoMotion2Value" Style="{StaticResource SmallMuted}"
+                                                   VerticalAlignment="Center" Text="0.60"/>
+                                    </Grid>
+                                    <TextBlock Grid.Row="14" Grid.Column="1" Grid.ColumnSpan="2" x:Name="VideoMotionNote"
+                                               Style="{StaticResource SmallMuted}"/>
+                                </Grid>
+
+                                <StackPanel Orientation="Horizontal" Margin="0,10,0,0" HorizontalAlignment="Left">
+                                    <Button x:Name="VideoKeyHelpButton" Style="{StaticResource SmallLinkButton}"
+                                            Content="How do I get a key?"/>
+                                    <Button x:Name="VideoCloudButton" Style="{StaticResource SmallLinkButton}"
+                                            Content="Higgsfield Cloud" Margin="8,0,0,0"/>
+                                    <Button x:Name="LoadPresetsButton" Style="{StaticResource SmallButton}"
+                                            Content="Load Presets" Margin="8,0,0,0"
+                                            ToolTip="Fetch the camera preset list from your Higgsfield account (free; uses the key above)."/>
+                                </StackPanel>
+                            </StackPanel>
+                        </Border>
+
+                        <Border Grid.Row="2" Style="{StaticResource Card}">
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="*"/>
+                                </Grid.RowDefinitions>
+                                <Grid Grid.Row="0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Style="{StaticResource SectionTitle}" Text="Motion Prompt" VerticalAlignment="Center"/>
+                                    <Button Grid.Column="1" x:Name="PopOutVideoPromptButton" Style="{StaticResource SmallButton}"
+                                            Content="Pop Out" ToolTip="Edit this prompt in a larger, resizable window."/>
+                                </Grid>
+                                <TextBlock Grid.Row="1" Style="{StaticResource SmallMuted}" Margin="0,4,0,8"
+                                           Text="Describe the motion, not the building — a slow push-in, a drift right, light turning to dusk."/>
+                                <Grid Grid.Row="2" Margin="0,0,0,8">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" MinWidth="90"/>
+                                        <ColumnDefinition Width="6"/>
+                                        <ColumnDefinition Width="112"/>
+                                        <ColumnDefinition Width="6"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="6"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <ComboBox Grid.Column="0" x:Name="VideoPromptPresetCombo" Style="{StaticResource AireCombo}"
+                                              Height="34" FontSize="13" ToolTip="Load a saved motion prompt into the box below."/>
+                                    <TextBox Grid.Column="2" x:Name="VideoPromptNameBox" Style="{StaticResource AireTextBox}" Padding="9,2"
+                                             Height="34" FontSize="13" ToolTip="Name to save the prompt below under, e.g. Slow push-in."/>
+                                    <Button Grid.Column="4" x:Name="SaveVideoPromptButton" Style="{StaticResource SmallButton}"
+                                            Content="Save" ToolTip="Save the prompt below under this name."/>
+                                    <Button Grid.Column="6" x:Name="DeleteVideoPromptButton" Style="{StaticResource SmallDangerButton}"
+                                            Content="Delete" ToolTip="Forget the selected saved prompt."/>
+                                </Grid>
+                                <!-- Star row, no MinHeight — same reason as the Enhance prompt box. -->
+                                <TextBox Grid.Row="3" x:Name="VideoPromptBox" Style="{StaticResource AireTextBox}"
+                                         TextWrapping="Wrap" AcceptsReturn="True"
+                                         VerticalScrollBarVisibility="Auto" VerticalContentAlignment="Top"/>
+                            </Grid>
+                        </Border>
+                    </Grid>
+
+                    <!-- RIGHT: Source render + Generate -->
+                    <Grid Grid.Column="2">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="*"/>
+                            <RowDefinition Height="14"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+
+                        <Border Grid.Row="0" Style="{StaticResource Card}">
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="*"/>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                </Grid.RowDefinitions>
+                                <Grid Grid.Row="0" Margin="0,0,0,4">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Style="{StaticResource SectionTitle}" Text="Source Render" VerticalAlignment="Center"/>
+                                    <Button Grid.Column="1" x:Name="VideoBrowseImageButton" Style="{StaticResource AireButton}"
+                                            Content="Browse Image" Margin="0,0,8,0"/>
+                                    <Button Grid.Column="2" x:Name="UseCheckedRenderButton" Style="{StaticResource AireButton}"
+                                            Content="Use Checked Render"
+                                            ToolTip="Take the render ticked on the Enhance tab — its _enhanced.png output if it has one."/>
+                                </Grid>
+                                <TextBlock Grid.Row="1" Style="{StaticResource SmallMuted}" Margin="0,0,0,8"
+                                           Text="Drop a render here, or take the checked image from the Enhance tab. Send the enhanced 4K output as-is: the clip comes back at 1080p at most, but the source's detail still counts."/>
+
+                                <!-- The thumbnail sits in a list-coloured, rounded drop zone. The full-size bitmap is
+                                     never decoded for display; only the bytes are read, for upload. -->
+                                <Border Grid.Row="2" x:Name="VideoDropZone" Background="{DynamicResource ListBg}"
+                                        BorderBrush="{DynamicResource InputBorder}" BorderThickness="1" CornerRadius="14"
+                                        AllowDrop="True" Padding="8">
+                                    <Grid>
+                                        <Image x:Name="VideoThumbnail" Stretch="Uniform" StretchDirection="DownOnly"
+                                               HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                        <TextBlock x:Name="VideoDropHint" Style="{StaticResource SmallMuted}" FontSize="14"
+                                                   HorizontalAlignment="Center" VerticalAlignment="Center" TextAlignment="Center"
+                                                   Text="Drop a render here"/>
+                                    </Grid>
+                                </Border>
+
+                                <TextBlock Grid.Row="3" x:Name="VideoSourceLabel" Style="{StaticResource SmallMuted}" Margin="0,8,0,0"
+                                           Text="No render selected."/>
+                                <TextBlock Grid.Row="4" x:Name="VideoAspectWarning" Style="{StaticResource WarningLabel}" Margin="0,4,0,0"
+                                           Visibility="Collapsed"/>
+                            </Grid>
+                        </Border>
+
+                        <Border Grid.Row="2" Style="{StaticResource Card}">
+                            <StackPanel>
+                                <Grid Margin="0,0,0,8">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                        <TextBlock x:Name="VideoCostLabel" Style="{StaticResource CostLabel}" FontSize="17"
+                                                   Text="Estimated clip cost: —"/>
+                                        <TextBlock x:Name="VideoCostNote" Style="{StaticResource SmallMuted}" Visibility="Collapsed"/>
+                                    </StackPanel>
+                                    <Button Grid.Column="1" x:Name="RefreshEstimateButton" Style="{StaticResource AireButton}"
+                                            Content="Refresh Estimate" Margin="8,0,8,0"
+                                            ToolTip="Ask Higgsfield again for the cost of exactly this request (free)."/>
+                                    <Button Grid.Column="2" x:Name="GenerateButton" Style="{StaticResource PrimaryButton}"
+                                            Content="Generate Clip" Margin="0,0,8,0"/>
+                                    <Button Grid.Column="3" x:Name="VideoCancelButton" Style="{StaticResource DangerButton}"
+                                            Content="Cancel" IsEnabled="False"
+                                            ToolTip="Live only while uploading or queued: Higgsfield cannot stop a clip once generation has started."/>
+                                </Grid>
+                                <ProgressBar x:Name="VideoProgressBar" Style="{StaticResource AireProgress}" Minimum="0" Maximum="100"/>
+                                <TextBlock x:Name="VideoStatusLabel" Style="{StaticResource SmallMuted}" Margin="0,8,0,0"
+                                           Text="Ready. Nothing runs until you click Generate Clip and confirm the cost." TextWrapping="Wrap"/>
+                                <Grid x:Name="VideoResultPanel" Margin="0,10,0,0" Visibility="Collapsed">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" x:Name="VideoResultLabel" Style="{StaticResource SmallMuted}"
+                                               Foreground="{DynamicResource TextPrimary}" VerticalAlignment="Center"/>
+                                    <Button Grid.Column="1" x:Name="VideoOpenFolderButton" Style="{StaticResource AireButton}"
+                                            Content="Open Folder" Margin="8,0,8,0"/>
+                                    <Button Grid.Column="2" x:Name="VideoPlayButton" Style="{StaticResource AireButton}"
+                                            Content="Play" ToolTip="Opens the clip in your default video player."/>
+                                </Grid>
+                            </StackPanel>
+                        </Border>
+                    </Grid>
+                </Grid>
+            </TabItem>
+        </TabControl>
 
         <!-- API-key instructions. An in-window overlay rather than a second Window: every colour here is a
              DynamicResource that ApplyTheme rewrites on THIS window's Resources, so a separate window would
@@ -721,6 +1157,56 @@
                             <TextBlock Style="{StaticResource FieldLabel}" Text="Keep it private"/>
                             <TextBlock Style="{StaticResource SmallMuted}" TextWrapping="Wrap" Margin="0,2,0,0"
                                        Text="Anyone with your key can spend your credit. Don't share it, email it, or commit it to a repository. If it is ever exposed, revoke it on the same API keys page and create a replacement. You can also cap spending there with a monthly budget limit."/>
+                        </StackPanel>
+                    </ScrollViewer>
+                </DockPanel>
+            </Border>
+        </Border>
+
+        <!-- Same pattern for the Higgsfield pair. -->
+        <Border x:Name="VideoKeyHelpOverlay" Grid.Row="0" Grid.RowSpan="2" Margin="-22"
+                Background="#B0000000" Visibility="Collapsed" Panel.ZIndex="10">
+            <Border Style="{StaticResource Card}" MaxWidth="660" MaxHeight="600"
+                    VerticalAlignment="Center" HorizontalAlignment="Center" Margin="24">
+                <DockPanel>
+                    <TextBlock DockPanel.Dock="Top" Style="{StaticResource TitleLabel}"
+                               Text="Getting a Higgsfield API key"/>
+                    <TextBlock DockPanel.Dock="Top" Style="{StaticResource SubtitleLabel}" Margin="0,4,0,12"
+                               TextWrapping="Wrap"
+                               Text="The Video tab sends one render to Higgsfield, which routes it to the video model you pick (their own DoP models, Kling, Veo, Seedance, Hailuo, Sora, Wan). It needs your own Higgsfield credentials — a Key ID and a Secret — stored encrypted on this machine (Windows DPAPI, current user) and sent nowhere but Higgsfield."/>
+
+                    <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Margin="0,14,0,0">
+                        <Button x:Name="VideoKeyHelpOpenButton" Style="{StaticResource PrimaryButton}"
+                                Content="Open Higgsfield Cloud"/>
+                        <Button x:Name="VideoKeyHelpCloseButton" Style="{StaticResource AireButton}"
+                                Content="Close" Margin="8,0,0,0"/>
+                    </StackPanel>
+
+                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                        <StackPanel>
+                            <TextBlock Style="{StaticResource FieldLabel}" Text="1. Create a Higgsfield account and open Higgsfield Cloud"/>
+                            <TextBlock Style="{StaticResource SmallMuted}" TextWrapping="Wrap" Margin="0,2,0,10"
+                                       Text="cloud.higgsfield.ai is the API side of Higgsfield (the button below opens it). A consumer higgsfield.ai subscription is not the same thing as API credits."/>
+
+                            <TextBlock Style="{StaticResource FieldLabel}" Text="2. Add credits"/>
+                            <TextBlock Style="{StaticResource SmallMuted}" TextWrapping="Wrap" Margin="0,2,0,10"
+                                       Text="Generation is paid per clip in credits. Failed and moderated requests are not charged, and a request cancelled while still queued is refunded. AIRE shows Higgsfield's own cost for your exact request before anything is sent."/>
+
+                            <TextBlock Style="{StaticResource FieldLabel}" Text="3. Create an API key"/>
+                            <TextBlock Style="{StaticResource SmallMuted}" TextWrapping="Wrap" Margin="0,2,0,10"
+                                       Text="In Higgsfield Cloud, create an API key. You get two values: a Key ID and a Secret. Copy both — the secret is shown once."/>
+
+                            <TextBlock Style="{StaticResource FieldLabel}" Text="4. Paste both into AIRE and save them"/>
+                            <TextBlock Style="{StaticResource SmallMuted}" TextWrapping="Wrap" Margin="0,2,0,10"
+                                       Text="Put the Key ID and the Secret in the two boxes, give the pair a name (Studio, Personal) and click Save. It is encrypted immediately and remembered on this machine."/>
+
+                            <TextBlock Style="{StaticResource FieldLabel}" Text="Which models can I use?"/>
+                            <TextBlock Style="{StaticResource SmallMuted}" TextWrapping="Wrap" Margin="0,2,0,10"
+                                       Text="Model availability depends on your Higgsfield plan. If a model is not on your plan, the cost line says so as soon as you pick it — before Generate — because the estimate call is refused for that model."/>
+
+                            <TextBlock Style="{StaticResource FieldLabel}" Text="Keep it private"/>
+                            <TextBlock Style="{StaticResource SmallMuted}" TextWrapping="Wrap" Margin="0,2,0,0"
+                                       Text="Anyone with the pair can spend your credits. Don't share it, email it, or commit it to a repository. If it is ever exposed, delete the key in Higgsfield Cloud and create a replacement."/>
                         </StackPanel>
                     </ScrollViewer>
                 </DockPanel>

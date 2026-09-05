@@ -15,7 +15,7 @@ enhance your renders with AI.**
 
 [![Latest release](https://img.shields.io/github/v/release/Dave5264/transom-revit?label=latest%20release&color=2ea44f&logo=github)](https://github.com/Dave5264/transom-revit/releases/latest)
 
-### ⬇ [Download the installer](https://github.com/Dave5264/transom-revit/releases/download/v1.9.14/Transom-1.9.14-SingleUser.msi)
+### ⬇ [Download the installer](https://github.com/Dave5264/transom-revit/releases/download/v1.9.15/Transom-1.9.15-SingleUser.msi)
 
 **One click, no admin rights** — installs into your per-user Revit add-ins folder.
 Double-click the `.msi`, then start Revit. Supports **Revit 2025, 2026 & 2027**. Free.
@@ -110,11 +110,12 @@ permission prompts steal focus from Revit and UI-assist clicks silently miss.
 
 ### AI render enhancement — AIRE
 
-**AI Render Enhancer** has its own ribbon button and batch-enhances architectural renders through OpenAI's
-image models — photoreal grass, planting, lighting and concrete texture, with the camera angle, perspective,
-geometry, mullions, trim lines and overall composition held exactly as Revit produced them. It works on image
-**files**, not on the model, so it needs no open project — and it runs without Revit at all: tick **AIRE
-standalone app** when installing and the same window gets a Start Menu shortcut of its own.
+**AI Render Enhancer** has its own ribbon button and two tabs. **Enhance** batch-improves architectural
+renders through OpenAI's image models — photoreal grass, planting, lighting and concrete texture, with the
+camera angle, perspective, geometry, mullions, trim lines and overall composition held exactly as Revit
+produced them. **Video** takes one finished render and turns it into a short generated clip ([below](#video--one-render-one-clip)).
+Both work on image **files**, not on the model, so they need no open project — and the window runs without
+Revit at all: tick **AIRE standalone app** when installing and it gets a Start Menu shortcut of its own.
 
 <table>
 <tr><td><img src="docs/images/aire.jpg" alt="Transom AI Render Enhancer window: an API key field with a Saved Keys dropdown, input and output folder pickers, model/resolution/quality selectors, a Prompt card with a saved-prompt dropdown and a Pop Out button, a checkable queue of render images with their resolutions, the estimated cost for the checked images, and a progress bar" width="100%"></td></tr>
@@ -140,16 +141,53 @@ standalone app** when installing and the same window gets a Start Menu shortcut 
   argument — the bridge reads it from your encrypted store, so it never passes through Claude or the socket.
   One batch runs at a time no matter which way it was started.
 
-*AIRE is far newer than the schedule round-trip and has had much less mileage. Treat early batches as a
-trial, and check the first cost estimates against your real OpenAI usage.*
+#### Video — one render, one clip
 
-> **Status:** v1.9.14 (Revit 2025/2026/2027) — AIRE gets a **reusable prompt library, saved API keys, and a
-> pop-out prompt editor.** Name a prompt and save it, then pick it back out of a dropdown on any later run
-> instead of retyping or hunting for the wording that worked. Keys work the same way: save one per OpenAI
-> account and switch between them from a dropdown, each encrypted separately for your Windows user. And the
-> prompt box, which shares the left column with the settings and was never big enough for a long prompt, now
-> pops out into a resizable window that edits the same text live — no OK/Cancel, no copy-back. Saved prompts
-> and keys are written to disk the moment you save them, rather than waiting for the window to close.
+The **Video** tab takes a single render — ideally the 4K `_enhanced.png` the Enhance tab just made — and
+turns it into a few seconds of generated motion through [Higgsfield](https://cloud.higgsfield.ai), which
+routes to its own DoP camera models, Kling, Veo, Seedance, Hailuo, Sora and Wan behind one credential. It is
+a hero shot with motion, not a walkthrough: clips run 2–12 seconds and top out at 1080p.
+
+<table>
+<tr><td><img src="docs/images/aire-video.jpg" alt="Transom AI Render Enhancer window on the Video tab: Key ID and Secret fields with a Saved Keys dropdown, an output folder picker, a model dropdown showing Higgsfield DoP Standard, clip duration/resolution/aspect dropdowns, two camera-preset dropdowns with strength sliders, a Motion Prompt card with its own saved prompts and a Pop Out button, a large source-render thumbnail with its filename, size and aspect ratio, and a Generate Clip button beside the estimated clip cost" width="100%"></td></tr>
+<tr><td><em><b>Video</b> — one render, one model, only the settings that model accepts, and Higgsfield's own price for exactly that request before anything is sent.</em></td></tr>
+</table>
+
+- **The price is the vendor's, not a guess.** The cost on the tab is Higgsfield's estimate for exactly the
+  request that would be sent, refreshed whenever a setting changes; **Generate Clip** is refused outright if
+  that estimate cannot be obtained. The confirmation names the model, duration, resolution, aspect ratio,
+  camera preset, source file, destination folder and the exact credits and dollars.
+- **Every setting comes from the model.** The 21 image-to-video models are generated from Higgsfield's
+  published API spec into a catalog (`%AppData%\Transom\higgsfield-models.json` overrides the built-in one),
+  so each offers only the durations, resolutions and aspect ratios it accepts; a setting a model lacks is shown
+  as such, not hidden. Camera presets — up to two, each with a strength slider — appear only on the Higgsfield
+  DoP models, the only ones that take them; **Load Presets** reads the named list from your account. A render
+  whose aspect ratio a model cannot produce gets a warning before Generate, not a silent crop after.
+- **Cancel means what Higgsfield means by it.** A queued request can be cancelled and is refunded; once
+  generation starts it will finish and be charged, so **Cancel** is live only while the clip is uploading or
+  queued, and says why otherwise. Long runs — a 10 s Master-tier clip can take eight minutes — show elapsed
+  time and when the service was last polled.
+- **The clip lands beside the render.** `<name>_clip.mp4` in the output folder (it defaults to the Enhance
+  output folder), plus a `logs\video_log_<timestamp>.csv` row with the request id, the estimate and what was
+  charged. Higgsfield keeps outputs for about a week; AIRE downloads immediately and never just records a URL.
+- **Same guard rails as Enhance.** One paid job at a time across Revit and the standalone app — an image
+  batch and a clip can never run together. Credentials are a **Key ID** and **Secret** pair, encrypted per
+  Windows user like the OpenAI key, with their own **Saved Keys**; the tab keeps its own saved prompts and
+  pop-out editor. Claude has no video tool over the bridge; Higgsfield ships its own MCP server for that.
+
+*AIRE is far newer than the schedule round-trip and has had much less mileage. Treat early batches and clips
+as a trial, and check the first costs against your real OpenAI and Higgsfield usage.*
+
+> **Status:** v1.9.15 (Revit 2025/2026/2027) — AIRE gets a **Video tab**: one finished render in, one short
+> generated clip out, through Higgsfield's access layer to their DoP camera models, Kling, Veo, Seedance,
+> Hailuo, Sora and Wan. The price shown is the vendor's own estimate for exactly that request, every setting
+> comes from the model's published API schema, cancel is offered only while it would still be refunded, and
+> the clip is downloaded beside its render with a CSV row for the charge. Same one-job-at-a-time lock as the
+> image batches. Dropdowns a model disables now stay legible in the Dark theme.
+>
+> v1.9.14 gave AIRE a **reusable prompt library, saved API keys, and a pop-out prompt editor** — name a prompt
+> and save it, save one key per OpenAI account and switch from a dropdown, and edit the prompt in a resizable
+> window that follows the theme. Saved prompts and keys are written to disk the moment you save them.
 >
 > v1.9.13 gave the standalone AIRE shortcut its own icon, generated at
 > 16 through 256 px from the same master as the ribbon art, so the Start Menu, taskbar and Alt-Tab each show a
@@ -264,7 +302,8 @@ installer that silently omits a whole Revit version.
 | Path | Description |
 |------|-------------|
 | `source/Transom/` | the add-in (commands, views, view-models, core logic) |
-| `source/Transom/Core/Aire/` | the AIRE engine, batch runner and encrypted settings (Revit-free — files + HTTPS) |
+| `source/Transom.Aire/` | AIRE: the OpenAI engine, the Higgsfield client and generated model catalog, both job runners, encrypted settings and the window (Revit-free — files + HTTPS) |
+| `source/Transom.Aire.App/` | the standalone AIRE host (same window, its own process) |
 | `build/`, `install/` | ModularPipelines build + WiX installer |
 | `branding/` | ribbon icon + generator |
 | `docs/` | `design-notes/` (legend copy source of truth + Revit-API research notes), `parity-tool-status.md` (bridge-tool review state), `images/` (screenshots on this page) |

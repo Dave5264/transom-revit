@@ -15,4 +15,11 @@
         <LangVersion>latest</LangVersion>
     </PropertyGroup>
 
+    <ItemGroup>
+        <!-- The Video tab's model catalog, generated from Higgsfield's OpenAPI spec by Catalog/generate_catalog.py.
+             Embedded so the dropdown can never be empty; %AppData%\Transom\higgsfield-models.json overrides it. -->
+        <EmbeddedResource Include="Catalog\higgsfield-models.json" LogicalName="Transom.Aire.higgsfield-models.json"/>
+        <None Include="Catalog\generate_catalog.py"/>
+    </ItemGroup>
+
 </Project>

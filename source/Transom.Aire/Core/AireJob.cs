@@ -23,15 +23,60 @@ public sealed class AireResult
 }
 
 /// <summary>
+///     What every AIRE job has in common, whichever provider it spends against: an id, a status string the
+///     UI and bridge poll, a cancel token, a log file, and a progress event. <see cref="AireJobManager"/>
+///     tracks jobs by this type so an image batch and a video clip can never run at the same time — the
+///     spend lock is one lock, not one per provider.
+/// </summary>
+public abstract class AireJobBase
+{
+    public string Id { get; } = DateTime.Now.ToString("yyyyMMdd_HHmmss") + "_" + Guid.NewGuid().ToString("N")[..6];
+
+    /// <summary>"enhance" (OpenAI image batch) or "video" (Higgsfield clip).</summary>
+    public abstract string Kind { get; }
+
+    /// <summary>One clause for busy messages: "enhancing images (2/8 done)".</summary>
+    public abstract string Summary { get; }
+
+    public string Status { get; protected set; } = "queued";
+    public abstract bool IsFinished { get; }
+    public string LogFile { get; protected set; } = "";
+    public string Error { get; protected set; } = "";
+    public double TotalTimeSeconds { get; protected set; }
+
+    protected readonly CancellationTokenSource Cts = new();
+
+    public virtual void Cancel() => Cts.Cancel();
+
+    /// <summary>True once a cancel has been requested — the run may still be finishing its current step.</summary>
+    public bool CancelRequested => Cts.IsCancellationRequested;
+
+    /// <summary>Raised after every state change, on a background thread — UI must marshal to its dispatcher.</summary>
+    public event Action<AireJobBase>? Progress;
+
+    protected void Notify()
+    {
+        try { Progress?.Invoke(this); } catch { /* observers must not kill the run */ }
+    }
+
+    protected static string Csv(string s)
+    {
+        if (string.IsNullOrEmpty(s)) return "";
+        return s.Contains(',') || s.Contains('"') || s.Contains('\n') || s.Contains('\r')
+            ? "\"" + s.Replace("\"", "\"\"") + "\""
+            : s;
+    }
+}
+
+/// <summary>
 ///     A batch-enhancement run: processes the queued images sequentially through
 ///     <see cref="AireEngine.EditImageAsync"/>, writes "&lt;stem&gt;_enhanced.png" outputs and a CSV log
 ///     (output\logs\enhancement_log_yyyyMMdd_HHmmss.csv), and exposes pollable progress. Runs entirely on
 ///     background threads — started by the AIRE window or the bridge's aire_enhance tool, and polled by
 ///     aire_job_status, which is what keeps every bridge request far under its 30-second cap.
 /// </summary>
-public sealed class AireJob
+public sealed class AireJob : AireJobBase
 {
-    public string Id { get; } = DateTime.Now.ToString("yyyyMMdd_HHmmss") + "_" + Guid.NewGuid().ToString("N")[..6];
     public IReadOnlyList<string> InputFiles { get; }
     public string OutputFolder { get; }
     public string Prompt { get; }
@@ -40,23 +85,16 @@ public sealed class AireJob
     public string Quality { get; }
 
     // Volatile snapshot state — written by the run loop, read by the UI dispatcher and bridge pollers.
-    public string Status { get; private set; } = "queued";   // queued | running | completed | failed
+    // Status: queued | running | completed | failed
     public int Done { get; private set; }
     public int Total => InputFiles.Count;
     public string CurrentFile { get; private set; } = "";
     public int SuccessCount { get; private set; }
     public int FailureCount { get; private set; }
-    public double TotalTimeSeconds { get; private set; }
     public double EstimatedCostUsd { get; private set; }
-    public string LogFile { get; private set; } = "";
-    public string Error { get; private set; } = "";
 
     private readonly List<AireResult> _results = new();
     private readonly object _gate = new();
-    private readonly CancellationTokenSource _cts = new();
-
-    /// <summary>Raised after every state change, on a background thread — UI must marshal to its dispatcher.</summary>
-    public event Action<AireJob>? Progress;
 
     public AireJob(IEnumerable<string> inputFiles, string outputFolder, string prompt,
         string model, string size, string quality)
@@ -69,14 +107,12 @@ public sealed class AireJob
         Quality = quality;
     }
 
+    public override string Kind => "enhance";
+    public override string Summary => $"enhancing images ({Done}/{Total} done)";
+
     public IReadOnlyList<AireResult> Results { get { lock (_gate) return _results.ToList(); } }
 
-    public bool IsFinished => Status is "completed" or "failed";
-
-    public void Cancel() => _cts.Cancel();
-
-    /// <summary>True once a cancel has been requested — the run may still be finishing its current image.</summary>
-    public bool CancelRequested => _cts.IsCancellationRequested;
+    public override bool IsFinished => Status is "completed" or "failed";
 
     /// <summary>Starts the run on the thread pool. The api key stays inside the closure — never on job state.</summary>
     internal Task Start(string apiKey) => Task.Run(() => RunAsync(apiKey));
@@ -101,7 +137,7 @@ public sealed class AireJob
                 // Break, don't throw: an exception here escapes to the outer catch and skips WriteCsv,
                 // losing the log for images already generated and billed. Cancelling before the first
                 // image hit that path every time — rare from the bridge, easy to hit with a Cancel button.
-                if (_cts.Token.IsCancellationRequested) break;
+                if (Cts.Token.IsCancellationRequested) break;
                 var inputPath = InputFiles[i];
                 CurrentFile = Path.GetFileName(inputPath);
                 Notify();
@@ -117,7 +153,7 @@ public sealed class AireJob
                     var outputPath = Path.Combine(OutputFolder,
                         Path.GetFileNameWithoutExtension(inputPath) + "_enhanced." + AireEngine.OutputFormat);
 
-                    var png = await AireEngine.EditImageAsync(apiKey, Model, inputPath, Prompt, Size, Quality, _cts.Token)
+                    var png = await AireEngine.EditImageAsync(apiKey, Model, inputPath, Prompt, Size, Quality, Cts.Token)
                         .ConfigureAwait(false);
                     await File.WriteAllBytesAsync(outputPath, png, CancellationToken.None).ConfigureAwait(false);
 
@@ -145,7 +181,7 @@ public sealed class AireJob
                 Done = i + 1;
                 Notify();
 
-                if (_cts.Token.IsCancellationRequested) break;
+                if (Cts.Token.IsCancellationRequested) break;
             }
 
             WriteCsv(logPath);
@@ -177,30 +213,18 @@ public sealed class AireJob
                     Csv(r.ErrorMessage)));
         File.WriteAllText(path, sb.ToString(), new UTF8Encoding(false));
     }
-
-    private static string Csv(string s)
-    {
-        if (string.IsNullOrEmpty(s)) return "";
-        return s.Contains(',') || s.Contains('"') || s.Contains('\n') || s.Contains('\r')
-            ? "\"" + s.Replace("\"", "\"\"") + "\""
-            : s;
-    }
-
-    private void Notify()
-    {
-        try { Progress?.Invoke(this); } catch { /* observers must not kill the run */ }
-    }
 }
 
 /// <summary>
 ///     Registry of AIRE jobs, shared by the WPF window and the bridge tools. One job runs at a time —
-///     a second start while one is running is refused (both entry points funnel through here, so the UI
-///     and Claude can't double-spend concurrently). Finished jobs are kept for status polling.
+///     a second start while one is running is refused, whichever kind either is (both entry points and
+///     both providers funnel through here, so the UI and Claude can't double-spend concurrently, and an
+///     image batch and a video clip can't run together). Finished jobs are kept for status polling.
 /// </summary>
 public static class AireJobManager
 {
     private static readonly object Gate = new();
-    private static readonly List<AireJob> Jobs = new();
+    private static readonly List<AireJobBase> Jobs = new();
 
     /// <summary>
     ///     Cross-process spend guard. <see cref="Gate"/> only stops the AIRE window and the Claude bridge
@@ -284,41 +308,78 @@ public static class AireJobManager
         _spendLock = null;
     }
 
-    /// <summary>The most recently started job, or null.</summary>
-    public static AireJob? Latest { get { lock (Gate) return Jobs.LastOrDefault(); } }
+    /// <summary>The most recently started image batch, or null. Image jobs only — this is the bridge's
+    /// view, and aire_job_status reports batch fields a video clip does not have.</summary>
+    public static AireJob? Latest { get { lock (Gate) return Jobs.OfType<AireJob>().LastOrDefault(); } }
 
-    public static AireJob? Find(string id) { lock (Gate) return Jobs.FirstOrDefault(j => j.Id == id); }
+    public static AireJob? Find(string id) { lock (Gate) return Jobs.OfType<AireJob>().FirstOrDefault(j => j.Id == id); }
 
-    public static AireJob? RunningJob { get { lock (Gate) return Jobs.FirstOrDefault(j => !j.IsFinished); } }
+    /// <summary>The most recently started video clip, or null.</summary>
+    public static AireVideoJob? LatestVideo { get { lock (Gate) return Jobs.OfType<AireVideoJob>().LastOrDefault(); } }
 
-    /// <summary>Creates and starts a job. Returns null (with <paramref name="error"/>) when refused.</summary>
+    /// <summary>Whatever is running in this process right now — an image batch or a video clip — or null.</summary>
+    public static AireJobBase? RunningJob { get { lock (Gate) return Jobs.FirstOrDefault(j => !j.IsFinished); } }
+
+    /// <summary>
+    ///     Why a new job would be refused right now, in words, or null when AIRE is free. Lets the window say
+    ///     "AIRE is busy" BEFORE showing a cost confirmation, rather than after the user has said yes. This is
+    ///     a preview: <see cref="Start"/> / <see cref="StartVideo"/> still make the binding check.
+    /// </summary>
+    public static string? BusyReason()
+    {
+        lock (Gate)
+        {
+            var running = Jobs.FirstOrDefault(j => !j.IsFinished);
+            if (running != null) return InProcessBusyMessage(running);
+            if (_spendLock != null) return null; // we hold it, so nothing else can
+            if (!TryAcquireSpendLock(out var holder)) return CrossProcessBusyMessage(holder);
+            ReleaseSpendLock();
+            return null;
+        }
+    }
+
+    private static string InProcessBusyMessage(AireJobBase running) =>
+        $"An AIRE job is already running — {running.Summary} (job_id {running.Id}). "
+        + "Wait for it to finish or cancel it first.";
+
+    private static string CrossProcessBusyMessage(string holder) =>
+        $"An AIRE job is already running — {holder}. Wait for it to finish, or cancel it there first.";
+
+    /// <summary>Creates and starts an image batch. Returns null (with <paramref name="error"/>) when refused.</summary>
     public static AireJob? Start(IEnumerable<string> inputFiles, string outputFolder, string prompt,
-        string model, string size, string quality, string apiKey, out string error)
+        string model, string size, string quality, string apiKey, out string error) =>
+        Launch(() => new AireJob(inputFiles, outputFolder, prompt, model, size, quality),
+            job => job.Start(apiKey), out error);
+
+    /// <summary>Creates and starts a video clip. Returns null (with <paramref name="error"/>) when refused.
+    /// The credentials stay inside the closure — never on job state.</summary>
+    public static AireVideoJob? StartVideo(AireVideoRequest request, HiggsfieldCredentials credentials, out string error) =>
+        Launch(() => new AireVideoJob(request), job => job.Start(credentials), out error);
+
+    private static T? Launch<T>(Func<T> create, Action<T> start, out string error) where T : AireJobBase
     {
         lock (Gate)
         {
             var running = Jobs.FirstOrDefault(j => !j.IsFinished);
             if (running != null)
             {
-                error = $"An AIRE job is already running (job_id {running.Id}, {running.Done}/{running.Total} done). "
-                        + "Wait for it to finish or cancel it first.";
+                error = InProcessBusyMessage(running);
                 return null;
             }
 
             if (!TryAcquireSpendLock(out var holder))
             {
-                error = $"An AIRE job is already running — {holder}. "
-                        + "Wait for it to finish, or cancel it there first.";
+                error = CrossProcessBusyMessage(holder);
                 return null;
             }
 
-            var job = new AireJob(inputFiles, outputFolder, prompt, model, size, quality);
+            var job = create();
             Jobs.Add(job);
             if (Jobs.Count > 16) Jobs.RemoveAt(0); // keep memory bounded; old finished jobs age out
 
             // Hand the lock back the moment the run ends, however it ends. Attached BEFORE Start so a job
             // that fails instantly still releases.
-            void ReleaseWhenFinished(AireJob finished)
+            void ReleaseWhenFinished(AireJobBase finished)
             {
                 if (!finished.IsFinished) return;
                 finished.Progress -= ReleaseWhenFinished;
@@ -326,7 +387,7 @@ public static class AireJobManager
             }
             job.Progress += ReleaseWhenFinished;
 
-            job.Start(apiKey);
+            start(job);
             error = "";
             return job;
         }

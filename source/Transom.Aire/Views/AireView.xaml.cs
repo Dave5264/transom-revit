@@ -16,6 +16,11 @@ namespace Transom.Views;
 ///     drag-drop queue, light/dark themes, progress reporting, and a CSV log per batch. Modeless singleton
 ///     like the Schedule Hub. All processing runs through <see cref="AireJobManager"/> — the same engine
 ///     the Claude bridge's aire_enhance tool uses, so a job started either way shows up here.
+///     <para>
+///     Since the Video tab (AireView.Video.cs) the window is two tabs under one hero card: Enhance is this
+///     file, unchanged in behaviour; Video turns one finished render into a short clip through Higgsfield,
+///     behind the same cost confirmation and the same one-job-at-a-time lock.
+///     </para>
 /// </summary>
 public sealed partial class AireView
 {
@@ -46,7 +51,8 @@ public sealed partial class AireView
         QualityCombo.ItemsSource = AireEngine.QualityOptions;
         ThemeCombo.ItemsSource = new[] { "Light", "Dark" };
 
-        LoadSettings();
+        var settings = AireSettings.Load();
+        LoadSettings(settings);
 
         ModelCombo.SelectionChanged += (_, _) => { PopulateSizeCombo(); UpdateEstimate(); };
         SizeCombo.SelectionChanged += (_, _) => UpdateEstimate();
@@ -79,21 +85,23 @@ public sealed partial class AireView
         QueueList.DragOver += OnQueueDrag;
         QueueList.Drop += OnQueueDrop;
 
-        Closed += (_, _) => { SaveSettings(); Instance = null; };
+        InitVideoTab(settings);
 
-        // A batch started from the bridge (or before this window was reopened) keeps running in
+        Closed += (_, _) => { _estimateTimer.Stop(); SaveSettings(); Instance = null; };
+
+        // A job started from the bridge (or before this window was reopened) keeps running in
         // AireJobManager — re-attach so its progress shows here instead of a stale "Ready.".
         var running = AireJobManager.RunningJob;
-        if (running != null) Attach(running);
+        if (running is AireJob batch) Attach(batch);
+        else if (running is AireVideoJob clip) AttachVideo(clip);
 
         UpdateEstimate();
     }
 
     // ---- settings ------------------------------------------------------------
 
-    private void LoadSettings()
+    private void LoadSettings(AireSettings s)
     {
-        var s = AireSettings.Load();
         ApiKeyBox.Password = s.GetApiKey();
         InputFolderBox.Text = s.InputFolder;
         OutputFolderBox.Text = s.OutputFolder;
@@ -109,7 +117,7 @@ public sealed partial class AireView
         ApplyTheme(s.Theme == "Dark");
     }
 
-    /// <summary>Persists everything including the DPAPI-protected key — which is also what the bridge's
+    /// <summary>Persists everything including the DPAPI-protected keys — which is also what the bridge's
     /// aire_enhance tool reads, so saving here is what makes Claude able to run AIRE at all.</summary>
     private void SaveSettings()
     {
@@ -128,6 +136,7 @@ public sealed partial class AireView
         s.Size = SizeCombo.SelectedItem as string ?? AireEngine.DefaultSize;
         s.Quality = QualityCombo.SelectedItem as string ?? AireEngine.DefaultQuality;
         s.Theme = ThemeCombo.SelectedItem as string ?? "Light";
+        SaveVideoSettings(s);
         s.Save();
     }
 
@@ -156,7 +165,8 @@ public sealed partial class AireView
             PromptPresetCombo.ItemsSource = prompts;
             PromptPresetCombo.SelectedItem = MatchName(prompts, promptName);
 
-            var keys = s.SavedApiKeys.Select(k => k.Name).ToList();
+            // OpenAI keys only — the Video tab's dropdown lists the Higgsfield pairs.
+            var keys = s.SavedApiKeysFor(AireSettings.ProviderOpenAi).Select(k => k.Name).ToList();
             ApiKeyPresetCombo.ItemsSource = keys;
             ApiKeyPresetCombo.SelectedItem = MatchName(keys, keyName);
         }
@@ -445,7 +455,8 @@ public sealed partial class AireView
         int textTokens = AireEngine.EstimateTextTokens(PromptBox.Text.Trim());
         int outputTokens = AireEngine.EstimateImageTokensFromSize(SizeCombo.SelectedItem as string ?? "auto");
         double total = CheckedItems().Sum(item => AireEngine.EstimateCost(item.Tokens, outputTokens, textTokens));
-        CostLabel.Text = $"Estimated checked cost: ${total:0.0000}";
+        _enhanceCostText = $"Estimated checked cost: ${total:0.0000}";
+        UpdateHeroForTab();
     }
 
     // ---- processing ----------------------------------------------------------
@@ -476,6 +487,14 @@ public sealed partial class AireView
         {
             MessageBox.Show(this, "Please check at least one image.", "No images checked",
                 MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        // Say "busy" in words BEFORE the cost dialog — a video clip may be running on the other tab.
+        var busy = AireJobManager.BusyReason();
+        if (busy != null)
+        {
+            MessageBox.Show(this, busy, "AIRE busy", MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
 
@@ -529,17 +548,17 @@ public sealed partial class AireView
         job.Progress += OnJobProgress;
     }
 
-    private void OnJobProgress(AireJob job) =>
+    private void OnJobProgress(AireJobBase job) =>
         Dispatcher.BeginInvoke(() =>
         {
-            if (!ReferenceEquals(job, _job)) return;
-            RenderJobState(job);
-            if (job.IsFinished)
+            if (job is not AireJob batch || !ReferenceEquals(batch, _job)) return;
+            RenderJobState(batch);
+            if (batch.IsFinished)
             {
-                job.Progress -= OnJobProgress;
+                batch.Progress -= OnJobProgress;
                 _job = null;
                 SetBusy(false);
-                ShowSummary(job);
+                ShowSummary(batch);
             }
         });
 

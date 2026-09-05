@@ -8,7 +8,7 @@ using System.Text.Json;
 
 namespace Transom.Core;
 
-/// <summary>One named entry in the reusable prompt library, stored in aire.json.</summary>
+/// <summary>One named entry in a reusable prompt library, stored in aire.json.</summary>
 public sealed class AireSavedPrompt
 {
     public string Name { get; set; } = "";
@@ -16,24 +16,36 @@ public sealed class AireSavedPrompt
 }
 
 /// <summary>
-///     One named OpenAI account key. DPAPI-protected exactly like <see cref="AireSettings.ProtectedApiKey"/> —
+///     One named account credential. DPAPI-protected exactly like <see cref="AireSettings.ProtectedApiKey"/> —
 ///     no plaintext at rest, and a blob written under a different Windows profile simply fails to decrypt and
 ///     is reported as absent rather than throwing.
+///     <para>
+///     Two providers share this shape. OpenAI keys are a single string; Higgsfield credentials are a PAIR
+///     (key id + secret), so an entry carries an optional second protected field. <see cref="Provider"/>
+///     keeps the two libraries apart — files written before the video tab existed have no Provider and
+///     deserialize as OpenAI, which is what they were.
+///     </para>
 /// </summary>
 public sealed class AireSavedApiKey
 {
     public string Name { get; set; } = "";
     public string ProtectedKey { get; set; } = "";
+    public string Provider { get; set; } = AireSettings.ProviderOpenAi;
+    /// <summary>DPAPI-protected second half of a key pair (Higgsfield's secret). Empty for single-string keys.</summary>
+    public string ProtectedSecret { get; set; } = "";
 }
 
 /// <summary>
 ///     Persisted AIRE (AI Render Enhancer) preferences, stored under %AppData%\Transom\aire.json —
-///     separate from settings.json so the two features can't torn-write each other. The OpenAI API key
-///     is DPAPI-encrypted per user (CryptProtectData, no plaintext at rest); everything else is the
+///     separate from settings.json so the two features can't torn-write each other. Every credential is
+///     DPAPI-encrypted per user (CryptProtectData, no plaintext at rest); everything else is the
 ///     last-used UI state, which doubles as the defaults for the bridge's aire_enhance tool.
 /// </summary>
 public sealed class AireSettings
 {
+    public const string ProviderOpenAi = "openai";
+    public const string ProviderHiggsfield = "higgsfield";
+
     /// <summary>DPAPI-encrypted OpenAI API key, base64. Empty = no key saved. Never store plaintext here.</summary>
     public string ProtectedApiKey { get; set; } = "";
 
@@ -45,10 +57,10 @@ public sealed class AireSettings
     public string Quality { get; set; } = AireEngine.DefaultQuality;
     public string Theme { get; set; } = "Light";
 
-    /// <summary>The reusable prompt library shown in the window's "Saved prompts" dropdown.</summary>
+    /// <summary>The reusable prompt library shown in the Enhance tab's "Saved prompts" dropdown.</summary>
     public List<AireSavedPrompt> SavedPrompts { get; set; } = new();
 
-    /// <summary>Named keys for multiple OpenAI accounts. The one currently in use is still
+    /// <summary>Named keys for multiple accounts, both providers. The OpenAI key currently in use is still
     /// <see cref="ProtectedApiKey"/> — that is what the bridge reads, so switching accounts in the
     /// window rewrites it rather than making the bridge understand named keys.</summary>
     public List<AireSavedApiKey> SavedApiKeys { get; set; } = new();
@@ -56,6 +68,36 @@ public sealed class AireSettings
     /// <summary>Last dropdown selections, so reopening the window comes back where it was left.</summary>
     public string SelectedPromptName { get; set; } = "";
     public string SelectedApiKeyName { get; set; } = "";
+
+    // ---- Video tab (Higgsfield) ---------------------------------------------
+
+    /// <summary>The Higgsfield credential pair currently in use, DPAPI-protected. Both empty = none saved.</summary>
+    public string ProtectedVideoKeyId { get; set; } = "";
+    public string ProtectedVideoKeySecret { get; set; } = "";
+
+    public string VideoOutputFolder { get; set; } = "";
+    public string VideoPrompt { get; set; } = "";
+    public string VideoSourceImage { get; set; } = "";
+    /// <summary>Catalog path of the last model, e.g. "/higgsfield-ai/dop/standard". Empty = catalog default.</summary>
+    public string VideoModel { get; set; } = "";
+    /// <summary>Raw API values of the last per-model choices ("5", "1080", "16:9"); each is re-validated against
+    /// the selected model's allowed values on load, so a value the model does not offer is simply dropped.</summary>
+    public string VideoDuration { get; set; } = "";
+    public string VideoResolution { get; set; } = "";
+    public string VideoAspectRatio { get; set; } = "";
+    /// <summary>Motion preset ids (Higgsfield UUIDs) and 0–1 strengths for the two camera slots.</summary>
+    public string VideoMotion1 { get; set; } = "";
+    public string VideoMotion2 { get; set; } = "";
+    public double VideoMotion1Strength { get; set; } = 0.6;
+    public double VideoMotion2Strength { get; set; } = 0.6;
+
+    /// <summary>The Video tab's own prompt library — a motion prompt is not an enhancement prompt.</summary>
+    public List<AireSavedPrompt> SavedVideoPrompts { get; set; } = new();
+    public string SelectedVideoPromptName { get; set; } = "";
+    public string SelectedVideoKeyName { get; set; } = "";
+
+    /// <summary>"Enhance" or "Video" — which tab the window reopens on.</summary>
+    public string ActiveTab { get; set; } = "Enhance";
 
     private static string FilePath =>
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Transom", "aire.json");
@@ -84,68 +126,112 @@ public sealed class AireSettings
         catch { /* settings are best-effort */ }
     }
 
-    /// <summary>Decrypts and returns the saved API key, or "" when none is saved or decryption fails
+    /// <summary>Decrypts and returns the saved OpenAI key, or "" when none is saved or decryption fails
     /// (different user profile / corrupted blob — treated as "no key", never as an exception).</summary>
     public string GetApiKey() => Unprotect(ProtectedApiKey);
 
-    /// <summary>Encrypts and stores the API key (empty clears it). Call <see cref="Save"/> to persist.</summary>
+    /// <summary>Encrypts and stores the OpenAI key (empty clears it). Call <see cref="Save"/> to persist.</summary>
     public void SetApiKey(string apiKey) => ProtectedApiKey = Protect(apiKey);
+
+    /// <summary>The Higgsfield pair in use, decrypted; either half "" when unsaved or unreadable.</summary>
+    public HiggsfieldCredentials GetVideoCredentials() =>
+        new(Unprotect(ProtectedVideoKeyId), Unprotect(ProtectedVideoKeySecret));
+
+    /// <summary>Encrypts and stores the Higgsfield pair (both empty clears it). Call <see cref="Save"/>.</summary>
+    public void SetVideoCredentials(string keyId, string secret)
+    {
+        ProtectedVideoKeyId = Protect(keyId);
+        ProtectedVideoKeySecret = Protect(secret);
+    }
 
     // ---- saved prompts -------------------------------------------------------
 
-    /// <summary>The saved prompt with this name, or null. Names are matched case-insensitively so
+    /// <summary>The saved enhance prompt with this name, or null. Names are matched case-insensitively so
     /// "Exterior" and "exterior" can't become two entries the user reads as one.</summary>
-    public AireSavedPrompt? FindPrompt(string name) =>
-        SavedPrompts.FirstOrDefault(p => string.Equals(p.Name, (name ?? "").Trim(), StringComparison.OrdinalIgnoreCase));
+    public AireSavedPrompt? FindPrompt(string name) => FindIn(SavedPrompts, name);
 
-    /// <summary>Adds or replaces a named prompt and keeps the library alphabetical. Call <see cref="Save"/>.</summary>
-    public void UpsertPrompt(string name, string text)
+    /// <summary>Adds or replaces a named enhance prompt and keeps the library alphabetical. Call <see cref="Save"/>.</summary>
+    public void UpsertPrompt(string name, string text) => UpsertIn(SavedPrompts, name, text);
+
+    public void RemovePrompt(string name) => RemoveFrom(SavedPrompts, name);
+
+    public AireSavedPrompt? FindVideoPrompt(string name) => FindIn(SavedVideoPrompts, name);
+    public void UpsertVideoPrompt(string name, string text) => UpsertIn(SavedVideoPrompts, name, text);
+    public void RemoveVideoPrompt(string name) => RemoveFrom(SavedVideoPrompts, name);
+
+    private static AireSavedPrompt? FindIn(List<AireSavedPrompt> library, string name) =>
+        library.FirstOrDefault(p => string.Equals(p.Name, (name ?? "").Trim(), StringComparison.OrdinalIgnoreCase));
+
+    private static void UpsertIn(List<AireSavedPrompt> library, string name, string text)
     {
         name = (name ?? "").Trim();
         if (name.Length == 0) return;
-        var existing = FindPrompt(name);
-        if (existing != null) { existing.Text = text ?? ""; }
-        else SavedPrompts.Add(new AireSavedPrompt { Name = name, Text = text ?? "" });
-        SortLibraries();
+        var existing = FindIn(library, name);
+        if (existing != null) existing.Text = text ?? "";
+        else library.Add(new AireSavedPrompt { Name = name, Text = text ?? "" });
+        library.Sort((a, b) => StringComparer.OrdinalIgnoreCase.Compare(a.Name, b.Name));
     }
 
-    public void RemovePrompt(string name)
+    private static void RemoveFrom(List<AireSavedPrompt> library, string name)
     {
-        var existing = FindPrompt(name);
-        if (existing != null) SavedPrompts.Remove(existing);
+        var existing = FindIn(library, name);
+        if (existing != null) library.Remove(existing);
     }
 
     // ---- saved API keys ------------------------------------------------------
 
-    public AireSavedApiKey? FindApiKey(string name) =>
-        SavedApiKeys.FirstOrDefault(k => string.Equals(k.Name, (name ?? "").Trim(), StringComparison.OrdinalIgnoreCase));
+    /// <summary>The saved keys for one provider, alphabetical — each tab's dropdown shows only its own.</summary>
+    public List<AireSavedApiKey> SavedApiKeysFor(string provider) =>
+        SavedApiKeys.Where(k => IsProvider(k, provider)).ToList();
 
-    /// <summary>Decrypts the named key, or "" when it is unknown or was protected by another user profile.</summary>
+    public AireSavedApiKey? FindApiKey(string name, string provider = ProviderOpenAi) =>
+        SavedApiKeys.FirstOrDefault(k => IsProvider(k, provider)
+                                         && string.Equals(k.Name, (name ?? "").Trim(), StringComparison.OrdinalIgnoreCase));
+
+    private static bool IsProvider(AireSavedApiKey key, string provider) =>
+        string.Equals(string.IsNullOrEmpty(key.Provider) ? ProviderOpenAi : key.Provider, provider,
+            StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Decrypts the named OpenAI key, or "" when it is unknown or was protected by another user profile.</summary>
     public string GetSavedApiKey(string name) => Unprotect(FindApiKey(name)?.ProtectedKey ?? "");
 
-    /// <summary>Adds or replaces a named key (encrypting it here — the caller only ever holds plaintext).
+    /// <summary>Decrypts the named Higgsfield pair; either half "" when unknown or unreadable.</summary>
+    public HiggsfieldCredentials GetSavedKeyPair(string name)
+    {
+        var entry = FindApiKey(name, ProviderHiggsfield);
+        return new HiggsfieldCredentials(Unprotect(entry?.ProtectedKey ?? ""), Unprotect(entry?.ProtectedSecret ?? ""));
+    }
+
+    /// <summary>Adds or replaces a named OpenAI key (encrypting it here — the caller only ever holds plaintext).
     /// A blank key is refused rather than saved as an empty account. Call <see cref="Save"/>.</summary>
-    public void UpsertApiKey(string name, string apiKey)
+    public void UpsertApiKey(string name, string apiKey) => UpsertCredential(name, ProviderOpenAi, apiKey, "");
+
+    /// <summary>Adds or replaces a named Higgsfield pair. Both halves must be present. Call <see cref="Save"/>.</summary>
+    public void UpsertKeyPair(string name, string keyId, string secret)
+    {
+        if (string.IsNullOrWhiteSpace(secret)) return;
+        UpsertCredential(name, ProviderHiggsfield, keyId, secret);
+    }
+
+    private void UpsertCredential(string name, string provider, string key, string secret)
     {
         name = (name ?? "").Trim();
-        if (name.Length == 0 || string.IsNullOrWhiteSpace(apiKey)) return;
-        var blob = Protect(apiKey);
-        var existing = FindApiKey(name);
-        if (existing != null) existing.ProtectedKey = blob;
-        else SavedApiKeys.Add(new AireSavedApiKey { Name = name, ProtectedKey = blob });
-        SortLibraries();
-    }
-
-    public void RemoveApiKey(string name)
-    {
-        var existing = FindApiKey(name);
-        if (existing != null) SavedApiKeys.Remove(existing);
-    }
-
-    private void SortLibraries()
-    {
-        SavedPrompts = SavedPrompts.OrderBy(p => p.Name, StringComparer.OrdinalIgnoreCase).ToList();
+        if (name.Length == 0 || string.IsNullOrWhiteSpace(key)) return;
+        var existing = FindApiKey(name, provider);
+        if (existing == null)
+        {
+            existing = new AireSavedApiKey { Name = name, Provider = provider };
+            SavedApiKeys.Add(existing);
+        }
+        existing.ProtectedKey = Protect(key);
+        existing.ProtectedSecret = Protect(secret);
         SavedApiKeys = SavedApiKeys.OrderBy(k => k.Name, StringComparer.OrdinalIgnoreCase).ToList();
+    }
+
+    public void RemoveApiKey(string name, string provider = ProviderOpenAi)
+    {
+        var existing = FindApiKey(name, provider);
+        if (existing != null) SavedApiKeys.Remove(existing);
     }
 
     private static string Protect(string plain)
