@@ -15,7 +15,7 @@ enhance your renders with AI.**
 
 [![Latest release](https://img.shields.io/github/v/release/Dave5264/transom-revit?label=latest%20release&color=2ea44f&logo=github)](https://github.com/Dave5264/transom-revit/releases/latest)
 
-### ⬇ [Download the installer](https://github.com/Dave5264/transom-revit/releases/download/v1.9.15/Transom-1.9.15-SingleUser.msi)
+### ⬇ [Download the installer](https://github.com/Dave5264/transom-revit/releases/download/v1.9.16/Transom-1.9.16-SingleUser.msi)
 
 **One click, no admin rights.** Installs into your per-user Revit add-ins folder.
 Double-click the `.msi`, then start Revit. Supports **Revit 2025, 2026 & 2027**. Free.
@@ -155,9 +155,11 @@ seconds and top out at 1080p.
 *AIRE is much newer than the schedule editor and has had a lot less mileage. Treat your early batches and
 clips as a trial, and check the first costs against your real OpenAI and Higgsfield usage.*
 
-> **Status:** v1.9.15 (Revit 2025/2026/2027) gives AIRE the **Video tab** described above. Recent releases
-> before it: a **prompt library, saved API keys and a pop-out editor** (v1.9.14), **AIRE as a standalone app**
-> that runs without Revit (v1.9.12), a **Cancel Batch** button (v1.9.11), and a line-by-line **correctness
+> **Status:** v1.9.16 (Revit 2025/2026/2027) is an installer update. The standalone AIRE app is now offered
+> by the firm-wide installer too, not just the single-user one. Before it, v1.9.15 gave AIRE the **Video
+> tab** described above, and earlier releases brought a **prompt library, saved API keys and a pop-out
+> editor** (v1.9.14), **AIRE as a standalone app** that runs without Revit (v1.9.12), a **Cancel Batch**
+> button (v1.9.11), and a line-by-line **correctness
 > audit** of the schedule editor (v1.9.9). Full history is on the
 > [releases page](https://github.com/Dave5264/transom-revit/releases).
 
