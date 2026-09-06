@@ -67,15 +67,20 @@ AssertEngineHarvested(args[1..]);
 
 project.RemoveDialogsBetween(NativeDialogs.WelcomeDlg, NativeDialogs.CustomizeDlg);
 
-// AIRE STANDALONE — an optional, per-user Start Menu shortcut to the AI Render Enhancer running in its own
-// process, so renders can be enhanced with Revit closed. It rides the existing WixUI_FeatureTree: a Feature
-// shows up in CustomizeDlg as a checkbox with this Description in the pane beside it, and ConfigurableDir
-// lights up that dialog's Browse button so the install location can be changed or simply clicked past —
-// the same treatment the per-Revit-year add-in folders already get.
-// SingleUser MSI ONLY, for the same reason as the shim custom action: %LocalAppDataFolder% and the per-user
-// Start Menu resolve to the INSTALLING user, and a per-machine MSI runs as SYSTEM, where both would be wrong.
+// AIRE STANDALONE — an optional Start Menu shortcut to the AI Render Enhancer running in its own process, so
+// renders can be enhanced with Revit closed. It rides the existing WixUI_FeatureTree: a Feature shows up in
+// CustomizeDlg as a checkbox with this Description in the pane beside it, and ConfigurableDir lights up that
+// dialog's Browse button so the install location can be changed or simply clicked past — the same treatment
+// the per-Revit-year add-in folders already get.
+// Offered by BOTH MSIs; only the payload root differs (see AireDirs). The per-user MSI runs as the installing
+// user, so %LocalAppDataFolder% is theirs. The per-machine MSI runs elevated / as SYSTEM, where that would
+// resolve to the wrong profile, so it installs under %ProgramFiles% instead. The Start Menu needs no such
+// split: MSI resolves %ProgramMenuFolder% to the per-user Start Menu for a per-user install and to the
+// all-users Start Menu when ALLUSERS=1 — exactly what a firm-wide deployment wants. (This is unlike the shim
+// custom action below, which must write into EACH user's %LocalAppData% at install time — something no
+// per-machine MSI can do — and therefore really is per-user only.)
 const string aireAppPublish = @"source\Transom.Aire.App\bin\Release\net8.0-windows\win-x64\publish";
-AssertAireAppPublished();
+AssertAireAppPublished(versioning.VersionPrefix);
 
 var aireFeature = new Feature
 {
@@ -91,27 +96,57 @@ var aireFeature = new Feature
     ConfigurableDir = "AIREDIR"
 };
 
-// The payload lives in ONE per-user location rather than inside each Revit-year add-in folder: three copies
-// would otherwise be installed, and the shortcut would point at whichever year's folder happened to be
-// chosen — breaking if that Revit version were later removed.
-Dir[] AireDirs() =>
+// The payload lives in ONE location rather than inside each Revit-year add-in folder: three copies would
+// otherwise be installed, and the shortcut would point at whichever year's folder happened to be chosen —
+// breaking if that Revit version were later removed. `payloadRoot` is the scope-appropriate home (see above):
+// %LocalAppDataFolder% for the per-user MSI, %ProgramFiles% for the per-machine one (WixSharp maps that to
+// ProgramFiles64Folder because the project is x64 — check the Directory table, not the string, if in doubt).
+// Both "Transom" parent folders carry EXPLICIT ids. WixSharp auto-names directories by dedup ("Transom",
+// "Transom.1", …) from a map it resets between the two BuildMsi calls — but the harvested add-in Dirs are
+// reused across both builds and keep the ids they were dealt in the first one, so in the second build a fresh
+// auto-named "Transom" lands on an id the harvest already holds (duplicate Directory 'Transom.1', WIX0091).
+// Explicit ids sidestep the map entirely and keep both MSIs' Directory tables stable release to release.
+Dir[] AireDirs(string payloadRoot) =>
 [
-    new Dir(new Id("AIREDIR"), @"%LocalAppDataFolder%\Transom\aire",
-        new Files(aireFeature, $@"{aireAppPublish}\*.*", f => !f.EndsWith(".pdb"))),
-    new Dir(@"%ProgramMenuFolder%\Transom",
+    new Dir(new Id("TRANSOM_AIRE_ROOT"), $@"{payloadRoot}\Transom",
+        new Dir(new Id("AIREDIR"), "aire",
+            new Files(aireFeature, $@"{aireAppPublish}\*.*", f => !f.EndsWith(".pdb")))),
+    new Dir(new Id("TRANSOM_AIRE_MENU"), @"%ProgramMenuFolder%\Transom",
         new ExeFileShortcut(aireFeature, "AIRE — AI Render Enhancer", "[AIREDIR]Transom.Aire.App.exe", ""))
 ];
 
 // Same spirit as AssertEngineHarvested: a feature that is advertised in the UI but whose files were never
-// published would install a shortcut to nothing. Fail the pack instead.
-void AssertAireAppPublished()
+// published would install a shortcut to nothing — and one whose files were published for an EARLIER release
+// would silently ship last version's app under this version's installer. That second case is the real hazard:
+// step 3's csproj builds never touch this publish folder, so it only changes when `dotnet publish` is run for
+// it explicitly, and nothing else in the pack would notice if that was skipped. Fail the pack in both cases.
+// The exe's file version comes from the -p:Version passed to that publish, so a mismatch means exactly one
+// thing: the publish was skipped, or run without this release's version.
+void AssertAireAppPublished(System.Version expected)
 {
     var exe = System.IO.Path.Combine(aireAppPublish, "Transom.Aire.App.exe");
+    var want = Trim(expected);
+    var publishCommand =
+        $"  dotnet publish source/Transom.Aire.App/Transom.Aire.App.csproj -c Release -r win-x64 --self-contained false -p:Version={want}";
+
     if (!System.IO.File.Exists(exe))
         throw new Exception(
             $"AIRE standalone app MISSING from the payload: '{exe}' was not found. Publish it first —\n" +
-            "  dotnet publish source/Transom.Aire.App/Transom.Aire.App.csproj -c Release -r win-x64 --self-contained false\n" +
+            publishCommand + "\n" +
             "Refusing to ship an installer that offers an AIRE shortcut pointing at nothing.");
+
+    var found = System.Diagnostics.FileVersionInfo.GetVersionInfo(exe).FileVersion;
+    if (!System.Version.TryParse(found, out var actual) || Trim(actual) != want)
+        throw new Exception(
+            $"AIRE standalone app is STALE: '{exe}' is file version {found ?? "(none)"} but this pack is {want}. " +
+            "That publish folder is only refreshed by an explicit publish, so re-run it with this release's version —\n" +
+            publishCommand + "\n" +
+            "Refusing to ship last release's AIRE under this release's installer.");
+
+    Console.WriteLine($"OK: AIRE standalone app {found} matches pack version {want}");
+
+    // Compare major.minor.build only: the exe carries a 4th component (1.9.15.0) that the pack version never has.
+    static System.Version Trim(System.Version v) => new(v.Major, v.Minor, Math.Max(v.Build, 0));
 }
 
 // #105 (seamless MCP, MUST-FIX): a DEFERRED, IMPERSONATED managed custom action that copies the shim trio from the
@@ -187,7 +222,7 @@ void BuildSingleUserMsi()
     project.Dirs =
     [
         new InstallDir(@"%AppDataFolder%\Autodesk\Revit\Addins\", wixEntities),
-        ..AireDirs() // optional AIRE standalone shortcut — per-user MSI only (see above)
+        ..AireDirs(@"%LocalAppDataFolder%") // optional AIRE standalone app, in the installing user's profile
     ];
     project.Actions = [refreshShim]; // #105: install-time %LocalAppData% shim refresh — per-user MSI only
     project.BuildMsi();
@@ -208,7 +243,8 @@ void BuildMultiUserUserMsi()
     // ("2025"/"2026"/"2027" from Generator.TryParseVersion), never off the product version.
     project.Dirs =
     [
-        new InstallDir(@"%CommonAppDataFolder%\Autodesk\Revit\Addins", wixEntities)
+        new InstallDir(@"%CommonAppDataFolder%\Autodesk\Revit\Addins", wixEntities),
+        ..AireDirs(@"%ProgramFiles%") // optional AIRE standalone app, machine-wide, with an all-users Start Menu shortcut
     ];
     project.Actions = []; // #105: NOT on the per-machine MSI (runs as SYSTEM — can't write each user's %LocalAppData%)
     project.BuildMsi();

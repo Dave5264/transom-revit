@@ -75,12 +75,14 @@ A plain `dotnet build source/Transom/Transom.csproj -c Debug.R2x` **is** the loc
    dotnet build source/Transom/Transom.csproj -c Release.R27 -p:Version=<v>
    ```
    (R25/R26 = .NET 8, R27 = .NET 10. Building the .sln for R26 silently omits it — always csproj-direct. Do NOT pass `-p:DeployAddin=false` — it suppresses the `publish/` folder the installer harvests.) **VERIFY** `find source/Transom/bin -type d -name publish` lists **exactly** `Release.R25`, `Release.R26`, `Release.R27` — no `Debug.R25` (the dev-deploy can re-create one, and it would collide at "2025" in step 5's harvest → duplicate WiX component IDs; that's why step 5 passes the three dirs explicitly, never a `*/publish` glob).
-4. **Publish + bundle the 3 helper exes** so they sit next to `Transom.dll` in each `publish/Transom/` (the add-in reads them from there; missing → "broken on fresh install"):
+4. **Publish + bundle the 3 helper exes** so they sit next to `Transom.dll` in each `publish/Transom/` (the add-in reads them from there; missing → "broken on fresh install"), **and publish the AIRE standalone app WITH the version**:
    ```
    dotnet publish source/Transom.McpShim/Transom.McpShim.csproj -c Release -r win-x64
    dotnet publish source/Transom.ClickHelper/Transom.ClickHelper.csproj -c Release -r win-x64
    dotnet publish source/Transom.ClickHelper.Mcp/Transom.ClickHelper.Mcp.csproj -c Release -r win-x64
+   dotnet publish source/Transom.Aire.App/Transom.Aire.App.csproj -c Release -r win-x64 --self-contained false -p:Version=<v>
    ```
+   The AIRE line is not optional and not "only when AIRE changed": the installer harvests that app from its own `source/Transom.Aire.App/bin/Release/net8.0-windows/win-x64/publish/` (never from `publish/Transom/`), step 3's builds never refresh it, and `AssertAireAppPublished` fails the pack if the exe is missing **or its file version ≠ `<v>`** — that check is what stops a forgotten publish from shipping last release's AIRE under this release's MSI. Both MSIs offer the app as a tickable feature (SingleUser → `%LocalAppData%\Transom\aire` + the user's Start Menu; MultiUser → `Program Files\Transom\aire` + the all-users Start Menu).
    Re-run step 3 (the three csproj builds) so the csproj `<None Include … Condition="Exists(…)">` copies the **2 ClickHelper** exes into each `publish/Transom/`. The **shim is NOT in the csproj `<None>`** (the flaky pipeline handled it) — copy it into all three by hand after that rebuild:
    ```
    for c in Release.R25 Release.R26 Release.R27; do
@@ -107,7 +109,7 @@ A plain `dotnet build source/Transom/Transom.csproj -c Debug.R2x` **is** the loc
 
 ### Installer behavior to know
 - **SingleUser (per-user) MSI** is the one users install — admin-free. Its custom action (`install/ShimRefresh.cs`) copies the shim trio into `%LocalAppData%\Transom\mcp\` **at install time** (deferred + impersonated → writes the installing user's profile). The add-in's first-launch `EnsureBundledShimAndAutoRegister` (`Application.cs` OnStartup) is the self-heal fallback.
-- **MultiUser (per-machine) MSI** runs as SYSTEM → can't populate each user's `%LocalAppData%`; relies on the first-launch fallback. The custom action is SingleUser-only.
+- **MultiUser (per-machine) MSI** runs as SYSTEM → can't populate each user's `%LocalAppData%`; relies on the first-launch fallback. The custom action is SingleUser-only. (The **AIRE standalone app** feature is NOT SingleUser-only: since v1.9.16 both MSIs offer it — MultiUser puts it in `Program Files\Transom\aire` with an all-users Start Menu shortcut, which a per-machine MSI CAN write; only the payload root differs.)
 - **Distribution policy:** SingleUser is the product. The MultiUser target is kept **fully buildable** in the codebase (`BuildMultiUserUserMsi()` in `install/Installer.cs` — do NOT remove it) but is **intentionally not surfaced as a one-click download** on the README landing page, so a self-serve user can't grab it by mistake (it requires admin and gives the less-seamless first-launch shim path). MultiUser exists only for **IT / firm-wide machine deployment** — an admin installing once for all users on a shared/imaged machine. The README's prominent download link must always point at `…-SingleUser.msi`. Whether to also attach the MultiUser `.msi` to a GitHub release is a separate choice (build it on demand from source); if attached, the README still shouldn't link it directly.
 
 ---
