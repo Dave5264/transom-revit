@@ -122,31 +122,23 @@ Revit at all: tick **AIRE standalone app** when installing and it gets a Start M
 <tr><td><em><b>AI Render Enhancer</b> — the queue, the settings that drive cost, and the estimate for exactly what you have ticked.</em></td></tr>
 </table>
 
-- **Point and tick.** **Scan Folder**, or drag images and folders straight onto the list. `.png`, `.jpg`,
-  `.jpeg` and `.webp` go in; `<name>_enhanced.png` comes out. AIRE skips its own outputs, so re-scanning a
-  folder you have already enhanced won't re-bill it. Defaults are **`gpt-image-2`** at 3840×2160 and high
-  quality; the older `gpt-image-1.5`, `-1` and `-1-mini` are selectable but top out at 1536×1024.
-- **Nothing is spent without a confirmation.** The image count, model, resolution, quality and an estimated
-  cost are shown before a batch starts, and **Cancel Batch** stops one already under way. Every batch writes
-  `logs\enhancement_log_<timestamp>.csv` beside the outputs — a row per image with settings, status, elapsed
-  time and estimated cost. Treat the figure as an approximation for deciding whether to press go, not a bill;
-  **Open OpenAI Billing** goes to the authority.
-- **Prompts and keys are worth keeping.** Name a prompt that works and **Save** it, then pick it back out of
-  the dropdown on any later run; **Pop Out** edits the same text in a resizable window. Keys work the same
-  way — save one per OpenAI account and switch from **Saved Keys**, each encrypted separately.
-- **Bring your own key.** A built-in walkthrough covers creating one. It is encrypted per Windows user (DPAPI)
-  in `%AppData%\Transom\aire.json`, never written in plain text, and goes nowhere but `api.openai.com`.
-- **Claude can drive it** over the same bridge: `aire_enhance` starts a batch and returns a job id plus the
-  cost estimate, `aire_job_status` polls it, `aire_cancel_job` stops it. The key is deliberately not a tool
-  argument — the bridge reads it from your encrypted store, so it never passes through Claude or the socket.
-  One batch runs at a time no matter which way it was started.
+- **Point and tick.** **Scan Folder**, or drag images and folders onto the list. `.png`, `.jpg`, `.jpeg` and
+  `.webp` go in, `<name>_enhanced.png` comes out, and AIRE skips its own outputs so a re-scan won't re-bill.
+  Defaults to **`gpt-image-2`** at 3840×2160, high quality.
+- **Nothing is spent without a confirmation.** Count, model, resolution, quality and estimated cost are shown
+  before a batch starts, **Cancel Batch** stops one already under way, and every batch logs a row per image to
+  `logs\enhancement_log_<timestamp>.csv`. Prompts and per-account keys can be named, saved and switched.
+- **Bring your own key.** Encrypted per Windows user (DPAPI) in `%AppData%\Transom\aire.json`, sent nowhere but
+  `api.openai.com`. Claude can run the same batches over the bridge — `aire_enhance`, `aire_job_status`,
+  `aire_cancel_job` — reading the key from that store, so it never passes through Claude. One batch runs at a
+  time either way.
 
 #### Video — one render, one clip
 
-The **Video** tab takes a single render — ideally the 4K `_enhanced.png` the Enhance tab just made — and
-turns it into a few seconds of generated motion through [Higgsfield](https://cloud.higgsfield.ai), which
-routes to its own DoP camera models, Kling, Veo, Seedance, Hailuo, Sora and Wan behind one credential. It is
-a hero shot with motion, not a walkthrough: clips run 2–12 seconds and top out at 1080p.
+The **Video** tab turns one finished render — ideally the 4K `_enhanced.png` the Enhance tab just made — into
+a few seconds of motion through [Higgsfield](https://cloud.higgsfield.ai), one credential for its own DoP
+camera models, Kling, Veo, Seedance, Hailuo, Sora and Wan. A hero shot, not a walkthrough: 2–12 seconds,
+1080p ceiling.
 
 <table>
 <tr><td><img src="docs/images/aire-video.jpg" alt="Transom AI Render Enhancer window on the Video tab: Key ID and Secret fields with a Saved Keys dropdown, an output folder picker, a model dropdown showing Higgsfield DoP Standard, clip duration/resolution/aspect dropdowns, two camera-preset dropdowns with strength sliders, a Motion Prompt card with its own saved prompts and a Pop Out button, a large source-render thumbnail with its filename, size and aspect ratio, and a Generate Clip button beside the estimated clip cost" width="100%"></td></tr>
