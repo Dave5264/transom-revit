@@ -44,7 +44,7 @@ what each cell will do when it returns.
   edits. Cells Transom can't write are listed and skipped.
 - **Every cell is colored** by what an edit to it will actually touch. White and green import directly. Blue,
   yellow and red are elements inside **model groups**, which Revit locks down, and yellow and red need a
-  decision first ([see below](#grouped-parameters--claude-assist)). Grey can't be written at all. The full
+  decision first ([see below](#automate-bulk-group-editing-with-claude)). Grey can't be written at all. The full
   legend is on the Export tab.
 
 <table>
@@ -68,7 +68,7 @@ there's nothing extra to install.
 - **Claude gets the whole of Revit**, not a fixed menu. It can run code directly in your model, and it has
   about 35 ready-made tools for views, elements, creation and MEP, every one tested against a real project.
 - **It can use the interface too**, clicking through Revit itself for the jobs the software gives no other
-  way to do. Mostly that means editing inside groups ([below](#grouped-parameters--claude-assist)).
+  way to do. Mostly that means editing inside groups ([below](#automate-bulk-group-editing-with-claude)).
 - **Teach it once, use it everywhere.** Save a working request as a skill and it's there in every project.
   Two come with the add-in: a read-only schedule inventory, which is a safe first thing to try, and
   elevation door and window tagging that spots the openings that are actually visible, so it won't tag ones
@@ -161,21 +161,28 @@ clips as a trial, and check the first costs against your real OpenAI and Higgsfi
 > audit** of the schedule editor (v1.9.9). Full history is on the
 > [releases page](https://github.com/Dave5264/transom-revit/releases).
 
-### Grouped parameters — Claude-Assist
+### Automate bulk group editing with Claude
 
-Parameters on elements inside a Revit **model group** are the case that stops most schedule tools. These are
-Transom's blue, yellow and red cells. A project or shared *instance* parameter is allowed to vary per group
-instance, so Transom turns that flag on and writes it. But a **built-in** parameter like Comments or Finish,
-or a **geometry-driving** one, can only be changed from inside **Edit Group** mode. There is no API path to
-it at all. So on import, Transom asks you per affected column:
+Elements inside a Revit **model group** are where most schedule tools give up. Revit will only let you change
+them from inside **Edit Group** mode, one group at a time, by hand. There is no automation for it and no way
+around it. Transom hands that job to Claude Code instead, and you watch it work.
+
+- **Claude does the clicking.** It opens the group, sets the parameter the way you would, closes it, then
+  checks the value and the member count before moving on to the next one.
+- **A column at a time, not a group at a time.** Every group instance your edits touch goes in one run,
+  instead of you opening each one by hand.
+- **You watch the whole thing.** Transom writes out the instructions and never touches the model itself.
+  Every step happens in your own Revit window, in front of you.
+- **The awkward cases are covered.** Nested groups, attached detail groups and excluded members are all
+  handled.
+
+Not every column needs Claude. Blue cells import on their own. For the yellow and red ones, Transom offers
+two other ways through:
 
 - **Write to a new parameter.** Transom makes one, points the schedule column at it, and puts your edits
   there. Nothing is ungrouped and the original values stay underneath. You choose whether the new parameter
   is shared across the type or set on each element. This isn't offered where the parameter drives geometry,
   since the schedule would change while the model stayed put.
-- **Hand it to Claude.** Transom writes out the instructions and stays out of the model itself. Your Claude
-  Code session opens the group, makes the edit the way you would by hand, closes it, then checks the value
-  and the count. It handles nested groups, attached detail groups and excluded members.
 - **Skip it.** Leave that column alone.
 
 Editing inside a group changes the group itself, so every copy of that group gets the same value. When you
