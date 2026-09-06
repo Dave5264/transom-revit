@@ -60,25 +60,25 @@ what each cell will do when it returns.
 
 ### Claude Code integration
 
-Transom bundles a local bridge that connects the live model to Claude Code. Loopback only (`127.0.0.1`),
-authenticated with a per-session token. No separate install, no admin rights, nothing leaves your machine.
+Transom connects your open Revit model to Claude Code. The connection never leaves your computer, and
+there's nothing extra to install.
 
-- **Ask in plain language.** Cross-check a schedule, apply staged edits, create sheets and views, run bulk
-  edits, tag things.
-- **The full Revit API** through the in-process `execute_revit_code` tool, plus about 35 purpose-built tools
-  for views, elements, creation and MEP, each live-verified against a real project model.
-- **Claude can drive the interface** through a second server, `transom-ui-assist`, where the API has no path
-  at all. Mostly that means **Edit Group** mode ([below](#grouped-parameters--claude-assist)).
-- **A skill library** (Schedule Hub → Claude Skills) keeps reusable workflows as `.md` files in a per-user
-  folder, so you have them in every project. Two ship with the add-in: a read-only **schedule inventory**,
-  which is a safe first thing to try, and **elevation door/window tagging** that recognizes visible openings
-  optically, so it won't tag the ones hidden behind the facade.
+- **Ask in plain language.** Cross-check a schedule, apply your staged edits, create sheets and views, run
+  bulk edits, tag things.
+- **Claude gets the whole of Revit**, not a fixed menu. It can run code directly in your model, and it has
+  about 35 ready-made tools for views, elements, creation and MEP, every one tested against a real project.
+- **It can use the interface too**, clicking through Revit itself for the jobs the software gives no other
+  way to do. Mostly that means editing inside groups ([below](#grouped-parameters--claude-assist)).
+- **Teach it once, use it everywhere.** Save a working request as a skill and it's there in every project.
+  Two come with the add-in: a read-only schedule inventory, which is a safe first thing to try, and
+  elevation door and window tagging that spots the openings that are actually visible, so it won't tag ones
+  hidden behind the facade.
 
 Turning it on, once:
 
-1. Turn **Claude Assist** on in Transom Settings (Schedule Hub → Settings tab). The first ON registers
-   Transom's MCP servers and starts the bridge.
-2. Restart Claude Code so it launches the shim and picks up the new servers.
+1. Turn **Claude Assist** on in Transom Settings (Schedule Hub → Settings tab). That sets everything up the
+   first time you switch it on.
+2. Restart Claude Code so it picks up the connection.
 
 <table>
 <tr>
@@ -93,69 +93,64 @@ Turning it on, once:
 
 A few things worth knowing:
 
-- Drop `CLAUDE.md` from [`claude/`](claude/) into your project root or `~/.claude/CLAUDE.md` and Claude Code
-  already knows the tools and the safe-write workflow. [`claude/README.md`](claude/README.md) says exactly
-  where it goes.
-- Stuck for a first request? **Show me what you can do** exports a demo script Claude runs in a fresh project
-  while you watch.
-- Use **Claude Code**, not Claude Cowork, which runs in a VM that can't reach a bridge on your machine.
-- Run it with bypass permissions on, or its permission prompts steal focus from Revit and the UI-assist
-  clicks silently miss.
+- **Drag and drop one instruction file into Claude Code** and it has everything it needs to automate Revit.
+  Take it from [`claude/`](claude/), and [`claude/README.md`](claude/README.md) says where to put it.
+- Stuck for a first request? **Show me what you can do** hands Claude a demo it runs in a fresh project while
+  you watch.
+- Use **Claude Code**, not Claude Cowork. Cowork runs in the cloud and can't reach Revit on your machine.
+- Run it with bypass permissions on. Otherwise its permission prompts keep stealing focus from Revit and
+  Claude's clicks land in the wrong place.
 
 ### AI render enhancement — AIRE
 
 **AI Render Enhancer** has its own ribbon button and two tabs. **Enhance** improves a batch of renders, and
 **Video** turns one render into a short clip ([below](#video--one-render-one-clip)). Both work on image
-**files**, not the model, so you don't need a project open. You don't need Revit either. Tick **AIRE standalone app** when you install
-and it gets its own Start Menu shortcut.
+**files**, not the model, so you don't need a project open. You don't need Revit either. Tick
+**AIRE standalone app** when you install and it gets its own Start Menu shortcut.
 
 <table>
 <tr><td><img src="docs/images/aire.jpg" alt="Transom AI Render Enhancer window: an API key field with a Saved Keys dropdown, input and output folder pickers, model/resolution/quality selectors, a Prompt card with a saved-prompt dropdown and a Pop Out button, a checkable queue of render images with their resolutions, the estimated cost for the checked images, and a progress bar" width="100%"></td></tr>
 <tr><td><em><b>AI Render Enhancer</b>: the queue, the settings that drive the cost, and the estimate for exactly what you have ticked.</em></td></tr>
 </table>
 
-- **Enhance a batch** through OpenAI's image models. Grass, planting, lighting and concrete texture come back
-  photoreal, while the camera angle, perspective, geometry, mullions, trim lines and overall composition stay
-  exactly where Revit put them.
-- **Point and tick.** **Scan Folder**, or drag images and folders onto the list. `.png`, `.jpg`, `.jpeg` and
-  `.webp` go in, `<name>_enhanced.png` comes out, and AIRE skips its own outputs so a re-scan won't re-bill
-  you. It defaults to **`gpt-image-2`** at 3840×2160, high quality.
-- **Nothing is spent without a confirmation.** Every batch shows the count, model, resolution, quality and
-  estimated cost before it starts, **Cancel Batch** stops one that's already running, and each run logs a row
-  per image to `logs\enhancement_log_<timestamp>.csv`.
-- **Bring your own key.** It's encrypted per Windows user (DPAPI) in `%AppData%\Transom\aire.json` and goes
-  nowhere but `api.openai.com`. Name and save prompts, or save one key per account and switch between them.
-- **Claude can run the same batches** over the bridge with `aire_enhance`, `aire_job_status` and
-  `aire_cancel_job`. It reads the key from that store, so the key never passes through Claude. Either way,
-  only one batch runs at a time.
+- **Your render, made photoreal.** Grass, planting, lighting and concrete texture come back looking real,
+  while the camera angle, perspective, geometry, mullions and trim lines stay exactly where Revit put them.
+  It's your building, not a new one.
+- **A whole folder at a time.** Drag in images or a folder, tick the ones you want, and get 4K back. Your
+  originals are never touched, and finished images are skipped next time so you never pay twice for the same
+  render.
+- **See the price before you spend it.** Every batch tells you what it will cost and waits for your go-ahead.
+  Stop it part way through whenever you want. Every run leaves a spreadsheet of what it did and what it cost.
+- **Your account, your key, your machine.** Use your own OpenAI key. It's encrypted on your computer and goes
+  nowhere but OpenAI. Save a prompt that works, or a key per account, and pick them from a list.
+- **Or let Claude do the work.** Ask Claude Code to enhance a folder and it runs the same batches for you,
+  without ever seeing your key. Only one job runs at a time, either way.
 
 #### Video — one render, one clip
 
-The **Video** tab turns one finished render into a few seconds of motion, ideally the 4K `_enhanced.png` the
-Enhance tab just made. It goes through [Higgsfield](https://cloud.higgsfield.ai), which is one credential for
-their own DoP camera models plus Kling, Veo, Seedance, Hailuo, Sora and Wan. This is a hero shot, not a
-walkthrough. Clips run 2 to 12 seconds and top out at 1080p.
+The **Video** tab turns one finished render into a few seconds of motion, ideally the 4K image the Enhance
+tab just made. One account at [Higgsfield](https://cloud.higgsfield.ai) reaches their own camera-move models
+plus Kling, Veo, Seedance, Hailuo, Sora and Wan. This is a hero shot, not a walkthrough. Clips run 2 to 12
+seconds and top out at 1080p.
 
 <table>
 <tr><td><img src="docs/images/aire-video.jpg" alt="Transom AI Render Enhancer window on the Video tab: Key ID and Secret fields with a Saved Keys dropdown, an output folder picker, a model dropdown showing Higgsfield DoP Standard, clip duration/resolution/aspect dropdowns, two camera-preset dropdowns with strength sliders, a Motion Prompt card with its own saved prompts and a Pop Out button, a large source-render thumbnail with its filename, size and aspect ratio, and a Generate Clip button beside the estimated clip cost" width="100%"></td></tr>
 <tr><td><em><b>Video</b>: one render, one model, only the settings that model accepts, and Higgsfield's own price for that exact request before anything is sent.</em></td></tr>
 </table>
 
-- **The price is the vendor's, not a guess.** It's Higgsfield's estimate for the exact request that would be
-  sent, refreshed whenever you change a setting. If that estimate can't be obtained, **Generate Clip** is
-  refused outright.
-- **Every setting comes from the model.** The 21 image-to-video models are generated from Higgsfield's
-  published API spec, so each one offers only the durations, resolutions and aspect ratios it actually
-  accepts. Camera presets only appear on the DoP models, because those are the only ones that take them. A
-  render whose aspect ratio the model can't produce gets a warning before Generate, not a silent crop after.
-- **Cancel means what Higgsfield means by it.** Cancel a queued request and Higgsfield refunds it. Once
-  generation starts it will finish and you'll be charged, so **Cancel** is only live while it would still
-  help, and it tells you why when it isn't.
-- **The clip lands beside the render** as `<name>_clip.mp4`, plus a `logs\video_log_<timestamp>.csv` row with
-  the estimate and what was actually charged. Higgsfield only keeps outputs for about a week, so AIRE
-  downloads immediately instead of just recording a URL.
-- **Same guard rails as Enhance.** One paid job at a time across Revit and the standalone app. Credentials
-  here are a **Key ID** and **Secret** pair, encrypted like the OpenAI key, with their own **Saved Keys**.
+- **No surprise bills.** The price on screen is Higgsfield's own price for that exact clip, updated as you
+  change settings. If it can't get you a price, it won't let you spend anything.
+- **Only the settings that actually work.** Pick a model and you're offered the clip lengths, sizes and
+  shapes that model really supports, so you can't set up a job it will reject. Camera moves show up on the
+  models that take them. If your render is the wrong shape, you're warned before you pay, not cropped after.
+- **Cancel while it still counts.** Stop a clip that's still waiting its turn and you get your money back.
+  Once it starts rendering it will finish and be charged, and the button tells you which side of that line
+  you're on.
+- **The file is yours straight away.** Your clip downloads into your own folder with a spreadsheet line for
+  what it cost. Higgsfield only keeps clips for about a week, so Transom never leaves you holding a link
+  that expires.
+- **The same safety rails.** One paid job at a time, whether you started it in Revit or on its own. Your
+  Higgsfield login is encrypted on your machine just like your OpenAI key, and you're not limited to one.
 
 *AIRE is much newer than the schedule editor and has had a lot less mileage. Treat your early batches and
 clips as a trial, and check the first costs against your real OpenAI and Higgsfield usage.*
@@ -174,18 +169,18 @@ instance, so Transom turns that flag on and writes it. But a **built-in** parame
 or a **geometry-driving** one, can only be changed from inside **Edit Group** mode. There is no API path to
 it at all. So on import, Transom asks you per affected column:
 
-- **New parameter (2a type / 2b instance).** Create one, repoint the schedule column onto it, and write your
-  edits there. Nothing gets ungrouped and the built-in keeps its old values underneath. Never offered for
-  geometry-driving parameters, where a new parameter would change the schedule while the geometry sat still.
-- **Claude-Assist.** Transom stages a `.json` and a step-by-step `.md` and doesn't touch the model itself.
-  The Claude Code session already on the bridge enters Edit Group mode, sets the parameter in the Properties
-  palette, finishes the group, then verifies the value and the member count. It works through excluded
-  members, attached detail groups and nested groups.
-- **Skip.** Leave the column alone, including its ungrouped elements.
+- **Write to a new parameter.** Transom makes one, points the schedule column at it, and puts your edits
+  there. Nothing is ungrouped and the original values stay underneath. You choose whether the new parameter
+  is shared across the type or set on each element. This isn't offered where the parameter drives geometry,
+  since the schedule would change while the model stayed put.
+- **Hand it to Claude.** Transom writes out the instructions and stays out of the model itself. Your Claude
+  Code session opens the group, makes the edit the way you would by hand, closes it, then checks the value
+  and the count. It handles nested groups, attached detail groups and excluded members.
+- **Skip it.** Leave that column alone.
 
-An Edit Group edit lands on the **group definition**, so every instance of that group type gets the same
-value. If you need per-instance values, take 2b instead. Claude-Assist drives the live UI, so try it on a
-throwaway model first, and never Synchronize with Central mid-run on a workshared model.
+Editing inside a group changes the group itself, so every copy of that group gets the same value. When you
+need them to differ, put the edit on a new per-element parameter instead. Claude is driving the real
+interface here, so try it on a throwaway model first, and never Synchronize with Central part way through.
 
 ## Install
 
@@ -196,7 +191,7 @@ throwaway model first, and never Synchronize with Central mid-run on a workshare
 
 **Always use the SingleUser installer.** Claude-Assist's install-time setup only runs there. There's a
 machine-wide **MultiUser** MSI built from this codebase for IT and firm-wide deployment, but it isn't linked
-here on purpose. It needs admin rights and, because it runs as `SYSTEM`, it defers the MCP shim to Revit's
+here on purpose. It needs admin rights, and it can't finish setting up the Claude connection until Revit's
 first launch. Build it from source if you genuinely need it.
 
 <details>
