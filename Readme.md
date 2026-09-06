@@ -25,7 +25,7 @@ Double-click the `.msi`, then start Revit. Supports **Revit 2025, 2026 & 2027**.
 Transom is a Revit add-in that does three things. It exports your schedules to a spreadsheet and imports your
 edits back safely. It connects the live model to **Claude Code**. And it enhances your renders with AI.
 
-Each part works on its own. The round-trip doesn't need Claude. The Claude layer works anywhere in the model,
+Each part works on its own. The schedule editor doesn't need Claude. The Claude layer works anywhere in the model,
 schedules or not. The render enhancer only reads image files, so nothing has to be open. None of it needs
 administrator rights.
 
@@ -157,13 +157,13 @@ walkthrough. Clips run 2 to 12 seconds and top out at 1080p.
 - **Same guard rails as Enhance.** One paid job at a time across Revit and the standalone app. Credentials
   here are a **Key ID** and **Secret** pair, encrypted like the OpenAI key, with their own **Saved Keys**.
 
-*AIRE is much newer than the schedule round-trip and has had a lot less mileage. Treat your early batches and
+*AIRE is much newer than the schedule editor and has had a lot less mileage. Treat your early batches and
 clips as a trial, and check the first costs against your real OpenAI and Higgsfield usage.*
 
 > **Status:** v1.9.15 (Revit 2025/2026/2027) gives AIRE the **Video tab** described above. Recent releases
 > before it: a **prompt library, saved API keys and a pop-out editor** (v1.9.14), **AIRE as a standalone app**
 > that runs without Revit (v1.9.12), a **Cancel Batch** button (v1.9.11), and a line-by-line **correctness
-> audit** of the schedule round-trip (v1.9.9). Full history is on the
+> audit** of the schedule editor (v1.9.9). Full history is on the
 > [releases page](https://github.com/Dave5264/transom-revit/releases).
 
 ### Grouped parameters — Claude-Assist
