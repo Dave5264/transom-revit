@@ -55,6 +55,9 @@ public sealed class AireSettings
     public string Model { get; set; } = AireEngine.DefaultModel;
     public string Size { get; set; } = AireEngine.DefaultSize;
     public string Quality { get; set; } = AireEngine.DefaultQuality;
+    /// <summary>Send <c>input_fidelity: high</c> on every edit (the API's own geometry-preservation control).
+    /// Default on; a file written before the option existed reads as on.</summary>
+    public bool HighInputFidelity { get; set; } = true;
     public string Theme { get; set; } = "Light";
 
     /// <summary>The reusable prompt library shown in the Enhance tab's "Saved prompts" dropdown.</summary>

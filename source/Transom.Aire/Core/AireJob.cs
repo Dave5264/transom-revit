@@ -20,6 +20,14 @@ public sealed class AireResult
     public double TimeSeconds;
     public double EstimatedCostUsd;
     public string ErrorMessage = "";
+
+    // From the response's usage block — null / "" when OpenAI sent none, never zero. The estimate above is
+    // what the confirm dialog promised; these are what was billed.
+    public string ActualSize = "";
+    public string ActualQuality = "";
+    public int? OutputTokens;
+    public int? InputImageTokens;
+    public double? ActualCostUsd;
 }
 
 /// <summary>
@@ -83,6 +91,8 @@ public sealed class AireJob : AireJobBase
     public string Model { get; }
     public string Size { get; }
     public string Quality { get; }
+    /// <summary>Send <c>input_fidelity: high</c> — the API's own "keep the geometry" control.</summary>
+    public bool HighInputFidelity { get; }
 
     // Volatile snapshot state — written by the run loop, read by the UI dispatcher and bridge pollers.
     // Status: queued | running | completed | failed
@@ -93,11 +103,18 @@ public sealed class AireJob : AireJobBase
     public int FailureCount { get; private set; }
     public double EstimatedCostUsd { get; private set; }
 
+    /// <summary>Sum of the billed cost of every successful image whose response carried a usage block.</summary>
+    public double ActualCostUsd { get; private set; }
+    /// <summary>How many successful images contributed to <see cref="ActualCostUsd"/> — when it is less than
+    /// <see cref="SuccessCount"/>, some responses came back without usage and the actual is a partial sum.</summary>
+    public int ActualCostImages { get; private set; }
+    public bool HasActualCost => ActualCostImages > 0;
+
     private readonly List<AireResult> _results = new();
     private readonly object _gate = new();
 
     public AireJob(IEnumerable<string> inputFiles, string outputFolder, string prompt,
-        string model, string size, string quality)
+        string model, string size, string quality, bool highInputFidelity = true)
     {
         InputFiles = inputFiles.ToList();
         OutputFolder = outputFolder;
@@ -105,6 +122,7 @@ public sealed class AireJob : AireJobBase
         Model = model;
         Size = size;
         Quality = quality;
+        HighInputFidelity = highInputFidelity;
     }
 
     public override string Kind => "enhance";
@@ -130,7 +148,7 @@ public sealed class AireJob : AireJobBase
             var logPath = Path.Combine(logsFolder, $"enhancement_log_{DateTime.Now:yyyyMMdd_HHmmss}.csv");
 
             int textTokens = AireEngine.EstimateTextTokens(Prompt);
-            int outputTokens = AireEngine.EstimateImageTokensFromSize(Size);
+            int outputTokens = AireEngine.EstimateOutputTokens(Model, Size, Quality);
 
             for (int i = 0; i < InputFiles.Count; i++)
             {
@@ -153,13 +171,27 @@ public sealed class AireJob : AireJobBase
                     var outputPath = Path.Combine(OutputFolder,
                         Path.GetFileNameWithoutExtension(inputPath) + "_enhanced." + AireEngine.OutputFormat);
 
-                    var png = await AireEngine.EditImageAsync(apiKey, Model, inputPath, Prompt, Size, Quality, Cts.Token)
+                    var edit = await AireEngine.EditImageAsync(apiKey, Model, inputPath, Prompt, Size, Quality,
+                            HighInputFidelity, Cts.Token)
                         .ConfigureAwait(false);
-                    await File.WriteAllBytesAsync(outputPath, png, CancellationToken.None).ConfigureAwait(false);
+                    await File.WriteAllBytesAsync(outputPath, edit.ImageBytes, CancellationToken.None).ConfigureAwait(false);
 
                     result.OutputFile = outputPath;
                     result.Status = "Success";
                     result.EstimatedCostUsd = Math.Round(cost, 6);
+                    // The estimate stays (it is what was confirmed); the actual sits beside it. Both accrue
+                    // only on success, and a response without usage leaves the actual unknown, not zero.
+                    result.ActualSize = edit.ActualSize;
+                    result.ActualQuality = edit.ActualQuality;
+                    result.OutputTokens = edit.OutputTokens;
+                    // Without the image/text split, the whole input count is logged (and priced) as image tokens.
+                    result.InputImageTokens = edit.InputImageTokens ?? edit.InputTokens;
+                    if (edit.ActualCostUsd is { } actual)
+                    {
+                        result.ActualCostUsd = Math.Round(actual, 6);
+                        ActualCostUsd += actual;
+                        ActualCostImages++;
+                    }
                     SuccessCount++;
                     EstimatedCostUsd += cost;
                 }
@@ -199,10 +231,17 @@ public sealed class AireJob : AireJobBase
         Notify();
     }
 
+    /// <summary>
+    ///     The original app's ten columns by position, then four appended for what OpenAI actually billed —
+    ///     actual_size (the produced size, which with size=auto is the only record of it), output_tokens,
+    ///     input_image_tokens and actual_cost_usd. All four are blank when the response carried no usage
+    ///     block. Anything reading the first ten by position keeps working.
+    /// </summary>
     private void WriteCsv(string path)
     {
         var sb = new StringBuilder();
-        sb.AppendLine("original_file,output_file,input_resolution,model,output_size,quality,status,time_seconds,estimated_cost_usd,error_message");
+        sb.AppendLine("original_file,output_file,input_resolution,model,output_size,quality,status,time_seconds,estimated_cost_usd,error_message"
+                      + ",actual_size,output_tokens,input_image_tokens,actual_cost_usd");
         lock (_gate)
             foreach (var r in _results)
                 sb.AppendLine(string.Join(",",
@@ -210,7 +249,11 @@ public sealed class AireJob : AireJobBase
                     Csv(Quality), Csv(r.Status),
                     r.TimeSeconds.ToString(CultureInfo.InvariantCulture),
                     r.EstimatedCostUsd.ToString(CultureInfo.InvariantCulture),
-                    Csv(r.ErrorMessage)));
+                    Csv(r.ErrorMessage),
+                    Csv(r.ActualSize),
+                    r.OutputTokens?.ToString(CultureInfo.InvariantCulture) ?? "",
+                    r.InputImageTokens?.ToString(CultureInfo.InvariantCulture) ?? "",
+                    r.ActualCostUsd?.ToString(CultureInfo.InvariantCulture) ?? ""));
         File.WriteAllText(path, sb.ToString(), new UTF8Encoding(false));
     }
 }
@@ -347,8 +390,8 @@ public static class AireJobManager
 
     /// <summary>Creates and starts an image batch. Returns null (with <paramref name="error"/>) when refused.</summary>
     public static AireJob? Start(IEnumerable<string> inputFiles, string outputFolder, string prompt,
-        string model, string size, string quality, string apiKey, out string error) =>
-        Launch(() => new AireJob(inputFiles, outputFolder, prompt, model, size, quality),
+        string model, string size, string quality, string apiKey, out string error, bool highInputFidelity = true) =>
+        Launch(() => new AireJob(inputFiles, outputFolder, prompt, model, size, quality, highInputFidelity),
             job => job.Start(apiKey), out error);
 
     /// <summary>Creates and starts a video clip. Returns null (with <paramref name="error"/>) when refused.

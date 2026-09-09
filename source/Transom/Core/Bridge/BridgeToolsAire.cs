@@ -60,18 +60,29 @@ public static partial class BridgeTools
         // --- options (defaults mirror the AIRE window) ---------------------
         var model = StrArg(args, "model");
         if (string.IsNullOrWhiteSpace(model)) model = AireEngine.DefaultModel;
+        // A retired id gets the reason, not just the list of what is left.
+        if (AireEngine.RetirementMessage(model) is { } retired) return Err(retired);
         if (!AireEngine.ModelSizeOptions.TryGetValue(model, out var validSizes))
-            return Err($"unknown model '{model}' (valid: {string.Join(", ", AireEngine.ModelSizeOptions.Keys)})");
+            return Err($"unknown model '{model}' (valid: {string.Join(", ", AireEngine.Models)})");
 
         var size = StrArg(args, "size");
         if (string.IsNullOrWhiteSpace(size)) size = "auto";
         if (!validSizes.Contains(size))
             return Err($"size '{size}' is not valid for {model} (valid: {string.Join(", ", validSizes)})");
 
+        // Quality is per model: xhigh/max exist only on the 2.5 models, and the default rung differs
+        // (max on 2.5, high on gpt-image-2 — the same spend). Validating against a flat list would let a
+        // doomed job start and 400 on every image after the spend was confirmed.
         var quality = StrArg(args, "quality");
-        if (string.IsNullOrWhiteSpace(quality)) quality = AireEngine.DefaultQuality;
-        if (!AireEngine.QualityOptions.Contains(quality))
-            return Err($"unknown quality '{quality}' (valid: {string.Join(", ", AireEngine.QualityOptions)})");
+        if (string.IsNullOrWhiteSpace(quality)) quality = AireEngine.DefaultQualityFor(model);
+        if (!AireEngine.IsValidQuality(model, quality))
+            return Err($"quality '{quality}' is not valid for {model} (valid: {string.Join(", ", AireEngine.QualityOptionsFor(model))})");
+
+        var fidelity = StrArg(args, "input_fidelity");
+        if (string.IsNullOrWhiteSpace(fidelity)) fidelity = "high";
+        if (fidelity != "high" && fidelity != "low")
+            return Err($"input_fidelity '{fidelity}' is not valid (valid: high, low)");
+        bool highInputFidelity = fidelity == "high";
 
         var prompt = StrArg(args, "prompt");
         if (string.IsNullOrWhiteSpace(prompt)) prompt = AireEngine.DefaultPrompt;
@@ -85,11 +96,12 @@ public static partial class BridgeTools
 
         // --- cost estimate (returned so the caller can report it) ----------
         int textTokens = AireEngine.EstimateTextTokens(prompt);
-        int outputTokens = AireEngine.EstimateImageTokensFromSize(size);
+        int outputTokens = AireEngine.EstimateOutputTokens(model, size, quality);
         double estimate = files.Sum(f => AireEngine.EstimateCost(
             AireEngine.EstimateImageTokensFromFile(f).Tokens, outputTokens, textTokens));
 
-        var job = AireJobManager.Start(files, outputFolder, prompt, model, size, quality, apiKey, out var error);
+        var job = AireJobManager.Start(files, outputFolder, prompt, model, size, quality, apiKey, out var error,
+            highInputFidelity);
         if (job == null) return Err(error);
 
         return Json(new Dictionary<string, object?>
@@ -101,10 +113,14 @@ public static partial class BridgeTools
             ["model"] = model,
             ["size"] = size,
             ["quality"] = quality,
+            ["input_fidelity"] = fidelity,
             ["output_folder"] = outputFolder,
             ["estimated_cost_usd"] = Math.Round(estimate, 4),
+            ["estimated_cost_per_image_usd"] = Math.Round(files.Count == 0 ? 0 : estimate / files.Count, 4),
             ["note"] = "Job started in the background (each image can take minutes). Poll aire_job_status "
-                       + "with this job_id — do not assume completion, and report the estimated cost to the user.",
+                       + "with this job_id — do not assume completion. Report the estimated cost to the user now; "
+                       + "once the job finishes, report actual_cost_usd from aire_job_status instead (it is what "
+                       + "OpenAI billed, from the usage block of each response).",
         });
     }
 
@@ -121,6 +137,10 @@ public static partial class BridgeTools
             ["status"] = r.Status,
             ["time_seconds"] = r.TimeSeconds,
             ["estimated_cost_usd"] = r.EstimatedCostUsd,
+            // What OpenAI billed for this image (from the response's usage block); null when it sent none.
+            ["actual_cost_usd"] = r.ActualCostUsd,
+            ["output_tokens"] = r.OutputTokens,
+            ["actual_size"] = r.ActualSize.Length > 0 ? r.ActualSize : null,
             ["error_message"] = r.ErrorMessage,
         }).Cast<object?>().ToList();
 
@@ -138,6 +158,10 @@ public static partial class BridgeTools
             ["success_count"] = job.SuccessCount,
             ["failure_count"] = job.FailureCount,
             ["estimated_cost_usd"] = Math.Round(job.EstimatedCostUsd, 4),
+            // The billed total so far, or null until at least one response has carried usage. When
+            // actual_cost_images < success_count some images came back without usage and this is partial.
+            ["actual_cost_usd"] = job.HasActualCost ? Math.Round(job.ActualCostUsd, 4) : null,
+            ["actual_cost_images"] = job.ActualCostImages,
             ["total_time"] = job.IsFinished ? AireEngine.SecondsToText(job.TotalTimeSeconds) : null,
             ["log_file"] = job.LogFile.Length > 0 ? job.LogFile : null,
             ["error"] = job.Error.Length > 0 ? job.Error : null,

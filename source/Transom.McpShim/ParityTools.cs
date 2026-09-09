@@ -751,9 +751,10 @@ internal static class ParityTools
             "AIRE (AI Render Enhancer): start a background batch that enhances architectural render "
             + "images through OpenAI's image-edit API (photoreal grass/landscaping/lighting/concrete while "
             + "preserving geometry and composition). SPENDS REAL OpenAI API CREDIT on the user's saved "
-            + "key — always tell the user the estimated_cost_usd from the response. Needs no open document. "
-            + "Returns a job_id IMMEDIATELY (each image can take minutes); poll aire_job_status for progress. "
-            + "Outputs are written as <name>_enhanced.png plus a CSV log under <output_folder>\\logs. "
+            + "key — always tell the user the estimated_cost_usd from the response, and once the job has "
+            + "finished report actual_cost_usd from aire_job_status instead (what OpenAI billed). Needs no open "
+            + "document. Returns a job_id IMMEDIATELY (each image can take minutes); poll aire_job_status for "
+            + "progress. Outputs are written as <name>_enhanced.png plus a CSV log under <output_folder>\\logs. "
             + "The API key must already be saved in the AIRE window (Transom ribbon) — there is no key argument.",
             Schema(
                 new JsonObject
@@ -764,10 +765,18 @@ internal static class ParityTools
                     ["output_folder"] = Prop("string", "Folder for the *_enhanced.png outputs and the logs\\ CSV (created if missing)."),
                     ["prompt"] = Prop("string", "Enhancement prompt applied to every image (optional; defaults to "
                         + "AIRE's architectural-render prompt that preserves geometry/composition)."),
-                    ["model"] = Prop("string", "OpenAI image model: gpt-image-2 (default), gpt-image-1.5, gpt-image-1, or gpt-image-1-mini."),
-                    ["size"] = Prop("string", "Output resolution (defaults to \"auto\"). gpt-image-2 also allows 3840x2160, 2160x3840, "
-                        + "2048x2048, 2048x1152; all models allow 1536x1024, 1024x1536, 1024x1024, auto."),
-                    ["quality"] = Prop("string", "high (default), medium, low, or auto."),
+                    ["model"] = Prop("string", "OpenAI image model: gpt-image-2.5-flare (default; best quality per cost, "
+                        + "fastest), gpt-image-2.5-sunburst (precision editing, slower), or gpt-image-2. gpt-image-1, "
+                        + "gpt-image-1.5 and gpt-image-1-mini are being retired by OpenAI and are refused."),
+                    ["size"] = Prop("string", "Output resolution (defaults to \"auto\"). Every model allows 3840x2160, 2160x3840, "
+                        + "2048x2048, 2048x1152, 1536x1024, 1024x1536, 1024x1024, auto. OpenAI documents sizes above "
+                        + "2560x1440 as experimental."),
+                    ["quality"] = Prop("string", "Per model. gpt-image-2.5-*: max (default), xhigh, high, medium, low, auto. "
+                        + "gpt-image-2: high (default), medium, low, auto. The labels are NOT comparable across models: "
+                        + "gpt-image-2 low/medium/high spend what 2.5 low/high/max spend, so 2.5 high is about 4x cheaper "
+                        + "than 2.5 max at 4K. Passing xhigh or max to gpt-image-2 is refused."),
+                    ["input_fidelity"] = Prop("string", "high (default) or low. high asks the model to preserve the input image's "
+                        + "geometry and detail closely — what AIRE's prompt is for; low is the API default."),
                 },
                 "output_folder")));
 
@@ -775,7 +784,9 @@ internal static class ParityTools
             "aire_job_status",
             "Progress of an AIRE enhancement job started with aire_enhance: status "
             + "(queued/running/completed/failed), done/total counts, current file, per-image results, "
-            + "estimated cost so far, and the CSV log path when finished. A batch stopped early still ends "
+            + "estimated cost so far, actual_cost_usd (what OpenAI billed so far, from each response's usage "
+            + "block — report this rather than the estimate once it is present; null until the first image "
+            + "returns), and the CSV log path when finished. A batch stopped early still ends "
             + "as 'completed' — check the 'cancelled' flag to tell a full run from a cancelled one. Poll "
             + "this instead of waiting — a 4K image can take minutes.",
             Schema(

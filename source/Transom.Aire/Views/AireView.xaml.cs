@@ -47,17 +47,21 @@ public sealed partial class AireView
         Instance = this;
         QueueList.ItemsSource = _queue;
 
-        ModelCombo.ItemsSource = AireEngine.ModelSizeOptions.Keys.ToList();
-        QualityCombo.ItemsSource = AireEngine.QualityOptions;
+        ModelCombo.ItemsSource = AireEngine.Models;
+        // Sizes and qualities are both per model — see PopulateSizeCombo / PopulateQualityCombo.
         ThemeCombo.ItemsSource = new[] { "Light", "Dark" };
 
         var settings = AireSettings.Load();
         LoadSettings(settings);
 
-        ModelCombo.SelectionChanged += (_, _) => { PopulateSizeCombo(); UpdateEstimate(); };
+        ModelCombo.SelectionChanged += (_, _) => { PopulateSizeCombo(); PopulateQualityCombo(); UpdateEstimate(); };
         SizeCombo.SelectionChanged += (_, _) => UpdateEstimate();
+        // Quality is the setting that decides the output-token spend (36x between low and max at 4K), so
+        // the number on screen has to move when it does.
+        QualityCombo.SelectionChanged += (_, _) => UpdateEstimate();
         ThemeCombo.SelectionChanged += (_, _) => ApplyTheme((ThemeCombo.SelectedItem as string) == "Dark");
         PromptBox.TextChanged += (_, _) => UpdateEstimate();
+        MigrationNoticeCloseButton.Click += (_, _) => MigrationNotice.Visibility = System.Windows.Visibility.Collapsed;
 
         InputBrowseButton.Click += (_, _) => BrowseFolder(InputFolderBox, "Choose Input Folder");
         OutputBrowseButton.Click += (_, _) => BrowseFolder(OutputFolderBox, "Choose Output Folder");
@@ -106,10 +110,27 @@ public sealed partial class AireView
         InputFolderBox.Text = s.InputFolder;
         OutputFolderBox.Text = s.OutputFolder;
         PromptBox.Text = string.IsNullOrWhiteSpace(s.Prompt) ? AireEngine.DefaultPrompt : s.Prompt;
-        ModelCombo.SelectedItem = AireEngine.ModelSizeOptions.ContainsKey(s.Model) ? s.Model : AireEngine.DefaultModel;
+
+        // A saved model OpenAI is retiring lands on the current default with its quality mapped onto the
+        // new ladder, and the window SAYS so: landing there silently would change what the next batch
+        // spends and produces without the user touching a control. Shown once by construction — the next
+        // SaveSettings writes the new model, so the next open finds nothing to migrate.
+        var model = s.Model;
+        var quality = s.Quality;
+        if (AireEngine.IsRetiredModel(model))
+        {
+            model = AireEngine.DefaultModel;
+            quality = AireEngine.MigrateQuality(s.Quality);
+            ShowMigrationNotice(s.Model, AireEngine.RetiredModels[s.Model], s.Quality, quality);
+        }
+        else if (!AireEngine.IsKnownModel(model)) model = AireEngine.DefaultModel;
+
+        ModelCombo.SelectedItem = model;
         PopulateSizeCombo();
         if (SizeCombo.Items.Contains(s.Size)) SizeCombo.SelectedItem = s.Size;
-        QualityCombo.SelectedItem = AireEngine.QualityOptions.Contains(s.Quality) ? s.Quality : AireEngine.DefaultQuality;
+        PopulateQualityCombo();
+        QualityCombo.SelectedItem = AireEngine.IsValidQuality(model, quality) ? quality : AireEngine.DefaultQualityFor(model);
+        FidelityCheck.IsChecked = s.HighInputFidelity;
         ThemeCombo.SelectedItem = s.Theme == "Dark" ? "Dark" : "Light";
         PromptNameBox.Text = s.SelectedPromptName;
         ApiKeyNameBox.Text = s.SelectedApiKeyName;
@@ -134,7 +155,8 @@ public sealed partial class AireView
         s.Prompt = PromptBox.Text;
         s.Model = ModelCombo.SelectedItem as string ?? AireEngine.DefaultModel;
         s.Size = SizeCombo.SelectedItem as string ?? AireEngine.DefaultSize;
-        s.Quality = QualityCombo.SelectedItem as string ?? AireEngine.DefaultQuality;
+        s.Quality = QualityCombo.SelectedItem as string ?? AireEngine.DefaultQualityFor(s.Model);
+        s.HighInputFidelity = FidelityCheck.IsChecked == true;
         s.Theme = ThemeCombo.SelectedItem as string ?? "Light";
         SaveVideoSettings(s);
         s.Save();
@@ -144,9 +166,38 @@ public sealed partial class AireView
     {
         var model = ModelCombo.SelectedItem as string ?? AireEngine.DefaultModel;
         var current = SizeCombo.SelectedItem as string;
-        var sizes = AireEngine.ModelSizeOptions.TryGetValue(model, out var list) ? list : new[] { "auto" };
+        var sizes = AireEngine.SizeOptionsFor(model);
         SizeCombo.ItemsSource = sizes;
         SizeCombo.SelectedItem = current != null && sizes.Contains(current) ? current : sizes[0];
+    }
+
+    /// <summary>
+    ///     Same shape as <see cref="PopulateSizeCombo"/>: the selected model's rungs, keeping a still-valid
+    ///     selection and otherwise falling back to the model's default (index 0). Switching gpt-image-2 →
+    ///     2.5 keeps "high", which on 2.5 is a cheaper rung — the estimate line is what shows that.
+    /// </summary>
+    private void PopulateQualityCombo()
+    {
+        var model = ModelCombo.SelectedItem as string ?? AireEngine.DefaultModel;
+        var current = QualityCombo.SelectedItem as string;
+        var rungs = AireEngine.QualityOptionsFor(model);
+        QualityCombo.ItemsSource = rungs;
+        QualityCombo.SelectedItem = current != null && rungs.Contains(current) ? current : rungs[0];
+    }
+
+    /// <summary>The in-window notice for a retired saved model — wording is the feature in a tool that spends money.</summary>
+    private void ShowMigrationNotice(string oldModel, string shutdownDate, string oldQuality, string newQuality)
+    {
+        var mapped = string.Equals(oldQuality, newQuality, StringComparison.OrdinalIgnoreCase)
+            ? ""
+            : $", and Quality has been moved from {oldQuality} to {newQuality}, the rung that spends about the same";
+        MigrationNoticeText.Text =
+            $"AIRE was set to {oldModel}, which OpenAI switches off on {shutdownDate}. It has been changed to "
+            + $"{AireEngine.DefaultModel}, the current model{mapped}. Your prompt, folders and saved keys are unchanged."
+            + "\n\nQuality settings are not directly comparable between the old and new models. Check the estimate "
+            + "before your first batch. If your renders look softer than you expect, move Quality up a step; if "
+            + "they cost more than you expect, move it down.";
+        MigrationNotice.Visibility = System.Windows.Visibility.Visible;
     }
 
     // ---- saved prompts & API keys --------------------------------------------
@@ -453,7 +504,9 @@ public sealed partial class AireView
     {
         if (CostLabel == null) return; // combo events can fire during InitializeComponent
         int textTokens = AireEngine.EstimateTextTokens(PromptBox.Text.Trim());
-        int outputTokens = AireEngine.EstimateImageTokensFromSize(SizeCombo.SelectedItem as string ?? "auto");
+        var model = ModelCombo.SelectedItem as string ?? AireEngine.DefaultModel;
+        var quality = QualityCombo.SelectedItem as string ?? AireEngine.DefaultQualityFor(model);
+        int outputTokens = AireEngine.EstimateOutputTokens(model, SizeCombo.SelectedItem as string ?? "auto", quality);
         double total = CheckedItems().Sum(item => AireEngine.EstimateCost(item.Tokens, outputTokens, textTokens));
         _enhanceCostText = $"Estimated checked cost: ${total:0.0000}";
         UpdateHeroForTab();
@@ -468,7 +521,8 @@ public sealed partial class AireView
         var prompt = PromptBox.Text.Trim();
         var model = ModelCombo.SelectedItem as string ?? AireEngine.DefaultModel;
         var size = SizeCombo.SelectedItem as string ?? AireEngine.DefaultSize;
-        var quality = QualityCombo.SelectedItem as string ?? AireEngine.DefaultQuality;
+        var quality = QualityCombo.SelectedItem as string ?? AireEngine.DefaultQualityFor(model);
+        var highFidelity = FidelityCheck.IsChecked == true;
         var files = CheckedItems();
 
         if (apiKey.Length == 0)
@@ -499,19 +553,25 @@ public sealed partial class AireView
         }
 
         int textTokens = AireEngine.EstimateTextTokens(prompt);
-        int outputTokens = AireEngine.EstimateImageTokensFromSize(size);
+        int outputTokens = AireEngine.EstimateOutputTokens(model, size, quality);
         double estimate = files.Sum(f => AireEngine.EstimateCost(f.Tokens, outputTokens, textTokens));
 
+        // The per-image figure is the number a person can sanity-check against the folder they are about to
+        // point at; a batch total on its own hides a factor-of-ten mistake. And the log sentence is what
+        // makes the estimate honest now that the billed cost is recorded afterwards.
         var answer = MessageBox.Show(this,
             $"You are about to process {files.Count} image(s).\n\nModel: {model}\nResolution: {size}\nQuality: {quality}"
-            + $"\n\nEstimated cost: ${estimate:0.0000}\n\nContinue?",
+            + $"\nInput fidelity: {(highFidelity ? "high" : "low")}"
+            + $"\n\nEstimated cost: ${estimate:0.0000}  (${estimate / files.Count:0.0000} per image)"
+            + "\n\nThis is an estimate. The exact cost of each image is recorded in the CSV log when the batch finishes."
+            + "\n\nContinue?",
             "Confirm API usage", MessageBoxButton.YesNo, MessageBoxImage.Question);
         if (answer != MessageBoxResult.Yes) return;
 
         SaveSettings(); // remember everything (incl. the key) the moment the user commits to a run
 
         var job = AireJobManager.Start(files.Select(f => f.FullPath), outputFolder, prompt, model, size, quality,
-            apiKey, out var error);
+            apiKey, out var error, highFidelity);
         if (job == null)
         {
             MessageBox.Show(this, error, "AIRE busy", MessageBoxButton.OK, MessageBoxImage.Warning);
@@ -601,10 +661,22 @@ public sealed partial class AireView
                       + (cancelled && notAttempted > 0 ? $"\nNot attempted: {notAttempted}" : "")
                       + $"\nTotal time: {AireEngine.SecondsToText(job.TotalTimeSeconds)}"
                       + $"\nEstimated successful cost: ${job.EstimatedCostUsd:0.0000}"
+                      + ActualCostLine(job)
                       + $"\n\nLog saved to:\n{job.LogFile}";
         ProgressLabel.Text = message;
         MessageBox.Show(this, message, cancelled ? "Batch cancelled" : "Batch complete",
             MessageBoxButton.OK, MessageBoxImage.Information);
+    }
+
+    /// <summary>What OpenAI billed, beside the estimate, once at least one response carried a usage block.
+    /// Says so when only some images reported, rather than passing a partial sum off as the total.</summary>
+    private static string ActualCostLine(AireJob job)
+    {
+        if (!job.HasActualCost) return "";
+        var partial = job.ActualCostImages < job.SuccessCount
+            ? $" ({job.ActualCostImages} of {job.SuccessCount} images reported usage)"
+            : "";
+        return $"\nActual cost billed by OpenAI: ${job.ActualCostUsd:0.0000}{partial}";
     }
 
     // ---- theming -------------------------------------------------------------
@@ -643,6 +715,7 @@ public sealed partial class AireView
             Set("LinkFg", "#bae6fd");
             Set("ListBg", "#0b1220"); Set("ListItemHoverBg", "#1e293b"); Set("ListItemSelectedBg", "#2563eb");
             Set("ProgressBg", "#020617"); Set("ProgressChunk", "#38bdf8");
+            Set("NoticeBg", "#3d2a06"); Set("NoticeBorder", "#92400e"); Set("NoticeFg", "#fcd34d");
         }
         else
         {
@@ -661,6 +734,7 @@ public sealed partial class AireView
             Set("LinkFg", "#1d4ed8");
             Set("ListBg", "#ffffff"); Set("ListItemHoverBg", "#e0f2fe"); Set("ListItemSelectedBg", "#93c5fd");
             Set("ProgressBg", "#e5e7eb"); Set("ProgressChunk", "#2563eb");
+            Set("NoticeBg", "#fef3c7"); Set("NoticeBorder", "#fcd34d"); Set("NoticeFg", "#92400e");
         }
     }
 }

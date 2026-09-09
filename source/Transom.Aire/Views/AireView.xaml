@@ -49,6 +49,10 @@
         <SolidColorBrush x:Key="ListItemSelectedBg" Color="#93c5fd"/>
         <SolidColorBrush x:Key="ProgressBg" Color="#e5e7eb"/>
         <SolidColorBrush x:Key="ProgressChunk" Color="#2563eb"/>
+        <!-- The in-window notice (a retired saved model): amber, so it reads as "read this" and not as an error. -->
+        <SolidColorBrush x:Key="NoticeBg" Color="#fef3c7"/>
+        <SolidColorBrush x:Key="NoticeBorder" Color="#fcd34d"/>
+        <SolidColorBrush x:Key="NoticeFg" Color="#92400e"/>
 
         <!-- Cards. Padding is 14 rather than the original 18, and the hero's vertical padding 12 rather
              than 18: the Prompt box is the only star-sized control on the left, so every pixel of card
@@ -611,6 +615,8 @@
                                         <RowDefinition Height="Auto"/>
                                         <RowDefinition Height="6"/>
                                         <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="6"/>
+                                        <RowDefinition Height="Auto"/>
                                     </Grid.RowDefinitions>
 
                                     <TextBlock Grid.Row="0" Grid.Column="0" Style="{StaticResource FieldLabel}" Text="API Key"/>
@@ -657,16 +663,29 @@
 
                                     <TextBlock Grid.Row="8" Grid.Column="0" Style="{StaticResource FieldLabel}" Text="Model"/>
                                     <ComboBox  Grid.Row="8" Grid.Column="1" Grid.ColumnSpan="2" x:Name="ModelCombo"
-                                               Style="{StaticResource AireCombo}" Height="34"/>
+                                               Style="{StaticResource AireCombo}" Height="34"
+                                               ToolTip="gpt-image-2.5-flare: the default. Higher quality than gpt-image-2 at about half the latency, same price per token. gpt-image-2.5-sunburst: precision editing, slower. gpt-image-2: the previous model."/>
                                     <TextBlock Grid.Row="10" Grid.Column="0" Style="{StaticResource FieldLabel}" Text="Resolution"/>
                                     <ComboBox  Grid.Row="10" Grid.Column="1" Grid.ColumnSpan="2" x:Name="SizeCombo"
-                                               Style="{StaticResource AireCombo}" Height="34"/>
+                                               Style="{StaticResource AireCombo}" Height="34"
+                                               ToolTip="3840x2160 is the maximum. OpenAI documents every size above 2560x1440 as experimental."/>
                                     <TextBlock Grid.Row="12" Grid.Column="0" Style="{StaticResource FieldLabel}" Text="Quality"/>
+                                    <!-- Never presented as "better" without the cost: the tooltip carries the ladder, and the
+                                         estimate in the hero card moves the moment this changes. -->
                                     <ComboBox  Grid.Row="12" Grid.Column="1" Grid.ColumnSpan="2" x:Name="QualityCombo"
-                                               Style="{StaticResource AireCombo}" Height="34"/>
+                                               Style="{StaticResource AireCombo}" Height="34"
+                                               ToolTip="Higher rungs spend more output tokens: at 4K, max costs about 4x high and about 36x low. The labels are not comparable across models: gpt-image-2 high spends what the 2.5 models spend at max. The estimate updates as you change this."/>
                                     <TextBlock Grid.Row="14" Grid.Column="0" Style="{StaticResource FieldLabel}" Text="Theme"/>
                                     <ComboBox  Grid.Row="14" Grid.Column="1" Grid.ColumnSpan="2" x:Name="ThemeCombo"
                                                Style="{StaticResource AireCombo}" Height="34"/>
+                                    <!-- One row, no MinHeight anywhere: the Prompt card below is the star row and pays for
+                                         every pixel added here. -->
+                                    <TextBlock Grid.Row="16" Grid.Column="0" Style="{StaticResource FieldLabel}" Text="Fidelity"/>
+                                    <CheckBox  Grid.Row="16" Grid.Column="1" Grid.ColumnSpan="2" x:Name="FidelityCheck"
+                                               Foreground="{DynamicResource TextPrimary}" VerticalContentAlignment="Center"
+                                               VerticalAlignment="Center" IsChecked="True"
+                                               Content="High input fidelity: stay close to the source"
+                                               ToolTip="Sends input_fidelity: high, the API parameter that does what the default prompt spends four sentences asking for: keep the camera, geometry, mullions and composition. Turn it off to send the API default (low). It may raise the input-token cost slightly; the CSV log records what each image billed."/>
                                 </Grid>
 
                                 <StackPanel Orientation="Horizontal" Margin="0,10,0,0" HorizontalAlignment="Left">
@@ -735,15 +754,35 @@
                         </Border>
                     </Grid>
 
-                    <!-- RIGHT: Image Queue + Processing Status -->
+                    <!-- RIGHT: (migration notice) + Image Queue + Processing Status -->
                     <Grid Grid.Column="2">
                         <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
                             <RowDefinition Height="*"/>
                             <RowDefinition Height="14"/>
                             <RowDefinition Height="Auto"/>
                         </Grid.RowDefinitions>
 
-                        <Border Grid.Row="0" Style="{StaticResource Card}">
+                        <!-- Shown once, on the first open after an upgrade, only when the saved model is one OpenAI is
+                             retiring (AireView.LoadSettings). In-window rather than a dialog, like the key-help overlays:
+                             every colour is a DynamicResource ApplyTheme rewrites. Collapsed = no layout cost. -->
+                        <Border Grid.Row="0" x:Name="MigrationNotice" Style="{StaticResource Card}" Margin="0,0,0,14"
+                                Background="{DynamicResource NoticeBg}" BorderBrush="{DynamicResource NoticeBorder}"
+                                Visibility="Collapsed">
+                            <DockPanel>
+                                <Button DockPanel.Dock="Right" x:Name="MigrationNoticeCloseButton" Style="{StaticResource SmallButton}"
+                                        Content="Got it" VerticalAlignment="Top" Margin="12,0,0,0"/>
+                                <StackPanel>
+                                    <TextBlock Style="{StaticResource FieldLabel}" FontWeight="SemiBold"
+                                               Foreground="{DynamicResource NoticeFg}"
+                                               Text="Your saved model is being retired by OpenAI."/>
+                                    <TextBlock x:Name="MigrationNoticeText" Style="{StaticResource SmallMuted}"
+                                               Foreground="{DynamicResource TextPrimary}" Margin="0,4,0,0"/>
+                                </StackPanel>
+                            </DockPanel>
+                        </Border>
+
+                        <Border Grid.Row="1" Style="{StaticResource Card}">
                             <Grid>
                                 <Grid.RowDefinitions>
                                     <RowDefinition Height="Auto"/>
@@ -780,7 +819,7 @@
                             </Grid>
                         </Border>
 
-                        <Border Grid.Row="2" Style="{StaticResource Card}">
+                        <Border Grid.Row="3" Style="{StaticResource Card}">
                             <StackPanel>
                                 <Grid Margin="0,0,0,8">
                                     <Grid.ColumnDefinitions>
@@ -1142,15 +1181,21 @@
                             <TextBlock Style="{StaticResource SmallMuted}" TextWrapping="Wrap" Margin="0,2,0,10"
                                        Text="Under Settings → Billing, add a payment method and buy credit. Image generation is pay-as-you-go and will fail with an insufficient-quota error until the account has credit. Use the 'Open OpenAI Billing' button on the main window to go straight there."/>
 
-                            <TextBlock Style="{StaticResource FieldLabel}" Text="3. Create the key"/>
+                            <!-- A separate gate from having a card on file: a brand-new account that follows every other
+                                 step correctly still gets a 403 on its first render without this. -->
+                            <TextBlock Style="{StaticResource FieldLabel}" Text="3. Verify your organization"/>
+                            <TextBlock Style="{StaticResource SmallMuted}" TextWrapping="Wrap" Margin="0,2,0,10"
+                                       Text="Image models need a one-time identity check. Go to Settings → Organization → General and click Verify Organization. This is separate from adding billing credit, and it applies to every account — without it, image requests are refused. Access can take up to 15 minutes after you are approved."/>
+
+                            <TextBlock Style="{StaticResource FieldLabel}" Text="4. Create the key"/>
                             <TextBlock Style="{StaticResource SmallMuted}" TextWrapping="Wrap" Margin="0,2,0,10"
                                        Text="Go to API keys (the button below opens it), choose 'Create new secret key', give it a name such as 'AIRE', and create it. Make sure the key is allowed to use image generation — a project-scoped key with restricted permissions may not be."/>
 
-                            <TextBlock Style="{StaticResource FieldLabel}" Text="4. Copy it once"/>
+                            <TextBlock Style="{StaticResource FieldLabel}" Text="5. Copy it once"/>
                             <TextBlock Style="{StaticResource SmallMuted}" TextWrapping="Wrap" Margin="0,2,0,10"
                                        Text="OpenAI shows the full key (it starts with 'sk-') only at creation time. Copy it now — if you lose it you cannot view it again and will have to create another."/>
 
-                            <TextBlock Style="{StaticResource FieldLabel}" Text="5. Paste it into AIRE"/>
+                            <TextBlock Style="{StaticResource FieldLabel}" Text="6. Paste it into AIRE"/>
                             <TextBlock Style="{StaticResource SmallMuted}" TextWrapping="Wrap" Margin="0,2,0,10"
                                        Text="Paste the key into the API Key box on this window. It is saved automatically when the window closes, so you only do this once per machine."/>
 
