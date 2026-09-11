@@ -775,8 +775,9 @@ internal static class ParityTools
                         + "gpt-image-2: high (default), medium, low, auto. The labels are NOT comparable across models: "
                         + "gpt-image-2 low/medium/high spend what 2.5 low/high/max spend, so 2.5 high is about 4x cheaper "
                         + "than 2.5 max at 4K. Passing xhigh or max to gpt-image-2 is refused."),
-                    ["input_fidelity"] = Prop("string", "high (default) or low. high asks the model to preserve the input image's "
-                        + "geometry and detail closely — what AIRE's prompt is for; low is the API default."),
+                    ["input_fidelity"] = Prop("string", "high (default) or low. Only some models expose this; gpt-image-2 and "
+                        + "the gpt-image-2.5 models always read the source at full fidelity and refuse the parameter, so it is "
+                        + "not sent for them and 'low' is refused rather than silently ignored."),
                 },
                 "output_folder")));
 
@@ -786,9 +787,12 @@ internal static class ParityTools
             + "(queued/running/completed/failed), done/total counts, current file, per-image results, "
             + "estimated cost so far, actual_cost_usd (what OpenAI billed so far, from each response's usage "
             + "block — report this rather than the estimate once it is present; null until the first image "
-            + "returns), and the CSV log path when finished. A batch stopped early still ends "
-            + "as 'completed' — check the 'cancelled' flag to tell a full run from a cancelled one. Poll "
-            + "this instead of waiting — a 4K image can take minutes.",
+            + "returns), per-result error_kind, and the CSV log path when finished. A batch stopped early still "
+            + "ends as 'completed': check 'cancelled' for a user cancel, and 'aborted_reason' for one AIRE "
+            + "stopped itself because the failure would repeat on every remaining image (unverified "
+            + "organization, bad key, no credit, a request the model refuses) — when that is set, stop polling "
+            + "and report that sentence plus not_attempted, not 'N images failed'. Poll this instead of "
+            + "waiting — a 4K image can take minutes.",
             Schema(
                 new JsonObject
                 {

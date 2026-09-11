@@ -63,6 +63,10 @@ public sealed partial class AireView
     private int _videoSourceW, _videoSourceH;
     private string _lastClip = "";
 
+    /// <summary>The CSV the Video tab's View Log opens — this tab writes its own log (a different schema), so
+    /// it keeps its own target rather than sharing the Enhance tab's.</summary>
+    private string _videoLogTarget = "";
+
     private readonly DispatcherTimer _estimateTimer = new() { Interval = TimeSpan.FromMilliseconds(700) };
 
     /// <summary>Ticks once a second while a clip runs, so the status line shows elapsed time and when the
@@ -798,6 +802,14 @@ public sealed partial class AireView
     {
         var elapsed = AireEngine.SecondsToText(job.TotalTimeSeconds);
         var log = job.LogFile.Length > 0 ? $"\n\nLog saved to:\n{job.LogFile}" : "";
+
+        // The result panel is shown for EVERY finished clip now, not only a successful one: it carries View
+        // Log, and the run that most needs its log read is the one that failed.
+        _videoLogTarget = job.LogFile;
+        VideoViewLogButton.IsEnabled = job.LogFile.Length > 0 && File.Exists(job.LogFile);
+        VideoPlayButton.IsEnabled = job.Status == "completed";
+        VideoResultPanel.Visibility = System.Windows.Visibility.Visible;
+
         switch (job.Status)
         {
             case "completed":
@@ -805,20 +817,22 @@ public sealed partial class AireView
                 VideoResultLabel.Text = $"{Path.GetFileName(job.OutputFile)}\n{job.OutputFile}\n"
                                         + $"Elapsed {elapsed}   ·   Cost ${job.CostUsdText}  ({job.CostCreditsText} credits, as estimated)"
                                         + (job.Note.Length > 0 ? "\n" + job.Note : "");
-                VideoResultPanel.Visibility = System.Windows.Visibility.Visible;
                 VideoStatusLabel.Text = "Clip saved." + (job.LogFile.Length > 0 ? $"  Log: {job.LogFile}" : "");
                 MessageBox.Show(this, "Clip complete.\n\n" + VideoResultLabel.Text + log, "Clip complete",
                     MessageBoxButton.OK, MessageBoxImage.Information);
                 break;
             case "canceled":
+                VideoResultLabel.Text = "Cancelled.\n" + job.Error;
                 VideoStatusLabel.Text = "Cancelled. " + job.Error;
                 MessageBox.Show(this, job.Error + log, "Clip cancelled", MessageBoxButton.OK, MessageBoxImage.Information);
                 break;
             case "nsfw":
+                VideoResultLabel.Text = "Rejected by the content filter.\n" + job.Error;
                 VideoStatusLabel.Text = job.Error;
                 MessageBox.Show(this, job.Error + log, "Rejected by the content filter", MessageBoxButton.OK, MessageBoxImage.Warning);
                 break;
             default:
+                VideoResultLabel.Text = "The clip did not complete.\n" + job.Error;
                 VideoStatusLabel.Text = "Clip failed: " + job.Error;
                 MessageBox.Show(this, "The clip did not complete.\n\n" + job.Error + log, "Clip failed",
                     MessageBoxButton.OK, MessageBoxImage.Error);

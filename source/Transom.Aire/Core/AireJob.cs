@@ -21,6 +21,12 @@ public sealed class AireResult
     public double EstimatedCostUsd;
     public string ErrorMessage = "";
 
+    /// <summary>Why this one failed, as a class rather than a sentence: "" on success, "cancelled" on a cancel,
+    /// otherwise one of <see cref="AireEngine"/>'s kinds (auth, verification, quota, rate_limit, moderation,
+    /// fidelity, size, server, network, other). It is what stops the batch, what clears a wrong verification
+    /// claim, and what the log reader turns into a "What to do" line without re-parsing English.</summary>
+    public string ErrorKind = "";
+
     // From the response's usage block — null / "" when OpenAI sent none, never zero. The estimate above is
     // what the confirm dialog promised; these are what was billed.
     public string ActualSize = "";
@@ -109,6 +115,24 @@ public sealed class AireJob : AireJobBase
     /// <see cref="SuccessCount"/>, some responses came back without usage and the actual is a partial sum.</summary>
     public int ActualCostImages { get; private set; }
     public bool HasActualCost => ActualCostImages > 0;
+
+    /// <summary>
+    ///     Why the run stopped before the end of the queue, in the same plain sentence the failed image got, or
+    ///     "" when it ran to the end. Set only for failures <see cref="AireEngine.StopsBatch"/> recognises —
+    ///     the account or the request shape — where every remaining image would fail identically and grinding
+    ///     through them costs the user minutes for twenty copies of one message.
+    /// </summary>
+    public string AbortReason { get; private set; } = "";
+
+    /// <summary>The class behind <see cref="AbortReason"/> (see <see cref="AireResult.ErrorKind"/>), so the
+    /// window knows whether to clear a verification acknowledgement and which button to lead the dialog with.</summary>
+    public string AbortKind { get; private set; } = "";
+
+    public bool Aborted => AbortReason.Length > 0;
+
+    /// <summary>Queued images the run never reached — the tail of an aborted or cancelled batch. Nothing was
+    /// sent for these, so nothing was charged and they are not in the log.</summary>
+    public int NotAttempted => Math.Max(0, Total - Done);
 
     private readonly List<AireResult> _results = new();
     private readonly object _gate = new();
@@ -199,12 +223,16 @@ public sealed class AireJob : AireJobBase
                 {
                     result.Status = "Failed";
                     result.ErrorMessage = "cancelled";
+                    result.ErrorKind = "cancelled";
                     FailureCount++;
                 }
                 catch (Exception ex)
                 {
                     result.Status = "Failed";
                     result.ErrorMessage = ex.Message;
+                    // An unclassified exception (a disk failure writing the output, say) is "other": it says
+                    // nothing about the account, so it must not stop the batch.
+                    result.ErrorKind = ex is AireApiException api ? api.Kind : "other";
                     FailureCount++;
                 }
                 result.TimeSeconds = Math.Round(oneImage.Elapsed.TotalSeconds, 2);
@@ -214,6 +242,18 @@ public sealed class AireJob : AireJobBase
                 Notify();
 
                 if (Cts.Token.IsCancellationRequested) break;
+
+                // Stop on a failure that will repeat: an unverified account, a dead key, an empty balance or a
+                // request shape this model refuses is the same for image two as for image one. Twenty queued
+                // renders otherwise means twenty identical refusals and twenty minutes of nothing.
+                // BREAK, never throw: the outer catch skips WriteCsv, which is exactly the bug the Cancel Batch
+                // work fixed in v1.9.11. The log must survive an abort.
+                if (AireEngine.StopsBatch(result.ErrorKind))
+                {
+                    AbortReason = result.ErrorMessage;
+                    AbortKind = result.ErrorKind;
+                    break;
+                }
             }
 
             WriteCsv(logPath);
@@ -234,14 +274,16 @@ public sealed class AireJob : AireJobBase
     /// <summary>
     ///     The original app's ten columns by position, then four appended for what OpenAI actually billed —
     ///     actual_size (the produced size, which with size=auto is the only record of it), output_tokens,
-    ///     input_image_tokens and actual_cost_usd. All four are blank when the response carried no usage
-    ///     block. Anything reading the first ten by position keeps working.
+    ///     input_image_tokens and actual_cost_usd — and, since v1.9.18, error_kind. All the billing cells are
+    ///     blank when the response carried no usage block. Every addition goes on the END, so anything reading
+    ///     the first ten by position keeps working; <see cref="AireLogReport"/> maps by header NAME instead,
+    ///     which is what lets one reader handle the 10-, 14- and 15-column files.
     /// </summary>
     private void WriteCsv(string path)
     {
         var sb = new StringBuilder();
         sb.AppendLine("original_file,output_file,input_resolution,model,output_size,quality,status,time_seconds,estimated_cost_usd,error_message"
-                      + ",actual_size,output_tokens,input_image_tokens,actual_cost_usd");
+                      + ",actual_size,output_tokens,input_image_tokens,actual_cost_usd,error_kind");
         lock (_gate)
             foreach (var r in _results)
                 sb.AppendLine(string.Join(",",
@@ -253,7 +295,8 @@ public sealed class AireJob : AireJobBase
                     Csv(r.ActualSize),
                     r.OutputTokens?.ToString(CultureInfo.InvariantCulture) ?? "",
                     r.InputImageTokens?.ToString(CultureInfo.InvariantCulture) ?? "",
-                    r.ActualCostUsd?.ToString(CultureInfo.InvariantCulture) ?? ""));
+                    r.ActualCostUsd?.ToString(CultureInfo.InvariantCulture) ?? "",
+                    Csv(r.ErrorKind)));
         File.WriteAllText(path, sb.ToString(), new UTF8Encoding(false));
     }
 }

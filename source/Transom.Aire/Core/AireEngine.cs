@@ -153,6 +153,30 @@ public static class AireEngine
 
     public static bool IsRetiredModel(string model) => RetiredModels.ContainsKey(model ?? "");
 
+    /// <summary>
+    ///     Models that accept the <c>input_fidelity</c> parameter. Every model in AIRE's current catalog is
+    ///     ABSENT: gpt-image-2 answers a request carrying it with HTTP 400 <c>invalid_input_fidelity_model</c>
+    ///     ("The model 'gpt-image-2' does not support the 'input_fidelity' parameter"), and OpenAI's migration
+    ///     guide says of GPT Image 2 and later "Omit it. Image inputs are always processed at high fidelity."
+    ///     The reference page's "gpt-image-1 and gpt-image-1.5 and later models" sentence is stale — believing
+    ///     it is what shipped a ticked checkbox that fails every request (v1.9.17).
+    ///     A table rather than an if: putting a model back is one line when OpenAI's behaviour changes.
+    /// </summary>
+    private static readonly HashSet<string> InputFidelityModels = new(StringComparer.OrdinalIgnoreCase)
+    {
+        // gpt-image-1 and gpt-image-1.5 took it. Both are retired and out of the catalog, so this is empty
+        // by fact, not by oversight. Do not delete it.
+    };
+
+    public static bool SupportsInputFidelity(string model) => InputFidelityModels.Contains(model ?? "");
+
+    /// <summary>One sentence for the disabled checkbox and the bridge, or null when the model takes it.</summary>
+    public static string? InputFidelityNote(string model) =>
+        SupportsInputFidelity(model)
+            ? null
+            : $"{model} always reads the source image at full fidelity, and refuses the input_fidelity "
+              + "parameter, so AIRE does not send it.";
+
     /// <summary>One sentence for a retired id, or null when the id is not on the retirement list.</summary>
     public static string? RetirementMessage(string model)
     {
@@ -398,8 +422,9 @@ public static class AireEngine
             }
             catch (TransientApiException ex)
             {
-                // Retries exhausted — surface the underlying message, not the wrapper.
-                throw new InvalidOperationException(ex.Message);
+                // Retries exhausted — surface the underlying message, not the wrapper, and keep the class so
+                // the batch can still decide whether to carry on.
+                throw new AireApiException(ex.Message, ex.Kind);
             }
         }
     }
@@ -408,7 +433,12 @@ public static class AireEngine
     private sealed class TransientApiException : Exception
     {
         public TimeSpan? RetryAfter { get; }
-        public TransientApiException(string message, TimeSpan? retryAfter = null) : base(message) => RetryAfter = retryAfter;
+        public string Kind { get; }
+        public TransientApiException(string message, string kind, TimeSpan? retryAfter = null) : base(message)
+        {
+            Kind = kind;
+            RetryAfter = retryAfter;
+        }
     }
 
     private static async Task<AireEditResult> SendEditAsync(string apiKey, string model, string imagePath,
@@ -424,7 +454,10 @@ public static class AireEngine
         form.Add(new StringContent("opaque"), "background");
         // The API parameter that does what the default prompt spends four sentences asking for. Omitted
         // (the API default is low) when the user turns it off, so the request is then exactly the old one.
-        if (highInputFidelity) form.Add(new StringContent("high"), "input_fidelity");
+        // Never sent to a model that refuses it: gpt-image-2 and the 2.5 pair 400 on the parameter's mere
+        // presence, so a ticked box would fail every image in the batch (the v1.9.17 default did exactly that).
+        if (highInputFidelity && SupportsInputFidelity(model))
+            form.Add(new StringContent("high"), "input_fidelity");
 
         var bytes = await File.ReadAllBytesAsync(imagePath, ct).ConfigureAwait(false);
         var file = new ByteArrayContent(bytes);
@@ -445,7 +478,7 @@ public static class AireEngine
         catch (HttpRequestException ex)
         {
             // Failed before any response — connection reset / DNS / TLS. Nothing ran, so nothing was billed.
-            throw new TransientApiException($"Could not reach the OpenAI API: {ex.Message}");
+            throw new TransientApiException($"Could not reach the OpenAI API: {ex.Message}", "network");
         }
 
         using (response)
@@ -455,10 +488,10 @@ public static class AireEngine
             if (!response.IsSuccessStatusCode)
             {
                 var error = OpenAiError.Parse(body, (int)response.StatusCode);
-                var message = DescribeApiError(error);
+                var (kind, message) = Describe(error);
                 throw error.IsRetryable
-                    ? new TransientApiException(message, RetryAfterOf(response))
-                    : new InvalidOperationException(message);
+                    ? new TransientApiException(message, kind, RetryAfterOf(response))
+                    : new AireApiException(message, kind);
             }
 
             using var json = JsonDocument.Parse(body);
@@ -466,7 +499,7 @@ public static class AireEngine
             if (!(root.TryGetProperty("data", out var data)
                   && data.ValueKind == JsonValueKind.Array && data.GetArrayLength() > 0
                   && data[0].TryGetProperty("b64_json", out var b64)))
-                throw new InvalidOperationException("OpenAI returned no image data (unexpected response shape).");
+                throw new AireApiException("OpenAI returned no image data (unexpected response shape).", "other");
 
             var image = Convert.FromBase64String(b64.GetString() ?? "");
             return ReadUsage(root, image);
@@ -546,6 +579,9 @@ public static class AireEngine
         public bool IsRetryable =>
             (Status == 429 && Code != "insufficient_quota") || Status >= 500;
 
+        /// <summary>Which CLASS of failure this is — see <see cref="AireEngine.Describe"/> for the set.</summary>
+        public string Kind => Describe(this).Kind;
+
         public static OpenAiError Parse(string body, int status)
         {
             try
@@ -571,44 +607,101 @@ public static class AireEngine
     }
 
     /// <summary>
-    ///     The four failures a real user actually hits, as plain sentences, plus the raw API text for anything
-    ///     else. In a tool that spends money the wording is the feature: "insufficient_quota" and a rate limit
-    ///     are both 429s, and only one of them is fixed by waiting.
+    ///     The failures a real user actually hits, as plain sentences, plus the raw API text for anything else.
+    ///     In a tool that spends money the wording is the feature: "insufficient_quota" and a rate limit are both
+    ///     429s, and only one of them is fixed by waiting.
     /// </summary>
-    public static string DescribeApiError(OpenAiError e)
+    public static string DescribeApiError(OpenAiError e) => Describe(e).Message;
+
+    /// <summary>
+    ///     The class of a failure and its sentence, from ONE pass over the error body so the two can never drift
+    ///     apart. The kind is the discriminator three separate features run on: whether the batch stops
+    ///     (<see cref="StopsBatch"/>), whether a verification acknowledgement was a lie
+    ///     (<see cref="IsAccountLevel"/> + the window's banner), and which "What to do" line the log reader
+    ///     shows. The set is:
+    ///     <c>auth · verification · quota · rate_limit · moderation · fidelity · size · server · network · other</c>.
+    /// </summary>
+    private static (string Kind, string Message) Describe(OpenAiError e)
     {
         var msg = e.Message ?? "";
         bool mentions(string word) => msg.IndexOf(word, StringComparison.OrdinalIgnoreCase) >= 0;
 
         if (e.Status == 401)
-            return "OpenAI rejected the API key. Check the key in the API Key box (it starts with sk-), or create a new one "
-                   + "on the API keys page. Nothing was generated and nothing was charged.";
+            return ("auth",
+                "OpenAI rejected the API key. Check the key in the API Key box (it starts with sk-), or create a new one "
+                + "on the API keys page. Nothing was generated and nothing was charged.");
 
-        if (e.Status == 403 && (e.Code.Contains("verif", StringComparison.OrdinalIgnoreCase) || mentions("verif")))
-            return "Your OpenAI organization is not verified. Image models require a one-time identity check at "
-                   + "platform.openai.com → Settings → Organization → General → Verify Organization. Access can take "
-                   + "about 15 minutes to take effect afterwards. Nothing was generated and nothing was charged.";
+        // ANY 403, not just one whose wording matches: on an image-edit call there is no other plausible 403,
+        // and a reworded message from OpenAI must not drop the user back onto "OpenAI API error (HTTP 403)".
+        if (e.Status == 403)
+            return ("verification",
+                "Your OpenAI organization is not verified. Image models require a one-time identity check at "
+                + "platform.openai.com → Settings → Organization → General → Verify Organization. Access can take "
+                + "about 15 minutes to take effect afterwards. Nothing was generated and nothing was charged.");
 
         if (e.Status == 429 && e.Code == "insufficient_quota")
-            return "Your OpenAI account is out of credit. Add credit under Billing, then run the batch again. "
-                   + "Nothing was generated and nothing was charged.";
+            return ("quota",
+                "Your OpenAI account is out of credit. Add credit under Billing, then run the batch again. "
+                + "Nothing was generated and nothing was charged.");
 
         if (e.Status == 429)
-            return "OpenAI is rate-limiting this account. AIRE waited and retried, but the limit held. Your account tier "
-                   + "limits how many images per minute you can generate — wait a minute, then process the remaining "
-                   + "images again. Nothing was charged for this image.";
+            return ("rate_limit",
+                "OpenAI is rate-limiting this account. AIRE waited and retried, but the limit held. Your account tier "
+                + "limits how many images per minute you can generate — wait a minute, then process the remaining "
+                + "images again. Nothing was charged for this image.");
 
         if (e.Code == "moderation_blocked")
-            return "OpenAI's safety filter blocked this image. Try adjusting the prompt, or remove this render from the "
-                   + "queue. The remaining images will still be processed.";
+            return ("moderation",
+                "OpenAI's safety filter blocked this image. Try adjusting the prompt, or remove this render from the "
+                + "queue. The remaining images will still be processed.");
+
+        // Above the generic 400 handler, and keyed off the documented error CODE first: this is the failure the
+        // shipped v1.9.17 default produced on every request. An older build's logs and any future regression
+        // both still read in English here.
+        if (e.Code == "invalid_input_fidelity_model" || (e.Status == 400 && mentions("input_fidelity")))
+            return ("fidelity",
+                "This model does not accept the Input fidelity setting — it always reads the source image at "
+                + "full fidelity. Untick Fidelity and run the batch again. Nothing was generated and nothing "
+                + "was charged.");
 
         if (e.Status == 400 && (e.Param == "size" || mentions("size") || mentions("aspect") || mentions("pixel")
                                 || mentions("resolution") || mentions("dimension")))
-            return "This resolution is not valid for the selected model. Width and height must be multiples of 16, "
-                   + "the shape must be between 1:3 and 3:1, and the total must be between 0.66 and 8.3 megapixels. "
-                   + $"(OpenAI: {msg})";
+            return ("size",
+                "This resolution is not valid for the selected model. Width and height must be multiples of 16, "
+                + "the shape must be between 1:3 and 3:1, and the total must be between 0.66 and 8.3 megapixels. "
+                + $"(OpenAI: {msg})");
 
         var detail = e.Code.Length > 0 ? $"{e.Code}: {msg}" : msg;
-        return $"OpenAI API error (HTTP {e.Status}): {detail}";
+        return (e.Status >= 500 ? "server" : "other", $"OpenAI API error (HTTP {e.Status}): {detail}");
     }
+
+    /// <summary>
+    ///     Failures where every REMAINING render would fail identically, so the batch stops rather than grinding
+    ///     through twenty refusals that say the same thing. Two groups: the ACCOUNT (auth / verification /
+    ///     quota) and the REQUEST SHAPE (fidelity / size) — both of those are batch-level settings, identical
+    ///     for every image, so image two cannot do better than image one.
+    ///     <para>
+    ///     Deliberately absent: moderation (about that one image), rate_limit and server/network (already
+    ///     retried, and the next image may well succeed), and anything unclassified.
+    ///     </para>
+    /// </summary>
+    public static bool StopsBatch(string kind) =>
+        kind is "auth" or "verification" or "quota" or "fidelity" or "size";
+
+    /// <summary>The subset of <see cref="StopsBatch"/> that is about the ACCOUNT rather than the request — what
+    /// the user fixes on platform.openai.com, not in AIRE. A "verification" here is also what clears a
+    /// verification acknowledgement that turned out to be wrong.</summary>
+    public static bool IsAccountLevel(string kind) => kind is "auth" or "verification" or "quota";
+}
+
+/// <summary>
+///     An OpenAI failure with its class attached (<see cref="AireEngine.DescribeApiError"/>'s companion), so
+///     <see cref="AireJob"/> can tell a refusal that will repeat on every remaining image from one that is
+///     about the image in hand. The message is already the plain-language sentence — callers log
+///     <c>ex.Message</c> exactly as before.
+/// </summary>
+public sealed class AireApiException : Exception
+{
+    public string Kind { get; }
+    public AireApiException(string message, string kind) : base(message) => Kind = kind;
 }

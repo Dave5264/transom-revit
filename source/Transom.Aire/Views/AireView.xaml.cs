@@ -37,9 +37,38 @@ public sealed partial class AireView
     /// bound string arguing over the caret.</summary>
     private PromptEditorWindow? _promptEditor;
 
+    /// <summary>The open log reader, or null. Modeless singleton like the prompt editor: a second View Log
+    /// click re-points the open window at the newly chosen log instead of stacking another one.</summary>
+    private LogViewerWindow? _logViewer;
+
+    /// <summary>The CSV View Log will open: the finished job's log, or failing that the newest one under the
+    /// output folder — which is what makes the button live on a fresh open, and for a batch Claude ran.</summary>
+    private string _viewLogTarget = "";
+
+    /// <summary>
+    ///     Set when OpenAI has actually refused the key in the box for verification, so the banner leads with
+    ///     what happened rather than with a generic invitation. Cleared when the key changes or the user
+    ///     acknowledges again.
+    /// </summary>
+    private string _verificationRefusal = "";
+
     /// <summary>Set while the preset dropdowns are being rebuilt. Assigning ItemsSource/SelectedItem raises
     /// SelectionChanged, which would otherwise "load" a preset over the text the user just saved.</summary>
     private bool _suppressPresetEvents;
+
+    /// <summary>
+    ///     The user's own Fidelity choice, held separately from the checkbox. While the box is disabled it is
+    ///     forced ticked (the model reads at high fidelity whether you ask or not), and writing that back to
+    ///     settings would silently overwrite a deliberate "low" the moment a supported model reappears.
+    /// </summary>
+    private bool _fidelityPreference = true;
+
+    /// <summary>The Fidelity tooltip for a model that DOES expose the setting. Lives here rather than in the
+    /// XAML because <see cref="UpdateFidelityAvailability"/> swaps between it and the engine's refusal note.</summary>
+    private const string FidelitySupportedTip =
+        "Sends input_fidelity: high, the API parameter that does what the default prompt spends four sentences "
+        + "asking for: keep the camera, geometry, mullions and composition. Turn it off to send the API default "
+        + "(low). It may raise the input-token cost slightly; the CSV log records what each image billed.";
 
     public AireView()
     {
@@ -54,7 +83,18 @@ public sealed partial class AireView
         var settings = AireSettings.Load();
         LoadSettings(settings);
 
-        ModelCombo.SelectionChanged += (_, _) => { PopulateSizeCombo(); PopulateQualityCombo(); UpdateEstimate(); };
+        ModelCombo.SelectionChanged += (_, _) =>
+        {
+            PopulateSizeCombo();
+            PopulateQualityCombo();
+            // Fidelity is per model exactly like size and quality — it belongs in the same refresh.
+            UpdateFidelityAvailability();
+            UpdateEstimate();
+        };
+        // Record the user's own toggle only while the box is live; a forced tick on an unsupported model is
+        // AIRE stating a fact about the API, not a preference to remember.
+        FidelityCheck.Checked += (_, _) => { if (FidelityCheck.IsEnabled) _fidelityPreference = true; };
+        FidelityCheck.Unchecked += (_, _) => { if (FidelityCheck.IsEnabled) _fidelityPreference = false; };
         SizeCombo.SelectionChanged += (_, _) => UpdateEstimate();
         // Quality is the setting that decides the output-token spend (36x between low and max at 4K), so
         // the number on screen has to move when it does.
@@ -78,6 +118,22 @@ public sealed partial class AireView
         ApiKeyPresetCombo.SelectionChanged += (_, _) => LoadSelectedApiKey();
         SaveApiKeyButton.Click += (_, _) => SaveCurrentApiKey();
         DeleteApiKeyButton.Click += (_, _) => DeleteSelectedApiKey();
+        // The verification banner follows the KEY, not the preset name: verification is per OpenAI
+        // organization, and a user with a Studio key and a Personal key has two of them.
+        ApiKeyBox.PasswordChanged += (_, _) => { _verificationRefusal = ""; UpdateVerificationNotice(); };
+        VerificationNoticeButton.Click += (_, _) => ShowVerificationOverlay();
+        VerificationOpenButton.Click += (_, _) => OpenUrl(AireEngine.OpenAiVerifyOrganizationUrl);
+        VerificationCloseButton.Click += (_, _) => VerificationOverlay.Visibility = System.Windows.Visibility.Collapsed;
+        // Disabled until the box is ticked: that is what stops the claim being clicked past on reflex.
+        VerificationAckCheck.Checked += (_, _) => VerificationEnableButton.IsEnabled = true;
+        VerificationAckCheck.Unchecked += (_, _) => VerificationEnableButton.IsEnabled = false;
+        VerificationEnableButton.Click += (_, _) => AcknowledgeVerification();
+
+        ViewLogButton.Click += (_, _) => OpenLogViewer(_viewLogTarget);
+        VideoViewLogButton.Click += (_, _) => OpenLogViewer(_videoLogTarget);
+        // A log lives in <output>\logs, so which log View Log opens moves with this box.
+        OutputFolderBox.TextChanged += (_, _) => UpdateViewLogAvailability();
+
         ScanButton.Click += (_, _) => ScanInputFolder();
         ProcessButton.Click += (_, _) => ProcessChecked();
         CancelButton.Click += (_, _) => CancelBatch();
@@ -99,6 +155,9 @@ public sealed partial class AireView
         if (running is AireJob batch) Attach(batch);
         else if (running is AireVideoJob clip) AttachVideo(clip);
 
+        // Both run last: LoadSettings filled the key box and the folders before these handlers existed.
+        UpdateVerificationNotice();
+        UpdateViewLogAvailability();
         UpdateEstimate();
     }
 
@@ -130,7 +189,10 @@ public sealed partial class AireView
         if (SizeCombo.Items.Contains(s.Size)) SizeCombo.SelectedItem = s.Size;
         PopulateQualityCombo();
         QualityCombo.SelectedItem = AireEngine.IsValidQuality(model, quality) ? quality : AireEngine.DefaultQualityFor(model);
-        FidelityCheck.IsChecked = s.HighInputFidelity;
+        // The SAVED choice goes into the preference, not straight onto the box — the box may be about to be
+        // disabled and forced ticked, and that must not become the value written back on close.
+        _fidelityPreference = s.HighInputFidelity;
+        UpdateFidelityAvailability();
         ThemeCombo.SelectedItem = s.Theme == "Dark" ? "Dark" : "Light";
         PromptNameBox.Text = s.SelectedPromptName;
         ApiKeyNameBox.Text = s.SelectedApiKeyName;
@@ -156,7 +218,7 @@ public sealed partial class AireView
         s.Model = ModelCombo.SelectedItem as string ?? AireEngine.DefaultModel;
         s.Size = SizeCombo.SelectedItem as string ?? AireEngine.DefaultSize;
         s.Quality = QualityCombo.SelectedItem as string ?? AireEngine.DefaultQualityFor(s.Model);
-        s.HighInputFidelity = FidelityCheck.IsChecked == true;
+        s.HighInputFidelity = _fidelityPreference; // never the disabled box's forced value — see the field's remarks
         s.Theme = ThemeCombo.SelectedItem as string ?? "Light";
         SaveVideoSettings(s);
         s.Save();
@@ -183,6 +245,33 @@ public sealed partial class AireView
         var rungs = AireEngine.QualityOptionsFor(model);
         QualityCombo.ItemsSource = rungs;
         QualityCombo.SelectedItem = current != null && rungs.Contains(current) ? current : rungs[0];
+    }
+
+    /// <summary>
+    ///     Third of the per-model refreshers, beside <see cref="PopulateSizeCombo"/> and
+    ///     <see cref="PopulateQualityCombo"/>. Not cosmetic: no model in the current catalog accepts
+    ///     <c>input_fidelity</c>, and until v1.9.18 the engine sent it anyway on every request, so the shipped
+    ///     default failed every image. The engine no longer sends it (AireEngine.SupportsInputFidelity); this is
+    ///     how the user is TOLD, rather than left with a live control that quietly does nothing.
+    /// </summary>
+    private void UpdateFidelityAvailability()
+    {
+        var model = ModelCombo.SelectedItem as string ?? AireEngine.DefaultModel;
+        bool supported = AireEngine.SupportsInputFidelity(model);
+
+        // Order matters: IsEnabled first, so the IsChecked assignment below reaches the Checked/Unchecked
+        // handlers with the box already disabled and is therefore not recorded as a preference.
+        FidelityCheck.IsEnabled = supported;
+        // The LABEL changes, not the layout: a caption line under the box would push the Prompt card past the
+        // bottom of the left column (the star-row trap the Video-tab work already paid for).
+        FidelityCheck.Content = supported
+            ? "High input fidelity: stay close to the source"
+            : "High input fidelity: always on for this model";
+        FidelityCheck.IsChecked = supported ? _fidelityPreference : true;
+        FidelityCheck.ToolTip = supported
+            ? FidelitySupportedTip
+            : AireEngine.InputFidelityNote(model)
+              + " This setting only applies to models that let you turn it down.";
     }
 
     /// <summary>The in-window notice for a retired saved model — wording is the feature in a tool that spends money.</summary>
@@ -371,6 +460,122 @@ public sealed partial class AireView
         ProgressLabel.Text = $"Deleted saved key \"{name}\".";
     }
 
+    // ---- OpenAI organization verification ------------------------------------
+
+    /// <summary>
+    ///     Shows or hides the amber banner for the key currently in the box. Verification is a one-time check on
+    ///     the ORGANIZATION and OpenAI publishes no endpoint that reports it, so AIRE can only ask — and the
+    ///     answer is remembered against a fingerprint of the key, which is what makes it follow the account
+    ///     rather than the preset name.
+    /// </summary>
+    private void UpdateVerificationNotice()
+    {
+        if (VerificationNotice == null) return; // events can fire during InitializeComponent
+        var key = ApiKeyBox.Password.Trim();
+        bool needed = key.Length > 0 && !AireSettings.Load().IsVerificationAcknowledged(key);
+
+        VerificationNotice.Visibility = needed
+            ? System.Windows.Visibility.Visible
+            : System.Windows.Visibility.Collapsed;
+        if (!needed) return;
+
+        bool refused = _verificationRefusal.Length > 0;
+        VerificationNoticeTitle.Text = refused
+            ? "OpenAI refused this account."
+            : "This OpenAI account has not been verified yet.";
+        VerificationNoticeText.Text = refused
+            ? _verificationRefusal
+              + " Verification is a one-time identity check on the organization, separate from billing credit."
+            : "OpenAI will not generate images for an account that has not completed organization verification. "
+              + "This is separate from adding billing credit — an account with money on it is still refused "
+              + "until it verifies.";
+    }
+
+    private void ShowVerificationOverlay()
+    {
+        // Always re-armed: the acknowledgement is a fresh claim about the key in the box right now.
+        VerificationAckCheck.IsChecked = false;
+        VerificationEnableButton.IsEnabled = false;
+        VerificationOverlay.Visibility = System.Windows.Visibility.Visible;
+    }
+
+    /// <summary>
+    ///     Records the user's claim for the key in the box. Deliberately does NOT start the batch: the spend
+    ///     confirmation is its own explicit act, and folding it into this click would turn a "yes, I verified"
+    ///     into a "yes, spend the money".
+    /// </summary>
+    private void AcknowledgeVerification()
+    {
+        var key = ApiKeyBox.Password.Trim();
+        if (key.Length == 0)
+        {
+            MessageBox.Show(this, "Paste your OpenAI API key first — the acknowledgement is recorded against "
+                                  + "the account that key belongs to.", "No key",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+        AireSettings.Load().AcknowledgeVerification(key);
+        _verificationRefusal = "";
+        VerificationOverlay.Visibility = System.Windows.Visibility.Collapsed;
+        UpdateVerificationNotice();
+        ProgressLabel.Text = "GPT Image models enabled for this account. Click Process Checked when you are ready.";
+    }
+
+    /// <summary>
+    ///     Withdraws the acknowledgement after OpenAI has refused the account, and brings the banner back
+    ///     carrying the refusal. This is what keeps the claim honest rather than a checkbox that launders a
+    ///     guess. Uses the key in the box: the job never carries one (it stays inside the run closure), and a
+    ///     bridge-started batch spends the stored key, which is the same key this box holds.
+    /// </summary>
+    private void OnVerificationRefused()
+    {
+        var key = ApiKeyBox.Password.Trim();
+        if (key.Length > 0) AireSettings.Load().ClearVerification(key);
+        _verificationRefusal = $"OpenAI refused this account on {DateTime.Now:d MMM} at {DateTime.Now:HH:mm}: "
+                               + "the organization is not verified.";
+        UpdateVerificationNotice();
+    }
+
+    // ---- the log reader ------------------------------------------------------
+
+    /// <summary>
+    ///     Decides what View Log would open, and whether it is live at all: the log of the batch that just
+    ///     finished, or failing that the newest CSV under the output folder. The second half is what makes the
+    ///     button useful on a fresh open and after a batch Claude ran through the bridge.
+    /// </summary>
+    private void UpdateViewLogAvailability(string? preferred = null)
+    {
+        if (ViewLogButton == null) return;
+        if (!string.IsNullOrEmpty(preferred) && File.Exists(preferred)) _viewLogTarget = preferred!;
+        else if (_viewLogTarget.Length == 0 || !File.Exists(_viewLogTarget))
+            _viewLogTarget = AireLogReport.NewestLogIn(OutputFolderBox.Text.Trim()) ?? "";
+        ViewLogButton.IsEnabled = _viewLogTarget.Length > 0;
+    }
+
+    /// <summary>Opens (or re-points) the modeless log reader.</summary>
+    private void OpenLogViewer(string csvPath)
+    {
+        if (csvPath.Length == 0 || !File.Exists(csvPath))
+        {
+            MessageBox.Show(this, "There is no batch log to read yet. A log is written into <output folder>\\logs "
+                                  + "each time a batch finishes.", "No log",
+                MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+        if (_logViewer != null)
+        {
+            if (_logViewer.WindowState == System.Windows.WindowState.Minimized)
+                _logViewer.WindowState = System.Windows.WindowState.Normal;
+            _logViewer.LoadLog(csvPath);
+            _logViewer.Activate();
+            return;
+        }
+        var viewer = new LogViewerWindow(this, csvPath);
+        viewer.Closed += (_, _) => _logViewer = null;
+        _logViewer = viewer;
+        viewer.Show();
+    }
+
     /// <summary>Opens (or re-fronts) the resizable prompt editor. It binds to PromptBox, so there is nothing
     /// to copy back — see <see cref="PromptEditorWindow"/>.</summary>
     private void PopOutPrompt()
@@ -522,7 +727,9 @@ public sealed partial class AireView
         var model = ModelCombo.SelectedItem as string ?? AireEngine.DefaultModel;
         var size = SizeCombo.SelectedItem as string ?? AireEngine.DefaultSize;
         var quality = QualityCombo.SelectedItem as string ?? AireEngine.DefaultQualityFor(model);
-        var highFidelity = FidelityCheck.IsChecked == true;
+        // IsEnabled too: on a model that refuses the parameter the box is ticked to state a fact, and passing
+        // that through as "the user asked for high" would put it back on the wire.
+        var highFidelity = FidelityCheck.IsEnabled && FidelityCheck.IsChecked == true;
         var files = CheckedItems();
 
         if (apiKey.Length == 0)
@@ -544,6 +751,16 @@ public sealed partial class AireView
             return;
         }
 
+        // The verification gate, before anything about cost is asked: an unverified organization is refused by
+        // every GPT Image model, so a user who has not been through it is about to buy nothing at all. One
+        // click, once per OpenAI account, on this machine — not a nag. The overlay IS the message; putting a
+        // MessageBox in front of it would just be something else to dismiss.
+        if (!AireSettings.Load().IsVerificationAcknowledged(apiKey))
+        {
+            ShowVerificationOverlay();
+            return;
+        }
+
         // Say "busy" in words BEFORE the cost dialog — a video clip may be running on the other tab.
         var busy = AireJobManager.BusyReason();
         if (busy != null)
@@ -559,9 +776,14 @@ public sealed partial class AireView
         // The per-image figure is the number a person can sanity-check against the folder they are about to
         // point at; a batch total on its own hides a factor-of-ten mistake. And the log sentence is what
         // makes the estimate honest now that the billed cost is recorded afterwards.
+        // The fidelity line is DROPPED entirely on a model that does not take the parameter: a confirmation
+        // dialog must never list a setting that has no effect on what is about to be bought.
+        var fidelityLine = AireEngine.SupportsInputFidelity(model)
+            ? $"\nInput fidelity: {(highFidelity ? "high" : "low")}"
+            : "";
         var answer = MessageBox.Show(this,
             $"You are about to process {files.Count} image(s).\n\nModel: {model}\nResolution: {size}\nQuality: {quality}"
-            + $"\nInput fidelity: {(highFidelity ? "high" : "low")}"
+            + fidelityLine
             + $"\n\nEstimated cost: ${estimate:0.0000}  (${estimate / files.Count:0.0000} per image)"
             + "\n\nThis is an estimate. The exact cost of each image is recorded in the CSV log when the batch finishes."
             + "\n\nContinue?",
@@ -645,6 +867,11 @@ public sealed partial class AireView
 
     private void ShowSummary(AireJob job)
     {
+        // The acknowledgement was wrong, so withdraw it and bring the banner back — before the dialog, so the
+        // window behind it already tells the truth.
+        if (job.AbortKind == "verification") OnVerificationRefused();
+        UpdateViewLogAvailability(job.LogFile);
+
         if (job.Status == "failed")
         {
             ProgressLabel.Text = $"Batch failed: {job.Error}";
@@ -652,19 +879,52 @@ public sealed partial class AireView
                 MessageBoxButton.OK, MessageBoxImage.Error);
             return;
         }
-        // A cancelled batch still reaches "completed" (it stops cleanly and writes its log), so report it
-        // as cancelled rather than complete — and account for the images that were never attempted.
+
+        // A cancelled or self-stopped batch still reaches "completed" (it stops cleanly and writes its log), so
+        // report what actually happened — and account for the images that were never attempted.
         var cancelled = job.CancelRequested;
-        var notAttempted = Math.Max(0, job.Total - job.Done);
-        var message = (cancelled ? "Batch cancelled." : "Batch complete.")
+        var notAttempted = job.NotAttempted;
+        // "Stopped" only claims that something was lost when something was: a refusal on the LAST render in the
+        // queue ends the loop too, but there was nothing left to skip.
+        var headline = job.Aborted
+            ? (notAttempted > 0
+                  ? "Batch stopped — the same refusal would have come back for every remaining render."
+                  : "The last render was refused, and the refusal was not about that image.")
+              + "\n\n" + job.AbortReason + "\n"
+            : cancelled ? "Batch cancelled." : "Batch complete.";
+        var message = headline
                       + $"\n\nSuccess: {job.SuccessCount}\nFailed: {job.FailureCount}"
-                      + (cancelled && notAttempted > 0 ? $"\nNot attempted: {notAttempted}" : "")
+                      + ((cancelled || job.Aborted) && notAttempted > 0
+                          ? $"\nNot attempted: {notAttempted}"
+                            + (job.Aborted ? " (the same refusal would have come back for each one)" : "")
+                          : "")
                       + $"\nTotal time: {AireEngine.SecondsToText(job.TotalTimeSeconds)}"
                       + $"\nEstimated successful cost: ${job.EstimatedCostUsd:0.0000}"
-                      + ActualCostLine(job)
-                      + $"\n\nLog saved to:\n{job.LogFile}";
+                      + ActualCostLine(job);
         ProgressLabel.Text = message;
-        MessageBox.Show(this, message, cancelled ? "Batch cancelled" : "Batch complete",
+
+        var title = job.Aborted ? "Batch stopped" : cancelled ? "Batch cancelled" : "Batch complete";
+
+        // The "Log saved to: <path>" line was the wrong answer to "what happened?" — offer the thing that
+        // answers it instead. WPF's MessageBox cannot relabel its buttons, so the prompt is phrased as the
+        // question Yes/No actually answers; the View Log button in the Processing Status card is the named
+        // route to the same reader, and it is live from here on.
+        if (job.AbortKind == "verification")
+        {
+            var answer = MessageBox.Show(this, message + "\n\nOpen the OpenAI verification page now?",
+                title, MessageBoxButton.YesNo, MessageBoxImage.Warning);
+            if (answer == MessageBoxResult.Yes) OpenUrl(AireEngine.OpenAiVerifyOrganizationUrl);
+            return;
+        }
+        if ((job.FailureCount > 0 || job.Aborted) && job.LogFile.Length > 0)
+        {
+            var answer = MessageBox.Show(this, message + "\n\nRead the log now?",
+                title, MessageBoxButton.YesNo,
+                job.Aborted ? MessageBoxImage.Warning : MessageBoxImage.Information);
+            if (answer == MessageBoxResult.Yes) OpenLogViewer(job.LogFile);
+            return;
+        }
+        MessageBox.Show(this, message + $"\n\nLog saved to:\n{job.LogFile}", title,
             MessageBoxButton.OK, MessageBoxImage.Information);
     }
 

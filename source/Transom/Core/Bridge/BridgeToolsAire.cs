@@ -78,10 +78,19 @@ public static partial class BridgeTools
         if (!AireEngine.IsValidQuality(model, quality))
             return Err($"quality '{quality}' is not valid for {model} (valid: {string.Join(", ", AireEngine.QualityOptionsFor(model))})");
 
+        // input_fidelity is per model, and no model in the current catalog accepts it — they all read the
+        // source at full fidelity and 400 on the parameter's presence. On such a model "high" is already true
+        // and "low" is impossible, so accept the first with a note and REFUSE the second rather than quietly
+        // handing Claude the opposite of what it asked for.
         var fidelity = StrArg(args, "input_fidelity");
         if (string.IsNullOrWhiteSpace(fidelity)) fidelity = "high";
         if (fidelity != "high" && fidelity != "low")
             return Err($"input_fidelity '{fidelity}' is not valid (valid: high, low)");
+
+        bool modelTakesFidelity = AireEngine.SupportsInputFidelity(model);
+        if (!modelTakesFidelity && fidelity == "low")
+            return Err($"input_fidelity 'low' cannot be honoured: {AireEngine.InputFidelityNote(model)} "
+                       + "Either accept high fidelity or choose a model that exposes the setting.");
         bool highInputFidelity = fidelity == "high";
 
         var prompt = StrArg(args, "prompt");
@@ -114,6 +123,9 @@ public static partial class BridgeTools
             ["size"] = size,
             ["quality"] = quality,
             ["input_fidelity"] = fidelity,
+            // Present only when "high" was implicit rather than requested, so Claude reports what the model
+            // actually does instead of claiming AIRE set something.
+            ["input_fidelity_note"] = modelTakesFidelity ? null : AireEngine.InputFidelityNote(model),
             ["output_folder"] = outputFolder,
             ["estimated_cost_usd"] = Math.Round(estimate, 4),
             ["estimated_cost_per_image_usd"] = Math.Round(files.Count == 0 ? 0 : estimate / files.Count, 4),
@@ -142,6 +154,9 @@ public static partial class BridgeTools
             ["output_tokens"] = r.OutputTokens,
             ["actual_size"] = r.ActualSize.Length > 0 ? r.ActualSize : null,
             ["error_message"] = r.ErrorMessage,
+            // The CLASS of the failure, so a poller can act without parsing the sentence: auth, verification,
+            // quota, rate_limit, moderation, fidelity, size, server, network, other — or "cancelled".
+            ["error_kind"] = r.ErrorKind.Length > 0 ? r.ErrorKind : null,
         }).Cast<object?>().ToList();
 
         return Json(new Dictionary<string, object?>
@@ -152,6 +167,12 @@ public static partial class BridgeTools
             // A cancelled batch still ends as "completed" (it stops cleanly and writes its log), so the
             // caller needs this to tell "ran to the end" from "stopped early".
             ["cancelled"] = job.CancelRequested,
+            // A batch AIRE stopped itself, because the failure would repeat on every remaining image (an
+            // unverified account, a dead key, no credit, a request shape the model refuses). Null when the run
+            // reached the end of the queue. Stop polling and tell the user THIS, not "N images failed".
+            ["aborted_reason"] = job.Aborted ? job.AbortReason : null,
+            ["aborted_kind"] = job.Aborted ? job.AbortKind : null,
+            ["not_attempted"] = job.NotAttempted,
             ["done"] = job.Done,
             ["total"] = job.Total,
             ["current_file"] = job.CurrentFile,

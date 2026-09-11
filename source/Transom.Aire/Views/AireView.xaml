@@ -681,11 +681,14 @@
                                     <!-- One row, no MinHeight anywhere: the Prompt card below is the star row and pays for
                                          every pixel added here. -->
                                     <TextBlock Grid.Row="16" Grid.Column="0" Style="{StaticResource FieldLabel}" Text="Fidelity"/>
+                                    <!-- Content and ToolTip are both set by AireView.UpdateFidelityAvailability, which runs
+                                         on load and on every model change: no model in the current catalog accepts
+                                         input_fidelity, so on those this box is DISABLED, ticked, and says why. The values
+                                         here are only what the designer shows. -->
                                     <CheckBox  Grid.Row="16" Grid.Column="1" Grid.ColumnSpan="2" x:Name="FidelityCheck"
                                                Foreground="{DynamicResource TextPrimary}" VerticalContentAlignment="Center"
                                                VerticalAlignment="Center" IsChecked="True"
-                                               Content="High input fidelity: stay close to the source"
-                                               ToolTip="Sends input_fidelity: high, the API parameter that does what the default prompt spends four sentences asking for: keep the camera, geometry, mullions and composition. Turn it off to send the API default (low). It may raise the input-token cost slightly; the CSV log records what each image billed."/>
+                                               Content="High input fidelity: stay close to the source"/>
                                 </Grid>
 
                                 <StackPanel Orientation="Horizontal" Margin="0,10,0,0" HorizontalAlignment="Left">
@@ -754,19 +757,40 @@
                         </Border>
                     </Grid>
 
-                    <!-- RIGHT: (migration notice) + Image Queue + Processing Status -->
+                    <!-- RIGHT: (verification banner) + (migration notice) + Image Queue + Processing Status -->
                     <Grid Grid.Column="2">
                         <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="*"/>
                             <RowDefinition Height="14"/>
                             <RowDefinition Height="Auto"/>
                         </Grid.RowDefinitions>
 
+                        <!-- Shown whenever the key in the box has not been acknowledged as belonging to a VERIFIED
+                             OpenAI organization — the single most common reason a first batch fails, and one an
+                             account with a card on file still hits. Same amber Notice* pattern as the migration
+                             notice below; its button opens VerificationOverlay. -->
+                        <Border Grid.Row="0" x:Name="VerificationNotice" Style="{StaticResource Card}" Margin="0,0,0,14"
+                                Background="{DynamicResource NoticeBg}" BorderBrush="{DynamicResource NoticeBorder}"
+                                Visibility="Collapsed">
+                            <DockPanel>
+                                <Button DockPanel.Dock="Right" x:Name="VerificationNoticeButton" Style="{StaticResource SmallButton}"
+                                        Content="Enable GPT Image models" VerticalAlignment="Top" Margin="12,0,0,0"/>
+                                <StackPanel>
+                                    <TextBlock x:Name="VerificationNoticeTitle" Style="{StaticResource FieldLabel}" FontWeight="SemiBold"
+                                               Foreground="{DynamicResource NoticeFg}"
+                                               Text="This OpenAI account has not been verified yet."/>
+                                    <TextBlock x:Name="VerificationNoticeText" Style="{StaticResource SmallMuted}"
+                                               Foreground="{DynamicResource TextPrimary}" Margin="0,4,0,0" TextWrapping="Wrap"/>
+                                </StackPanel>
+                            </DockPanel>
+                        </Border>
+
                         <!-- Shown once, on the first open after an upgrade, only when the saved model is one OpenAI is
                              retiring (AireView.LoadSettings). In-window rather than a dialog, like the key-help overlays:
                              every colour is a DynamicResource ApplyTheme rewrites. Collapsed = no layout cost. -->
-                        <Border Grid.Row="0" x:Name="MigrationNotice" Style="{StaticResource Card}" Margin="0,0,0,14"
+                        <Border Grid.Row="1" x:Name="MigrationNotice" Style="{StaticResource Card}" Margin="0,0,0,14"
                                 Background="{DynamicResource NoticeBg}" BorderBrush="{DynamicResource NoticeBorder}"
                                 Visibility="Collapsed">
                             <DockPanel>
@@ -782,7 +806,7 @@
                             </DockPanel>
                         </Border>
 
-                        <Border Grid.Row="1" Style="{StaticResource Card}">
+                        <Border Grid.Row="2" Style="{StaticResource Card}">
                             <Grid>
                                 <Grid.RowDefinitions>
                                     <RowDefinition Height="Auto"/>
@@ -819,16 +843,23 @@
                             </Grid>
                         </Border>
 
-                        <Border Grid.Row="3" Style="{StaticResource Card}">
+                        <Border Grid.Row="4" Style="{StaticResource Card}">
                             <StackPanel>
                                 <Grid Margin="0,0,0,8">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="*"/>
                                         <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="Auto"/>
                                     </Grid.ColumnDefinitions>
                                     <TextBlock Grid.Column="0" Style="{StaticResource SectionTitle}"
                                                Text="Processing Status" VerticalAlignment="Center"/>
-                                    <Button Grid.Column="1" x:Name="CancelButton" Style="{StaticResource DangerButton}"
+                                    <!-- Live whenever a log exists to read — the finished job's, or failing that the
+                                         newest CSV under the output folder's logs — so it works on a fresh open and
+                                         for a batch Claude ran, not only after a run in this window. -->
+                                    <Button Grid.Column="1" x:Name="ViewLogButton" Style="{StaticResource AireButton}"
+                                            Content="View Log" Margin="0,0,8,0" IsEnabled="False"
+                                            ToolTip="Read the last batch log in plain English, instead of opening the CSV."/>
+                                    <Button Grid.Column="2" x:Name="CancelButton" Style="{StaticResource DangerButton}"
                                             Content="Cancel Batch" IsEnabled="False"/>
                                 </Grid>
                                 <ProgressBar x:Name="JobProgressBar" Style="{StaticResource AireProgress}" Minimum="0" Maximum="100"/>
@@ -1129,17 +1160,25 @@
                                 <ProgressBar x:Name="VideoProgressBar" Style="{StaticResource AireProgress}" Minimum="0" Maximum="100"/>
                                 <TextBlock x:Name="VideoStatusLabel" Style="{StaticResource SmallMuted}" Margin="0,8,0,0"
                                            Text="Ready. Nothing runs until you click Generate Clip and confirm the cost." TextWrapping="Wrap"/>
+                                <!-- Shown after EVERY finished clip, not only a successful one: the run that most needs
+                                     its log read is the one that failed, and hiding the panel there is what put the
+                                     log out of reach. Play is disabled when there is no clip to play. -->
                                 <Grid x:Name="VideoResultPanel" Margin="0,10,0,0" Visibility="Collapsed">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="*"/>
                                         <ColumnDefinition Width="Auto"/>
                                         <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="Auto"/>
                                     </Grid.ColumnDefinitions>
                                     <TextBlock Grid.Column="0" x:Name="VideoResultLabel" Style="{StaticResource SmallMuted}"
-                                               Foreground="{DynamicResource TextPrimary}" VerticalAlignment="Center"/>
-                                    <Button Grid.Column="1" x:Name="VideoOpenFolderButton" Style="{StaticResource AireButton}"
-                                            Content="Open Folder" Margin="8,0,8,0"/>
-                                    <Button Grid.Column="2" x:Name="VideoPlayButton" Style="{StaticResource AireButton}"
+                                               Foreground="{DynamicResource TextPrimary}" VerticalAlignment="Center"
+                                               TextWrapping="Wrap"/>
+                                    <Button Grid.Column="1" x:Name="VideoViewLogButton" Style="{StaticResource AireButton}"
+                                            Content="View Log" Margin="8,0,8,0" IsEnabled="False"
+                                            ToolTip="Read this clip's log in plain English, instead of opening the CSV."/>
+                                    <Button Grid.Column="2" x:Name="VideoOpenFolderButton" Style="{StaticResource AireButton}"
+                                            Content="Open Folder" Margin="0,0,8,0"/>
+                                    <Button Grid.Column="3" x:Name="VideoPlayButton" Style="{StaticResource AireButton}"
                                             Content="Play" ToolTip="Opens the clip in your default video player."/>
                                 </Grid>
                             </StackPanel>
@@ -1202,6 +1241,66 @@
                             <TextBlock Style="{StaticResource FieldLabel}" Text="Keep it private"/>
                             <TextBlock Style="{StaticResource SmallMuted}" TextWrapping="Wrap" Margin="0,2,0,0"
                                        Text="Anyone with your key can spend your credit. Don't share it, email it, or commit it to a repository. If it is ever exposed, revoke it on the same API keys page and create a replacement. You can also cap spending there with a monthly budget limit."/>
+                        </StackPanel>
+                    </ScrollViewer>
+                </DockPanel>
+            </Border>
+        </Border>
+
+        <!-- The verification gate. Same in-window overlay pattern as the key help above, for the same reason
+             (one live palette). This one is not help text: it is what stands between the user and a batch that
+             OpenAI is about to refuse, so the Enable button stays DISABLED until the acknowledgement is ticked —
+             a claim clicked past on reflex is the thing this is trying to prevent. AIRE cannot check the claim
+             (OpenAI publishes no status endpoint), so a 403 on the next batch withdraws it again. -->
+        <Border x:Name="VerificationOverlay" Grid.Row="0" Grid.RowSpan="2" Margin="-22"
+                Background="#B0000000" Visibility="Collapsed" Panel.ZIndex="10">
+            <Border Style="{StaticResource Card}" MaxWidth="660" MaxHeight="600"
+                    VerticalAlignment="Center" HorizontalAlignment="Center" Margin="24">
+                <DockPanel>
+                    <TextBlock DockPanel.Dock="Top" Style="{StaticResource TitleLabel}"
+                               Text="Your OpenAI account needs to be verified"/>
+                    <TextBlock DockPanel.Dock="Top" Style="{StaticResource SubtitleLabel}" Margin="0,4,0,12"
+                               TextWrapping="Wrap"
+                               Text="OpenAI will not generate images for an account that has not completed organization verification. This is separate from adding billing credit — an account with a payment method and money on it is still refused until it verifies, which is the single most common reason a first batch fails."/>
+
+                    <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Margin="0,14,0,0">
+                        <Button x:Name="VerificationEnableButton" Style="{StaticResource PrimaryButton}"
+                                Content="Enable GPT Image models" IsEnabled="False"
+                                ToolTip="Tick the box above first."/>
+                        <Button x:Name="VerificationCloseButton" Style="{StaticResource AireButton}"
+                                Content="Close" Margin="8,0,0,0"/>
+                    </StackPanel>
+
+                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                        <StackPanel>
+                            <TextBlock Style="{StaticResource FieldLabel}" Text="What it is"/>
+                            <TextBlock Style="{StaticResource SmallMuted}" TextWrapping="Wrap" Margin="0,2,0,10"
+                                       Text="A one-time identity check on your organization, run through OpenAI's verification partner: a government-issued photo ID, and a selfie if asked. It takes a few minutes. One ID verifies one organization per 90 days, so it cannot be spread across several accounts."/>
+
+                            <TextBlock Style="{StaticResource FieldLabel}" Text="It applies to every GPT Image model"/>
+                            <TextBlock Style="{StaticResource SmallMuted}" TextWrapping="Wrap" Margin="0,2,0,10"
+                                       Text="Not just the newest one. Switching from gpt-image-2.5-flare down to gpt-image-2 does not get past it — the gate is on the account, not the model, so an unverified account is refused whichever one you pick."/>
+
+                            <TextBlock Style="{StaticResource FieldLabel}" Text="Where to do it"/>
+                            <TextBlock Style="{StaticResource SmallMuted}" TextWrapping="Wrap" Margin="0,2,0,6"
+                                       Text="On platform.openai.com, under Settings → Organization → General, click Verify Organization. The button below opens that page."/>
+                            <Button x:Name="VerificationOpenButton" Style="{StaticResource PrimaryButton}"
+                                    Content="Open the verification page" HorizontalAlignment="Left" Margin="0,0,0,10"/>
+
+                            <TextBlock Style="{StaticResource FieldLabel}" Text="Then wait a little"/>
+                            <TextBlock Style="{StaticResource SmallMuted}" TextWrapping="Wrap" Margin="0,2,0,12"
+                                       Text="Access usually takes about fifteen minutes to take effect after you are approved, and sometimes longer. If a batch is refused shortly after verifying, that is normally all this is — wait and run it again."/>
+
+                            <Border Background="{DynamicResource NoticeBg}" BorderBrush="{DynamicResource NoticeBorder}"
+                                    BorderThickness="1" CornerRadius="8" Padding="12">
+                                <StackPanel>
+                                    <CheckBox x:Name="VerificationAckCheck" Foreground="{DynamicResource TextPrimary}"
+                                              VerticalContentAlignment="Center"
+                                              Content="I have completed organization verification for the OpenAI account this key belongs to."/>
+                                    <TextBlock Style="{StaticResource SmallMuted}" TextWrapping="Wrap" Margin="0,6,0,0"
+                                               Text="There is no way for AIRE to check this — OpenAI does not publish your verification status. If the account turns out not to be verified, the first render will be refused and AIRE will show this panel again."/>
+                                </StackPanel>
+                            </Border>
                         </StackPanel>
                     </ScrollViewer>
                 </DockPanel>

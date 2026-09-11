@@ -1,0 +1,167 @@
+<Window x:Class="Transom.Views.LogViewerWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Batch log — AIRE"
+        Width="880" Height="660" MinWidth="520" MinHeight="320"
+        WindowStartupLocation="CenterOwner"
+        ShowInTaskbar="False"
+        FontFamily="Segoe UI" FontSize="14"
+        Background="{DynamicResource AppBg}"
+        Foreground="{DynamicResource TextPrimary}">
+
+    <!-- The constructor merges the owner AireView's dictionary in, so this window draws from the very same
+         brush instances AireView.ApplyTheme MUTATES and therefore follows a Light/Dark switch made on the main
+         window while this one is open. Consequences, both load-bearing:
+           1. Every reference to an owner key must be a DynamicResource. A StaticResource resolves while this
+              XAML is parsed — before the merge — and throws.
+           2. The local styles below cannot use BasedOn (which requires a StaticResource), so each one sets its
+              own properties outright and reaches the palette through DynamicResource brush references. -->
+    <Window.Resources>
+        <Style x:Key="LogHeadline" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="16"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Foreground" Value="{DynamicResource TitleFg}"/>
+            <Setter Property="TextWrapping" Value="Wrap"/>
+        </Style>
+        <Style x:Key="LogSub" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Foreground" Value="{DynamicResource MutedFg}"/>
+            <Setter Property="TextWrapping" Value="Wrap"/>
+        </Style>
+        <Style x:Key="LogRowTitle" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Foreground" Value="{DynamicResource TextPrimary}"/>
+            <Setter Property="TextWrapping" Value="Wrap"/>
+        </Style>
+
+        <!-- Text blocks that must disappear when their string is empty. A DataTrigger on the bound value,
+             rather than a converter, keeps this window free of code-behind view logic. -->
+        <Style x:Key="LogRowDetail" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Margin" Value="0,2,0,0"/>
+            <Setter Property="Foreground" Value="{DynamicResource MutedFg}"/>
+            <Setter Property="TextWrapping" Value="Wrap"/>
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding Detail}" Value="">
+                    <Setter Property="Visibility" Value="Collapsed"/>
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+        <Style x:Key="LogRowMessage" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="12.5"/>
+            <Setter Property="Margin" Value="0,4,0,0"/>
+            <Setter Property="Foreground" Value="{DynamicResource TextPrimary}"/>
+            <Setter Property="TextWrapping" Value="Wrap"/>
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding Message}" Value="">
+                    <Setter Property="Visibility" Value="Collapsed"/>
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+        <Style x:Key="LogRowAdvice" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="12.5"/>
+            <Setter Property="Margin" Value="0,3,0,0"/>
+            <Setter Property="Foreground" Value="{DynamicResource LinkFg}"/>
+            <Setter Property="TextWrapping" Value="Wrap"/>
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding AdviceLine}" Value="">
+                    <Setter Property="Visibility" Value="Collapsed"/>
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+
+        <!-- Failure carries the colour; success is the unremarkable case and stays in the body ink. There is no
+             green in AIRE's palette and this is not the place to introduce one. -->
+        <Style x:Key="LogGlyph" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="15"/>
+            <Setter Property="Width" Value="22"/>
+            <Setter Property="Text" Value="&#x2717;"/>
+            <Setter Property="Foreground" Value="{DynamicResource DangerFg}"/>
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding Succeeded}" Value="True">
+                    <Setter Property="Text" Value="&#x2713;"/>
+                    <Setter Property="Foreground" Value="{DynamicResource TextPrimary}"/>
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+
+        <DataTemplate x:Key="LogRowTemplate">
+            <Border Padding="0,8,0,8" BorderThickness="0,0,0,1" BorderBrush="{DynamicResource CardBorder}">
+                <DockPanel>
+                    <TextBlock DockPanel.Dock="Left" Style="{StaticResource LogGlyph}" VerticalAlignment="Top"/>
+                    <StackPanel>
+                        <TextBlock Text="{Binding Title}" Style="{StaticResource LogRowTitle}"/>
+                        <TextBlock Text="{Binding Detail}" Style="{StaticResource LogRowDetail}"/>
+                        <TextBlock Text="{Binding Message}" Style="{StaticResource LogRowMessage}"/>
+                        <TextBlock Text="{Binding AdviceLine}" Style="{StaticResource LogRowAdvice}"/>
+                    </StackPanel>
+                </DockPanel>
+            </Border>
+        </DataTemplate>
+    </Window.Resources>
+
+    <Border Style="{DynamicResource Card}" Margin="16">
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+
+            <!-- Which log. Newest first, so the default selection is the run that just finished, and the run
+                 before it is a click away rather than a trip through Explorer. -->
+            <Grid Grid.Row="0" Margin="0,0,0,10">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Grid.Column="0" Text="Log" VerticalAlignment="Center" Margin="0,0,10,0"
+                           Foreground="{DynamicResource MutedFg}" FontSize="12" FontWeight="SemiBold"/>
+                <ComboBox Grid.Column="1" x:Name="LogCombo" Style="{DynamicResource AireCombo}" Height="34" FontSize="13"
+                          ToolTip="Every batch log in this output folder, newest first."/>
+            </Grid>
+
+            <TextBlock Grid.Row="1" x:Name="HeadlineLabel" Style="{StaticResource LogHeadline}"/>
+            <TextBlock Grid.Row="2" x:Name="SubLabel" Style="{StaticResource LogSub}" Margin="0,4,0,10"/>
+
+            <Border Grid.Row="3" Background="{DynamicResource ListBg}" BorderBrush="{DynamicResource CardBorder}"
+                    BorderThickness="1" CornerRadius="8" Padding="12,2,12,2">
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <ItemsControl x:Name="RowList" ItemTemplate="{StaticResource LogRowTemplate}"/>
+                </ScrollViewer>
+            </Border>
+
+            <!-- Only ever visible when the batch stopped itself; the count of what was skipped is not in the
+                 file (an unattempted render has no row), so this says that it stopped and why. -->
+            <Border Grid.Row="4" x:Name="StoppedPanel" Margin="0,10,0,0" Padding="12" CornerRadius="8"
+                    Background="{DynamicResource NoticeBg}" BorderBrush="{DynamicResource NoticeBorder}"
+                    BorderThickness="1" Visibility="Collapsed">
+                <TextBlock x:Name="StoppedLabel" TextWrapping="Wrap" FontSize="12.5"
+                           Foreground="{DynamicResource TextPrimary}"/>
+            </Border>
+
+            <Grid Grid.Row="5" Margin="0,12,0,0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Grid.Column="0" x:Name="PathLabel" Style="{StaticResource LogSub}"
+                           VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+                <StackPanel Grid.Column="1" Orientation="Horizontal">
+                    <Button x:Name="OpenCsvButton" Style="{DynamicResource AireButton}" Content="Open CSV"
+                            Margin="0,0,8,0"
+                            ToolTip="The same run in the spreadsheet — sortable, and the right tool for sixty rows."/>
+                    <Button x:Name="CopyButton" Style="{DynamicResource AireButton}" Content="Copy" Margin="0,0,8,0"
+                            ToolTip="Copy this whole report as plain text."/>
+                    <Button x:Name="OpenFolderButton" Style="{DynamicResource AireButton}" Content="Open Output Folder"
+                            Margin="0,0,8,0"/>
+                    <Button x:Name="CloseButton" Style="{DynamicResource PrimaryButton}" Content="Close" MinWidth="90"/>
+                </StackPanel>
+            </Grid>
+        </Grid>
+    </Border>
+</Window>

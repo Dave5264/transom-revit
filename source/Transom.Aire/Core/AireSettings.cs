@@ -102,6 +102,58 @@ public sealed class AireSettings
     /// <summary>"Enhance" or "Video" — which tab the window reopens on.</summary>
     public string ActiveTab { get; set; } = "Enhance";
 
+    // ---- OpenAI organization verification ------------------------------------
+
+    /// <summary>
+    ///     Fingerprints of the OpenAI keys whose organization the user has confirmed is verified. Verification
+    ///     is per ORGANIZATION and OpenAI publishes no endpoint that reports it, so this records a CLAIM, not a
+    ///     fact — it is cleared again the moment OpenAI answers 403 for that key (AireView.OnJobProgress).
+    ///     <para>
+    ///     A fingerprint, not the key and not the preset name: saved keys are a shipped feature, so a user with
+    ///     a Studio key and a Personal key has TWO organizations and needs two acknowledgements; an account may
+    ///     be saved under several names or none; and the key itself has no business being in aire.json outside
+    ///     the DPAPI blob.
+    ///     </para>
+    /// </summary>
+    public List<string> VerifiedAccounts { get; set; } = new();
+
+    /// <summary>First 16 hex of SHA-256(key). One-way, stable, and useless to anyone who reads the file.</summary>
+    public static string FingerprintOf(string apiKey)
+    {
+        var key = (apiKey ?? "").Trim();
+        if (key.Length == 0) return "";
+        var hash = System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(key));
+        return Convert.ToHexString(hash)[..16].ToLowerInvariant();
+    }
+
+    /// <summary>Has the user confirmed that THIS key's organization is verified? False for a blank key, so the
+    /// gate never fires before the missing-key guard has had its say.</summary>
+    public bool IsVerificationAcknowledged(string apiKey)
+    {
+        var fp = FingerprintOf(apiKey);
+        return fp.Length > 0 && VerifiedAccounts.Contains(fp, StringComparer.OrdinalIgnoreCase);
+    }
+
+    /// <summary>Records the claim and writes it out at once — like the preset writes, and for the same reason:
+    /// a bridge-started batch in the other AIRE process reads the file, not this instance.</summary>
+    public void AcknowledgeVerification(string apiKey)
+    {
+        var fp = FingerprintOf(apiKey);
+        if (fp.Length == 0 || VerifiedAccounts.Contains(fp, StringComparer.OrdinalIgnoreCase)) return;
+        VerifiedAccounts.Add(fp);
+        Save();
+    }
+
+    /// <summary>Withdraws the claim after OpenAI has refused this key — what keeps the acknowledgement from
+    /// being a checkbox that launders a guess.</summary>
+    public void ClearVerification(string apiKey)
+    {
+        var fp = FingerprintOf(apiKey);
+        if (fp.Length == 0) return;
+        int removed = VerifiedAccounts.RemoveAll(v => string.Equals(v, fp, StringComparison.OrdinalIgnoreCase));
+        if (removed > 0) Save();
+    }
+
     private static string FilePath =>
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Transom", "aire.json");
 
