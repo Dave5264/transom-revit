@@ -403,6 +403,17 @@ public static class AireJobManager
     /// <summary>The most recently started video clip, or null.</summary>
     public static AireVideoJob? LatestVideo { get { lock (Gate) return Jobs.OfType<AireVideoJob>().LastOrDefault(); } }
 
+    /// <summary>
+    ///     The most recent job of ANY kind, and lookup by id across kinds. <see cref="Latest"/> and
+    ///     <see cref="Find"/> are deliberately image-only — they are typed <see cref="AireJob"/> because the
+    ///     original bridge reported batch fields. The aire_* tools now serve both kinds from one poll tool and
+    ///     branch on <see cref="AireJobBase.Kind"/>, so they need a view that does not silently skip the clip
+    ///     the caller just started.
+    /// </summary>
+    public static AireJobBase? LatestAny { get { lock (Gate) return Jobs.LastOrDefault(); } }
+
+    public static AireJobBase? FindAny(string id) { lock (Gate) return Jobs.FirstOrDefault(j => j.Id == id); }
+
     /// <summary>Whatever is running in this process right now — an image batch or a video clip — or null.</summary>
     public static AireJobBase? RunningJob { get { lock (Gate) return Jobs.FirstOrDefault(j => !j.IsFinished); } }
 

@@ -240,22 +240,13 @@ public static class AireEngine
     /// </summary>
     public static (int Tokens, int? Width, int? Height) EstimateImageTokensFromFile(string imagePath)
     {
-        try
-        {
-            // Header-only decode (no full bitmap) — BitmapDecoder with CacheOption.None reads just enough.
-            using var fs = new FileStream(imagePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-            var frame = System.Windows.Media.Imaging.BitmapDecoder.Create(
-                fs,
-                System.Windows.Media.Imaging.BitmapCreateOptions.DelayCreation,
-                System.Windows.Media.Imaging.BitmapCacheOption.None).Frames[0];
-            int w = frame.PixelWidth, h = frame.PixelHeight;
-            long pixels = (long)w * h;
-            return ((int)(pixels * ApproxImageTokenFactor), w, h);
-        }
-        catch
-        {
-            return (0, null, null);
-        }
+        // Header-only read. This was a WPF BitmapDecoder until AIRE's core was split out of the window
+        // assembly — see ImageHeader for why that had to go.
+        var size = ImageHeader.TryReadSize(imagePath);
+        if (size == null) return (0, null, null);
+        int w = size.Value.Width, h = size.Value.Height;
+        long pixels = (long)w * h;
+        return ((int)(pixels * ApproxImageTokenFactor), w, h);
     }
 
     // ---- output-token table ------------------------------------------------------------------------

@@ -1,10 +1,12 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
     <PropertyGroup>
-        <!-- AIRE's engine, job runner, settings and window. Deliberately free of RevitAPI and of any Transom
-             type: nothing in here imports anything but the BCL, which is what lets the SAME code run inside
-             Revit (Transom.dll references this) and in the standalone AIRE app with Revit closed. Keep it
-             that way — a Revit reference here would make the standalone app impossible to ship. -->
+        <!-- AIRE's WINDOW. The engine, job runner, settings and Higgsfield client moved to
+             Transom.Aire.Core so the MCP shim (a plain net8.0 exe with no desktop runtime) can run the
+             aire_* tools headlessly; everything left here is WPF. Deliberately free of RevitAPI and of any
+             Transom type, which is what lets the SAME window run inside Revit (Transom.dll references this)
+             and in the standalone AIRE app with Revit closed. Keep it that way — a Revit reference here
+             would make the standalone app impossible to ship. -->
         <TargetFrameworks>net8.0-windows;net10.0-windows</TargetFrameworks>
         <UseWPF>true</UseWPF>
         <!-- Mirror Transom's Revit-per-config names so csproj-direct builds of Transom resolve this
@@ -16,10 +18,7 @@
     </PropertyGroup>
 
     <ItemGroup>
-        <!-- The Video tab's model catalog, generated from Higgsfield's OpenAPI spec by Catalog/generate_catalog.py.
-             Embedded so the dropdown can never be empty; %AppData%\Transom\higgsfield-models.json overrides it. -->
-        <EmbeddedResource Include="Catalog\higgsfield-models.json" LogicalName="Transom.Aire.higgsfield-models.json"/>
-        <None Include="Catalog\generate_catalog.py"/>
+        <ProjectReference Include="..\Transom.Aire.Core\Transom.Aire.Core.csproj"/>
     </ItemGroup>
 
 </Project>

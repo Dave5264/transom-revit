@@ -1,219 +1,25 @@
-using System;
-using System.Collections.Generic;
-using System.IO;
-using System.Linq;
 using System.Text.Json;
 
 namespace Transom.Core;
 
 /// <summary>
-///     AIRE (AI Render Enhancer) bridge tools — lets Claude run the same batch-enhancement engine the
-///     AIRE window uses. Every bridge request must answer well inside the 30-second cap while one 4K
-///     image takes minutes, so the surface is asynchronous by design: <c>aire_enhance</c> starts a job
-///     and returns immediately; <c>aire_job_status</c> polls it; <c>aire_cancel_job</c> stops it.
+///     AIRE's bridge tools, as reached over Revit's HTTP bridge.
 ///     <para>
-///     The OpenAI API key comes ONLY from the DPAPI-protected store the AIRE window writes
-///     (%AppData%\Transom\aire.json) — it is never accepted as a tool argument, so the key never
-///     transits Claude, the shim, or the loopback socket. These tools are document-independent
-///     (pure files + HTTPS) and are dispatched before document resolution in <see cref="Handle"/>.
+///     The implementation is NOT here any more — it lives in <see cref="AireBridge"/> inside
+///     Transom.Aire.Core, because AIRE never needed Revit. It spends against files and HTTPS, has no
+///     document, and the old arrangement meant Claude could not touch AIRE unless Revit happened to be
+///     open. The MCP shim now hosts the same code in-process and answers aire_* itself.
+///     </para>
+///     <para>
+///     This forwarder stays for the HTTP bridge: anything already pointed at
+///     <c>http://127.0.0.1:&lt;port&gt;/call</c> keeps working, and an AIRE job started through Revit shares
+///     the in-process <see cref="AireJobManager"/> with the ribbon's AIRE window, so the window's Cancel
+///     Batch can still stop it. Jobs the shim starts live in the shim — the cross-process lock file in
+///     <see cref="AireJobManager"/> is what stops the two ever spending at the same time.
 ///     </para>
 /// </summary>
 public static partial class BridgeTools
 {
     /// <summary>Routes the aire_* tools; null for anything else so Handle can fall through.</summary>
-    internal static string? DispatchAire(string tool, JsonElement args) => tool switch
-    {
-        "aire_enhance" => AireEnhance(args),
-        "aire_job_status" => AireJobStatus(args),
-        "aire_cancel_job" => AireCancelJob(args),
-        _ => null,
-    };
-
-    private static string AireEnhance(JsonElement args)
-    {
-        if (args.ValueKind != JsonValueKind.Object) return Err("aire_enhance needs arguments (at least output_folder plus images or input_folder)");
-
-        // --- gather inputs -------------------------------------------------
-        var files = new List<string>();
-        if (args.TryGetProperty("images", out var imgs) && imgs.ValueKind == JsonValueKind.Array)
-            foreach (var el in imgs.EnumerateArray())
-                if (el.ValueKind == JsonValueKind.String) files.Add(el.GetString() ?? "");
-
-        var inputFolder = StrArg(args, "input_folder");
-        if (!string.IsNullOrWhiteSpace(inputFolder))
-        {
-            if (!Directory.Exists(inputFolder)) return Err($"input_folder not found: {inputFolder}");
-            files.AddRange(AireEngine.ScanFolder(inputFolder));
-        }
-
-        var missing = files.Where(f => !File.Exists(f)).ToList();
-        if (missing.Count > 0) return Err("image file(s) not found: " + string.Join("; ", missing.Take(5)));
-
-        var skipped = files.Where(f => !AireEngine.IsEnhanceableImage(f)).ToList();
-        files = files.Where(AireEngine.IsEnhanceableImage).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-        if (files.Count == 0)
-            return Err("no enhanceable images (supported: .png/.jpg/.jpeg/.webp; files ending in _enhanced are outputs and are skipped)");
-
-        var outputFolder = StrArg(args, "output_folder");
-        if (string.IsNullOrWhiteSpace(outputFolder)) return Err("output_folder is required");
-
-        // --- options (defaults mirror the AIRE window) ---------------------
-        var model = StrArg(args, "model");
-        if (string.IsNullOrWhiteSpace(model)) model = AireEngine.DefaultModel;
-        // A retired id gets the reason, not just the list of what is left.
-        if (AireEngine.RetirementMessage(model) is { } retired) return Err(retired);
-        if (!AireEngine.ModelSizeOptions.TryGetValue(model, out var validSizes))
-            return Err($"unknown model '{model}' (valid: {string.Join(", ", AireEngine.Models)})");
-
-        var size = StrArg(args, "size");
-        if (string.IsNullOrWhiteSpace(size)) size = "auto";
-        if (!validSizes.Contains(size))
-            return Err($"size '{size}' is not valid for {model} (valid: {string.Join(", ", validSizes)})");
-
-        // Quality is per model: xhigh/max exist only on the 2.5 models, and the default rung differs
-        // (max on 2.5, high on gpt-image-2 — the same spend). Validating against a flat list would let a
-        // doomed job start and 400 on every image after the spend was confirmed.
-        var quality = StrArg(args, "quality");
-        if (string.IsNullOrWhiteSpace(quality)) quality = AireEngine.DefaultQualityFor(model);
-        if (!AireEngine.IsValidQuality(model, quality))
-            return Err($"quality '{quality}' is not valid for {model} (valid: {string.Join(", ", AireEngine.QualityOptionsFor(model))})");
-
-        // input_fidelity is per model, and no model in the current catalog accepts it — they all read the
-        // source at full fidelity and 400 on the parameter's presence. On such a model "high" is already true
-        // and "low" is impossible, so accept the first with a note and REFUSE the second rather than quietly
-        // handing Claude the opposite of what it asked for.
-        var fidelity = StrArg(args, "input_fidelity");
-        if (string.IsNullOrWhiteSpace(fidelity)) fidelity = "high";
-        if (fidelity != "high" && fidelity != "low")
-            return Err($"input_fidelity '{fidelity}' is not valid (valid: high, low)");
-
-        bool modelTakesFidelity = AireEngine.SupportsInputFidelity(model);
-        if (!modelTakesFidelity && fidelity == "low")
-            return Err($"input_fidelity 'low' cannot be honoured: {AireEngine.InputFidelityNote(model)} "
-                       + "Either accept high fidelity or choose a model that exposes the setting.");
-        bool highInputFidelity = fidelity == "high";
-
-        var prompt = StrArg(args, "prompt");
-        if (string.IsNullOrWhiteSpace(prompt)) prompt = AireEngine.DefaultPrompt;
-
-        // --- API key: stored-only, never a tool argument -------------------
-        var apiKey = AireSettings.Load().GetApiKey();
-        if (apiKey.Length == 0)
-            return Err("No OpenAI API key is saved. Ask the user to open the AIRE window (Transom ribbon → "
-                       + "AI Render Enhancer), paste their key, and run or close it once — the key is then "
-                       + "remembered (encrypted per-user) and this tool can use it.");
-
-        // --- cost estimate (returned so the caller can report it) ----------
-        int textTokens = AireEngine.EstimateTextTokens(prompt);
-        int outputTokens = AireEngine.EstimateOutputTokens(model, size, quality);
-        double estimate = files.Sum(f => AireEngine.EstimateCost(
-            AireEngine.EstimateImageTokensFromFile(f).Tokens, outputTokens, textTokens));
-
-        var job = AireJobManager.Start(files, outputFolder, prompt, model, size, quality, apiKey, out var error,
-            highInputFidelity);
-        if (job == null) return Err(error);
-
-        return Json(new Dictionary<string, object?>
-        {
-            ["ok"] = true,
-            ["job_id"] = job.Id,
-            ["images_queued"] = files.Count,
-            ["skipped_non_images"] = skipped.Count,
-            ["model"] = model,
-            ["size"] = size,
-            ["quality"] = quality,
-            ["input_fidelity"] = fidelity,
-            // Present only when "high" was implicit rather than requested, so Claude reports what the model
-            // actually does instead of claiming AIRE set something.
-            ["input_fidelity_note"] = modelTakesFidelity ? null : AireEngine.InputFidelityNote(model),
-            ["output_folder"] = outputFolder,
-            ["estimated_cost_usd"] = Math.Round(estimate, 4),
-            ["estimated_cost_per_image_usd"] = Math.Round(files.Count == 0 ? 0 : estimate / files.Count, 4),
-            ["note"] = "Job started in the background (each image can take minutes). Poll aire_job_status "
-                       + "with this job_id — do not assume completion. Report the estimated cost to the user now; "
-                       + "once the job finishes, report actual_cost_usd from aire_job_status instead (it is what "
-                       + "OpenAI billed, from the usage block of each response).",
-        });
-    }
-
-    private static string AireJobStatus(JsonElement args)
-    {
-        var job = ResolveJob(args, out var err);
-        if (job == null) return Err(err);
-
-        var results = job.Results.Select(r => new Dictionary<string, object?>
-        {
-            ["original_file"] = r.OriginalFile,
-            ["output_file"] = r.OutputFile,
-            ["input_resolution"] = r.InputResolution,
-            ["status"] = r.Status,
-            ["time_seconds"] = r.TimeSeconds,
-            ["estimated_cost_usd"] = r.EstimatedCostUsd,
-            // What OpenAI billed for this image (from the response's usage block); null when it sent none.
-            ["actual_cost_usd"] = r.ActualCostUsd,
-            ["output_tokens"] = r.OutputTokens,
-            ["actual_size"] = r.ActualSize.Length > 0 ? r.ActualSize : null,
-            ["error_message"] = r.ErrorMessage,
-            // The CLASS of the failure, so a poller can act without parsing the sentence: auth, verification,
-            // quota, rate_limit, moderation, fidelity, size, server, network, other — or "cancelled".
-            ["error_kind"] = r.ErrorKind.Length > 0 ? r.ErrorKind : null,
-        }).Cast<object?>().ToList();
-
-        return Json(new Dictionary<string, object?>
-        {
-            ["ok"] = true,
-            ["job_id"] = job.Id,
-            ["status"] = job.Status,
-            // A cancelled batch still ends as "completed" (it stops cleanly and writes its log), so the
-            // caller needs this to tell "ran to the end" from "stopped early".
-            ["cancelled"] = job.CancelRequested,
-            // A batch AIRE stopped itself, because the failure would repeat on every remaining image (an
-            // unverified account, a dead key, no credit, a request shape the model refuses). Null when the run
-            // reached the end of the queue. Stop polling and tell the user THIS, not "N images failed".
-            ["aborted_reason"] = job.Aborted ? job.AbortReason : null,
-            ["aborted_kind"] = job.Aborted ? job.AbortKind : null,
-            ["not_attempted"] = job.NotAttempted,
-            ["done"] = job.Done,
-            ["total"] = job.Total,
-            ["current_file"] = job.CurrentFile,
-            ["success_count"] = job.SuccessCount,
-            ["failure_count"] = job.FailureCount,
-            ["estimated_cost_usd"] = Math.Round(job.EstimatedCostUsd, 4),
-            // The billed total so far, or null until at least one response has carried usage. When
-            // actual_cost_images < success_count some images came back without usage and this is partial.
-            ["actual_cost_usd"] = job.HasActualCost ? Math.Round(job.ActualCostUsd, 4) : null,
-            ["actual_cost_images"] = job.ActualCostImages,
-            ["total_time"] = job.IsFinished ? AireEngine.SecondsToText(job.TotalTimeSeconds) : null,
-            ["log_file"] = job.LogFile.Length > 0 ? job.LogFile : null,
-            ["error"] = job.Error.Length > 0 ? job.Error : null,
-            ["results"] = results,
-        });
-    }
-
-    private static string AireCancelJob(JsonElement args)
-    {
-        var job = ResolveJob(args, out var err);
-        if (job == null) return Err(err);
-        if (job.IsFinished) return Err($"job {job.Id} already finished ({job.Status}) — nothing to cancel");
-        job.Cancel();
-        return Json(new Dictionary<string, object?>
-        {
-            ["ok"] = true,
-            ["job_id"] = job.Id,
-            ["note"] = "Cancel requested. The image currently uploading/generating may still complete; "
-                       + "poll aire_job_status until the job reports completed.",
-        });
-    }
-
-    /// <summary>job_id arg → that job; omitted → the latest job. Null (with message) when nothing matches.</summary>
-    private static AireJob? ResolveJob(JsonElement args, out string error)
-    {
-        string? id = args.ValueKind == JsonValueKind.Object ? StrArg(args, "job_id") : null;
-        var job = string.IsNullOrWhiteSpace(id) ? AireJobManager.Latest : AireJobManager.Find(id!);
-        error = job != null ? ""
-            : string.IsNullOrWhiteSpace(id)
-                ? "no AIRE job has been started this session"
-                : $"unknown job_id '{id}' (jobs are kept in memory for the Revit session only)";
-        return job;
-    }
+    internal static string? DispatchAire(string tool, JsonElement args) => AireBridge.Dispatch(tool, args);
 }

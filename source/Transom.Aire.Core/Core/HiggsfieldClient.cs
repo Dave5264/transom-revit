@@ -486,12 +486,17 @@ public static class HiggsfieldClient
                 return Make(HiggsfieldErrorKind.Validation,
                     "Higgsfield rejected the request parameters: " + (detail.Length > 0 ? detail : "no detail given")
                     + ". Nothing was charged.");
+            // 423/503 carry the vendor's own reason in the body just like every other status, and these two
+            // were the only branches dropping it. That is the one question a blocked model actually raises —
+            // "blocked why, and for how long?" — so pass whatever Higgsfield said through.
             case 423:
                 return Make(HiggsfieldErrorKind.ModelUnavailable,
-                    "This model is temporarily blocked on Higgsfield (HTTP 423). Try again later, or pick another model.");
+                    "This model is temporarily blocked on Higgsfield (HTTP 423). Try again later, or pick another model."
+                    + Detail(detail));
             case 503:
                 return Make(HiggsfieldErrorKind.ModelUnavailable,
-                    "This model is disabled or not ready on Higgsfield (HTTP 503). Try again later, or pick another model.");
+                    "This model is disabled or not ready on Higgsfield (HTTP 503). Try again later, or pick another model."
+                    + Detail(detail));
             case >= 500:
                 return Make(HiggsfieldErrorKind.ServerError, $"Higgsfield server error (HTTP {status}) during {what}." + Detail(detail));
             case 400:

@@ -330,6 +330,31 @@ internal static class Program
         JsonNode? arguments = prms?["arguments"];
         JsonNode argsNode = arguments?.DeepClone() ?? new JsonObject();
 
+        // AIRE runs HERE, not in Revit. Its tools spend against files and HTTPS — no document, no Revit API,
+        // no window — so routing them over the loopback bridge only meant Claude could not touch AIRE unless
+        // Revit happened to be open. Transom.Aire.Core is referenced directly and answers in-process.
+        //
+        // Jobs therefore live in THIS process: the AIRE window cannot cancel what Claude started, and Claude
+        // cannot poll what the window started. That is safe rather than merely tolerable, because the spend
+        // guard in AireJobManager is a cross-process LOCK FILE — a second host is refused by name instead of
+        // starting a second paid run against the same account.
+        if (Transom.Core.AireBridge.Handles(name))
+        {
+            string localJson;
+            try
+            {
+                using var argsDoc = JsonDocument.Parse(argsNode.ToJsonString());
+                localJson = Transom.Core.AireBridge.Dispatch(name, argsDoc.RootElement)
+                            ?? ToolErrorJson($"AIRE tool '{name}' is advertised but was not handled.");
+            }
+            catch (Exception ex)
+            {
+                Log($"AIRE tool {name} failed: {ex.Message}");
+                localJson = ToolErrorJson($"{name} failed: {ex.Message}");
+            }
+            return ToolResult(localJson, BridgeReportedError(localJson));
+        }
+
         var requestBody = new JsonObject
         {
             ["tool"] = name,
@@ -351,21 +376,26 @@ internal static class Program
                 + $"Underlying error: {ex.Message}");
         }
 
-        bool isError = BridgeReportedError(bridgeJson);
-
-        return new JsonObject
-        {
-            ["content"] = new JsonArray
-            {
-                new JsonObject
-                {
-                    ["type"] = "text",
-                    ["text"] = bridgeJson,
-                },
-            },
-            ["isError"] = isError,
-        };
+        return ToolResult(bridgeJson, BridgeReportedError(bridgeJson));
     }
+
+    /// <summary>Wraps a tool's JSON body in the MCP content envelope.</summary>
+    private static JsonObject ToolResult(string body, bool isError) => new()
+    {
+        ["content"] = new JsonArray
+        {
+            new JsonObject
+            {
+                ["type"] = "text",
+                ["text"] = body,
+            },
+        },
+        ["isError"] = isError,
+    };
+
+    /// <summary>An {"ok":false,...} body in the same shape the bridge returns, so one error path serves both.</summary>
+    private static string ToolErrorJson(string message) =>
+        new JsonObject { ["ok"] = false, ["error"] = message }.ToJsonString();
 
     /// <summary>POST the request to the loopback bridge and return its body.</summary>
     private static string CallBridge(string requestJson)

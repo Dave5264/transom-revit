@@ -152,6 +152,24 @@ seconds and top out at 1080p.
 - **The same safety rails.** One paid job at a time, whether you started it in Revit or on its own. Your
   Higgsfield login is encrypted on your machine just like your OpenAI key, and you're not limited to one.
 
+#### Ask Claude to do it
+
+Everything above is also available to Claude, with nothing open — not Revit, not the AIRE window. Ask for
+"a slow orbit clip of this render" and it can price the request, start it, watch it, and tell you what it
+cost. The tools are `aire_enhance`, `aire_video`, `aire_video_models`, `aire_job_status`, `aire_cancel_job`
+and `aire_log`.
+
+- **It has to quote you a price first.** Same rule as the window: no cost from the vendor, no clip. Claude
+  can also price a request and stop (`estimate_only`), so you can compare models before committing.
+- **It can't set up a job the model will reject.** Claude is handed each model's real settings, so a length
+  or shape the model doesn't take is refused by name rather than silently dropped onto a clip you pay for.
+- **Your keys stay yours.** There is deliberately no tool that reads or sets a key. You paste them into the
+  window once; Claude spends against them but never sees them.
+- **One paid job at a time, still.** The lock covers Revit, the standalone app and Claude together. Whoever
+  asks second is told who's running, by name.
+- **It can read the receipts.** `aire_log` turns a run's spreadsheet into plain English, including what to
+  do about anything that failed — useful days later, when the job itself is long gone.
+
 *AIRE is much newer than the schedule editor and has had a lot less mileage. Treat your early batches and
 clips as a trial, and check the first costs against your real OpenAI and Higgsfield usage.*
 
@@ -235,7 +253,8 @@ gives you an installer that silently omits a whole Revit version.
 | Path | Description |
 |------|-------------|
 | `source/Transom/` | the add-in (commands, views, view-models, core logic) |
-| `source/Transom.Aire/` | AIRE: the OpenAI engine, the Higgsfield client and generated model catalog, both job runners, encrypted settings and the window (Revit-free: files + HTTPS) |
+| `source/Transom.Aire.Core/` | AIRE's engine: the OpenAI client, the Higgsfield client and generated model catalog, both job runners, encrypted settings, and the `aire_*` tool surface (`AireBridge`). BCL only — no Revit, **no WPF** — which is what lets the MCP shim run AIRE headlessly |
+| `source/Transom.Aire/` | AIRE's window (WPF views only; everything else moved to `.Core`) |
 | `source/Transom.Aire.App/` | the standalone AIRE host (same window, its own process) |
 | `build/`, `install/` | ModularPipelines build + WiX installer |
 | `branding/` | ribbon icon + generator |

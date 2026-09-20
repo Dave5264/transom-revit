@@ -1,0 +1,42 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <!-- AIRE's engine, job runner, settings, Higgsfield client and bridge tool surface. Strictly BCL:
+             no RevitAPI, no Transom type, AND NO WPF. The WPF part is the reason this project exists
+             separately from Transom.Aire — the MCP shim is a plain net8.0 self-contained exe and cannot
+             reference a -windows/UseWPF assembly without dragging the whole desktop runtime into its
+             single-file bundle. Splitting the views off is what lets Claude drive AIRE with Revit closed
+             AND the AIRE window closed.
+
+             Keep this project free of WPF and of Revit. Three hosts depend on that:
+               Transom.dll        (inside Revit)          -> ribbon + HTTP bridge
+               Transom.Aire       (WPF views)             -> the AIRE window, standalone app
+               Transom.McpShim    (net8.0, no desktop)    -> headless aire_* tools
+
+             DPAPI is reached by hand-rolled P/Invoke in AireSettings rather than the
+             System.Security.Cryptography.ProtectedData package, precisely so this stays package-free and
+             keeps dropping cleanly into Revit's shared dependency closure. -->
+        <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
+        <!-- Mirror Transom's Revit-per-config names so csproj-direct builds resolve this ProjectReference
+             under the same configuration (same reason as Transom.Scripting and Transom.Aire). -->
+        <Configurations>Debug;Release;Debug.R25;Debug.R26;Debug.R27;Release.R25;Release.R26;Release.R27</Configurations>
+        <Optimize Condition="$(Configuration.StartsWith('Release'))">true</Optimize>
+        <Nullable>enable</Nullable>
+        <LangVersion>latest</LangVersion>
+        <AssemblyName>Transom.Aire.Core</AssemblyName>
+        <RootNamespace>Transom.Core</RootNamespace>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <!-- The Video tab's model catalog, generated from Higgsfield's OpenAPI spec by
+             Catalog/generate_catalog.py. Embedded so the model list can never be empty;
+             %AppData%\Transom\higgsfield-models.json overrides it.
+
+             The LogicalName is UNCHANGED from when this lived in Transom.Aire. It is what
+             HiggsfieldCatalog.EmbeddedResourceName looks up, and keeping it stable means the resource
+             moved assemblies without a single code change. -->
+        <EmbeddedResource Include="Catalog\higgsfield-models.json" LogicalName="Transom.Aire.higgsfield-models.json"/>
+        <None Include="Catalog\generate_catalog.py"/>
+    </ItemGroup>
+
+</Project>

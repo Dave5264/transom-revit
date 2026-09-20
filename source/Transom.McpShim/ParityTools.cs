@@ -755,7 +755,9 @@ internal static class ParityTools
             + "finished report actual_cost_usd from aire_job_status instead (what OpenAI billed). Needs no open "
             + "document. Returns a job_id IMMEDIATELY (each image can take minutes); poll aire_job_status for "
             + "progress. Outputs are written as <name>_enhanced.png plus a CSV log under <output_folder>\\logs. "
-            + "The API key must already be saved in the AIRE window (Transom ribbon) — there is no key argument.",
+            + "Needs no Revit and no open AIRE window — AIRE runs inside this MCP server. The API key must "
+            + "already be saved once in the AIRE window (Transom ribbon, or the standalone AIRE app) — there is "
+            + "no key argument and keys never pass through Claude.",
             Schema(
                 new JsonObject
                 {
@@ -782,6 +784,99 @@ internal static class ParityTools
                 "output_folder")));
 
         tools.Add(Tool(
+            "aire_video",
+            "AIRE Video: generate ONE image-to-video clip from a still render through Higgsfield "
+            + "(Kling, Veo, Sora, Seedance, Hailuo, Wan and Higgsfield's own DoP models). SPENDS REAL MONEY on "
+            + "the user's saved Higgsfield key pair — a 10-second Kling 2.1 Master clip costs about $2.80 and "
+            + "takes about 8 minutes; Kling 2.1 Pro is about $0.98 and about 2 minutes. Always tell the user the "
+            + "estimated_cost_usd before they wait, and prefer a cheaper model for the first test of a prompt. "
+            + "Pass estimate_only:true to get the exact price with NOTHING generated and nothing charged. "
+            + "Needs no Revit and no open AIRE window. Returns a job_id immediately — poll aire_job_status; do "
+            + "not assume completion. The clip is downloaded to <output_folder>\\<source-stem>_clip.mp4 (a second "
+            + "clip from the same render becomes _clip_2) with a CSV under logs\\; Higgsfield only keeps its own "
+            + "copy about a week, so the local file is the durable one. "
+            + "CAMERA MOVES COME FROM THE PROMPT on every model except the Higgsfield DoP family — Kling, Veo, "
+            + "Sora, Seedance, Hailuo and Wan all declare supports_motions:false and the named presets (360 Orbit, "
+            + "Arc Right, ...) are simply ignored there, so write the move into the prompt instead, e.g. \"slow, "
+            + "gentle rotation orbiting the building to the right, staying level horizontally\". Call "
+            + "aire_video_models first if unsure what a model accepts. The key pair must already be saved in the "
+            + "AIRE window's Video tab — there are no credential arguments.",
+            Schema(
+                new JsonObject
+                {
+                    ["source_image"] = Prop("string", "Full path of the still render to animate (.png/.jpg/.jpeg/.webp)."),
+                    ["output_folder"] = Prop("string", "Folder for the .mp4 and the logs\\ CSV (created if missing). "
+                        + "Defaults to the folder last used in the AIRE window's Video tab."),
+                    ["prompt"] = Prop("string", "What should move and how. On non-DoP models this is also the ONLY way to "
+                        + "direct the camera. Name the move, what moves naturally (people, foliage, water, clouds), and "
+                        + "what must not change (architecture, signage lettering, composition) — models rewrite text readily."),
+                    ["model"] = Prop("string", "Model path from aire_video_models, e.g. "
+                        + "\"/kling-video/v2.1/master/image-to-video\". Defaults to the last one used in the AIRE window, "
+                        + "else the catalog default. A model not enabled on the account fails the estimate with 404."),
+                    ["duration"] = Prop("string", "Clip length in seconds, as the model allows — Kling 5 or 10, Veo 4/6/8, "
+                        + "Sora 4/8/12, Seedance 2-12. Omit for the model default. Refused by name if the model has no "
+                        + "duration parameter."),
+                    ["resolution"] = Prop("string", "Only on models that declare it (Veo 720/1080, Seedance 480/720/1080, "
+                        + "Wan 480p/720p/1080p). Kling and DoP have none — omit."),
+                    ["aspect_ratio"] = Prop("string", "Only on models that declare it (Veo and Sora 16:9 or 9:16, Seedance "
+                        + "six ratios). Kling, DoP, Hailuo and Wan have NO aspect parameter, so the clip simply inherits "
+                        + "the source image's shape — a 2.5:1 render yields a 2.5:1 clip."),
+                    ["seed"] = Prop("integer", "Optional seed (1-1000000) for a repeatable result, on models that expose it."),
+                    ["motions"] = new JsonObject
+                    {
+                        ["type"] = "array",
+                        ["description"] = "Named camera presets, HIGGSFIELD DoP MODELS ONLY (max 2). Passing these to any "
+                            + "other model is refused rather than silently ignored, because the clip would still be billed. "
+                            + "Names come from aire_video_models.",
+                        ["items"] = new JsonObject
+                        {
+                            ["type"] = "object",
+                            ["properties"] = new JsonObject
+                            {
+                                ["name"] = Prop("string", "Preset name, e.g. \"Arc Right\", \"360 Orbit\", \"Crane Up\"."),
+                                ["id"] = Prop("string", "Preset UUID (alternative to name)."),
+                                ["strength"] = Prop("number", "0-1, default 0.6. Lower is gentler."),
+                            },
+                            ["additionalProperties"] = false,
+                        },
+                    },
+                    ["estimate_only"] = Prop("boolean", "True to price the request and stop. Nothing is generated and "
+                        + "nothing is charged. Use this before any expensive model."),
+                },
+                "source_image", "prompt")));
+
+        tools.Add(Tool(
+            "aire_video_models",
+            "The video models and camera presets THIS build can ask for, with each model's real parameter "
+            + "names, allowed values and ranges, and whether it accepts motion presets. Call it before aire_video "
+            + "rather than guessing durations or aspect support — a wrong parameter is either a 422 or, worse, a "
+            + "setting the vendor ignores on a clip you still pay for. Costs nothing and touches no network: the "
+            + "catalog is a snapshot of Higgsfield's OpenAPI spec embedded in the build (overridable at "
+            + "%AppData%\\Transom\\higgsfield-models.json), so a model listed here may still not be enabled on the "
+            + "user's account — the estimate call is what proves it. Motion presets are the live list cached by the "
+            + "AIRE window's Load Presets button and only apply to Higgsfield DoP models.",
+            Schema(
+                new JsonObject
+                {
+                    ["include_motions"] = Prop("boolean", "Include the cached motion-preset list (default true). "
+                        + "There are about 120, so pass false when you only need the models."),
+                })));
+
+        tools.Add(Tool(
+            "aire_log",
+            "Read an AIRE run's CSV log back as plain English: what ran, what it cost (estimated and billed), "
+            + "which rows failed, the failure KIND, and the same 'What to do' sentence the AIRE window shows. Use it "
+            + "to explain a finished or failed run without the user opening AIRE, and to recover the details of a run "
+            + "from an earlier session (jobs themselves are only kept in memory). Defaults to the log of the most "
+            + "recent job in this process.",
+            Schema(
+                new JsonObject
+                {
+                    ["log_file"] = Prop("string", "Full path of a log CSV under <output_folder>\\logs "
+                        + "(enhancement_log_*.csv or video_log_*.csv). Optional."),
+                })));
+
+        tools.Add(Tool(
             "aire_job_status",
             "Progress of an AIRE enhancement job started with aire_enhance: status "
             + "(queued/running/completed/failed), done/total counts, current file, per-image results, "
@@ -792,21 +887,32 @@ internal static class ParityTools
             + "stopped itself because the failure would repeat on every remaining image (unverified "
             + "organization, bad key, no credit, a request the model refuses) — when that is set, stop polling "
             + "and report that sentence plus not_attempted, not 'N images failed'. Poll this instead of "
-            + "waiting — a 4K image can take minutes.",
+            + "waiting — a 4K image can take minutes. "
+            + "ALSO polls video clips from aire_video; check the 'kind' field, which is \"enhance\" or \"video\". "
+            + "A video job reports Higgsfield's own states (uploading/queued/in_progress/downloading/completed, or "
+            + "failed/nsfw/canceled), elapsed_seconds and last_checked_seconds_ago so a long silent generation can "
+            + "be reported honestly, output_file once downloaded, and charged_cost_usd — which is 0 for failed, "
+            + "nsfw and queued-cancelled clips because Higgsfield does not bill those. Clips take minutes: poll "
+            + "every 30-60 seconds rather than tightly.",
             Schema(
                 new JsonObject
                 {
-                    ["job_id"] = Prop("string", "Job id from aire_enhance (optional; defaults to the most recent job)."),
+                    ["job_id"] = Prop("string", "Job id from aire_enhance or aire_video (optional; defaults to the "
+                        + "most recent job of either kind)."),
                 })));
 
         tools.Add(Tool(
             "aire_cancel_job",
-            "Cancel a running AIRE enhancement job. The image currently being generated may still "
-            + "complete and be billed; subsequent images are skipped. Poll aire_job_status to confirm.",
+            "Cancel a running AIRE job. For an enhancement batch the image currently being generated may "
+            + "still complete and be billed; subsequent images are skipped. For a VIDEO clip cancelling only "
+            + "refunds while the request is still queued — once Higgsfield reports in_progress the clip is charged "
+            + "no matter what, so AIRE keeps waiting and still downloads it rather than wasting the money; the "
+            + "reply's 'refundable' field says which happened. Poll aire_job_status to confirm.",
             Schema(
                 new JsonObject
                 {
-                    ["job_id"] = Prop("string", "Job id from aire_enhance (optional; defaults to the most recent job)."),
+                    ["job_id"] = Prop("string", "Job id from aire_enhance or aire_video (optional; defaults to the "
+                        + "most recent job of either kind)."),
                 })));
 
         // Tool() returns null for names on the Disabled list; JsonArray stores those as JSON

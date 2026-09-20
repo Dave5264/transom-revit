@@ -170,6 +170,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--from", dest="src", help="saved openapi.json instead of fetching")
     ap.add_argument("--out", default="higgsfield-models.json")
+    ap.add_argument("--force", action="store_true",
+                    help="write even when the new catalog drops models (see the shrink guard)")
     args = ap.parse_args()
     if args.src:
         with open(args.src, encoding="utf-8") as f:
@@ -178,11 +180,46 @@ def main():
         with urllib.request.urlopen(SPEC_URL, timeout=30) as r:
             spec = json.load(r)
     catalog = build(spec)
+
+    # SHRINK GUARD. The published spec is NOT a reliable inventory of what the platform will serve, and
+    # regenerating blindly is destructive.
+    #
+    # Measured on 2026-09-19: the spec had collapsed from the 21 image-to-video endpoints captured on
+    # 2026-09-05 to EIGHT paths in total, listing only Kling 2.5 Turbo and Hailuo 2.3 Standard. Yet a live
+    # estimate against the same account priced Higgsfield DoP Standard ($0.563) and Hailuo 2.3 Pro ($0.490)
+    # perfectly happily — neither of which appears in that spec any more. Meanwhile the marketing docs were
+    # advertising Kling 3.0, Seedance 2.x and Wan 3.0, none of which appear in it either.
+    #
+    # So a plain re-run that day would have deleted 18 working models from the dropdown, including the whole
+    # DoP family — the ONLY models that accept camera-motion presets. Availability is proven by the estimate
+    # call (404 = not on this account, 423 = blocked), never by this file. Treat a shrink as a spec problem
+    # until proven otherwise, and merge rather than replace.
+    try:
+        with open(args.out, encoding="utf-8") as f:
+            existing = json.load(f)
+    except (OSError, ValueError):
+        existing = None
+
+    if existing and not args.force:
+        old_paths = {m["path"] for m in existing.get("models", [])}
+        new_paths = {m["path"] for m in catalog["models"]}
+        dropped = sorted(old_paths - new_paths)
+        if dropped:
+            print(f"REFUSING to write {args.out}: the spec no longer lists {len(dropped)} model(s) that the "
+                  f"current catalog ships.", file=sys.stderr)
+            for p in dropped:
+                print(f"    - {p}", file=sys.stderr)
+            print("\nThe spec has dropped models that still work (verified 2026-09-19). Check each one with a "
+                  "real estimate call before removing it, or re-run with --force if you have done that.\n"
+                  f"Added by this run: {sorted(new_paths - old_paths) or 'none'}", file=sys.stderr)
+            return 1
+
     with open(args.out, "w", encoding="utf-8", newline="\n") as f:
         json.dump(catalog, f, indent=2)
         f.write("\n")
     print(f"{len(catalog['models'])} models -> {args.out}", file=sys.stderr)
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

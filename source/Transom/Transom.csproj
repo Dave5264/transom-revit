@@ -42,10 +42,15 @@
              Microsoft.CodeAnalysis OR Transom.Scripting type directly — reflection into ScriptHost only. -->
         <ProjectReference Include="..\Transom.Scripting\Transom.Scripting.csproj"/>
 
-        <!-- AIRE (engine + job runner + window). Extracted out of Transom so the SAME code can also run in
-             the standalone AIRE app with Revit closed; unlike Scripting/Office this is an ORDINARY reference
-             loaded into the default context — it has no conflicting dependency closure to isolate (BCL only),
-             and AireCommand/BridgeToolsAire use its types directly. -->
+        <!-- AIRE, in two halves. Core is the engine, job runner, settings, Higgsfield client and the aire_*
+             bridge surface (BCL only, no WPF — the MCP shim references THIS one to run AIRE headlessly);
+             Transom.Aire is the window. Both were extracted out of Transom so the SAME code can also run in
+             the standalone AIRE app with Revit closed. Unlike Scripting/Office these are ORDINARY references
+             loaded into the default context — no conflicting dependency closure to isolate — and
+             AireCommand/BridgeToolsAire use their types directly.
+             Core is named explicitly rather than leaned on transitively: BridgeToolsAire forwards straight to
+             AireBridge, so the dependency is real and should survive anyone reworking the window. -->
+        <ProjectReference Include="..\Transom.Aire.Core\Transom.Aire.Core.csproj"/>
         <ProjectReference Include="..\Transom.Aire\Transom.Aire.csproj"/>
 
         <!-- Development Dependencies -->
