@@ -1,0 +1,73 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <!-- AutoCAD 2027 (R26.0) runs on .NET 10. The bundle's PackageContents.xml pins SeriesMin/Max to R26.0. -->
+        <TargetFramework>net10.0-windows</TargetFramework>
+        <UseWindowsForms>true</UseWindowsForms>
+        <!-- AutoCAD's managed DLLs reference WPF's WindowsBase 10.0; without this the build binds the 4.0 facade. -->
+        <UseWPF>true</UseWPF>
+        <PlatformTarget>x64</PlatformTarget>
+        <Nullable>enable</Nullable>
+        <LangVersion>latest</LangVersion>
+        <AssemblyName>Transom.Acad</AssemblyName>
+        <RootNamespace>Transom.Acad</RootNamespace>
+        <!-- The staged autoloader bundle the installer harvests (see StageAcadBundle below). -->
+        <AcadBundleDir>$(MSBuildThisFileDirectory)bin\$(Configuration)\bundle\Transom.Acad.bundle\</AcadBundleDir>
+        <AcadScriptingOutDir>$(MSBuildThisFileDirectory)..\Transom.Acad.Scripting\bin\$(Configuration)\net10.0\</AcadScriptingOutDir>
+        <AcadShimExe>$(MSBuildThisFileDirectory)..\Transom.Acad.McpShim\bin\Release\net10.0\win-x64\publish\Transom.Acad.McpShim.exe</AcadShimExe>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <!-- Autodesk's reference package for AutoCAD 2027, compile-only: AutoCAD supplies these at run time,
+             and building needs no AutoCAD install (the same reason Transom uses Nice3point.Revit.Api). -->
+        <PackageReference Include="AutoCAD.NET" Version="26.0.0" ExcludeAssets="runtime"/>
+    </ItemGroup>
+
+    <ItemGroup>
+        <!-- Rename-aside copy for a RUNNING shim exe, shared with the Revit add-in's helper deploys. -->
+        <Compile Include="..\Transom\Core\DeployFile.cs" Link="Shared\DeployFile.cs"/>
+    </ItemGroup>
+
+    <ItemGroup>
+        <!-- Build-order only. Transom.Acad.dll must hold no Roslyn typerefs (IsolatedAssembly.cs); the satellite and
+             its Roslyn closure are staged beside it by StageAcadBundle. -->
+        <ProjectReference Include="..\Transom.Acad.Scripting\Transom.Acad.Scripting.csproj" ReferenceOutputAssembly="false"/>
+    </ItemGroup>
+
+    <!--
+        Stages bin\<Configuration>\bundle\Transom.Acad.bundle\ exactly as AutoCAD's autoloader and the installer want it:
+          PackageContents.xml           (from bundle\PackageContents.xml, $VERSION$ -> this build's Version)
+          Contents\Transom.Acad.dll, Transom.Acad.Scripting.dll + deps.json, Microsoft.CodeAnalysis*.dll,
+                  Transom.Acad.McpShim.exe (only once it has been published, see the warning)
+        The bundle is rebuilt from scratch every time so a file dropped from the payload can't linger.
+    -->
+    <Target Name="StageAcadBundle" AfterTargets="Build">
+        <ItemGroup>
+            <_AcadScriptingFiles Include="$(AcadScriptingOutDir)*.dll;$(AcadScriptingOutDir)Transom.Acad.Scripting.deps.json"/>
+            <_AcadShimFile Include="$(AcadShimExe)" Condition="Exists('$(AcadShimExe)')"/>
+        </ItemGroup>
+        <!-- Escape: the manifest says Platform="AutoCAD*", and an unescaped '*' in an item is a file glob. -->
+        <PropertyGroup>
+            <_AcadManifest>$([MSBuild]::Escape($([System.IO.File]::ReadAllText('$(MSBuildThisFileDirectory)bundle\PackageContents.xml').Replace('$VERSION$', '$(Version)'))))</_AcadManifest>
+        </PropertyGroup>
+        <RemoveDir Directories="$(AcadBundleDir)"/>
+        <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(AcadBundleDir)Contents"/>
+        <Copy SourceFiles="@(_AcadScriptingFiles)" DestinationFolder="$(AcadBundleDir)Contents"/>
+        <Copy SourceFiles="@(_AcadShimFile)" DestinationFolder="$(AcadBundleDir)Contents"/>
+        <WriteLinesToFile File="$(AcadBundleDir)PackageContents.xml" Lines="$(_AcadManifest)" Overwrite="true" WriteOnlyWhenDifferent="false"/>
+        <Warning Condition="'@(_AcadShimFile)' == ''"
+                 Text="Transom.Acad.McpShim.exe is not published yet, so the staged AutoCAD bundle has no MCP shim. Publish it, then rebuild: dotnet publish source/Transom.Acad.McpShim/Transom.Acad.McpShim.csproj -c Release -r win-x64 -p:Version=$(Version)"/>
+    </Target>
+
+    <!-- Dev loop only (opt in with -p:DeployAcad=true): copy the staged bundle into this user's autoload folder.
+         AutoCAD locks the DLL it loaded, so close AutoCAD first; each new build re-triggers its unsigned-DLL prompt. -->
+    <Target Name="DeployAcadBundle" AfterTargets="StageAcadBundle" Condition="'$(DeployAcad)' == 'true'">
+        <ItemGroup>
+            <_AcadBundleFiles Include="$(AcadBundleDir)**\*"/>
+        </ItemGroup>
+        <Copy SourceFiles="@(_AcadBundleFiles)"
+              DestinationFiles="@(_AcadBundleFiles->'$(APPDATA)\Autodesk\ApplicationPlugins\Transom.Acad.bundle\%(RecursiveDir)%(Filename)%(Extension)')"/>
+        <Message Importance="high" Text="Deployed the AutoCAD bundle to $(APPDATA)\Autodesk\ApplicationPlugins\Transom.Acad.bundle"/>
+    </Target>
+
+</Project>

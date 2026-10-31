@@ -21,6 +21,11 @@ namespace Installer;
 ///     best-effort: a locked/missing file is skipped (never fails the install) and the add-in's first-launch copy
 ///     (<c>EnsureBundledShimAndAutoRegister</c>) remains as the self-heal fallback for the exe-locked case.
 ///     </para>
+///     <para>
+///     The same action refreshes the AutoCAD plug-in's shim (<c>Transom.Acad.McpShim.exe</c>) from the bundle's
+///     <c>Contents</c> folder, passed in as ACADDIR. The two halves are independent: either feature may be installed
+///     without the other, and the AutoCAD plug-in's own startup copy (Transom.Acad's McpSetup) is its fallback.
+///     </para>
 /// </summary>
 public static class ShimRefresh
 {
@@ -32,67 +37,43 @@ public static class ShimRefresh
         "Transom.ClickHelper.Mcp.exe",
     };
 
+    private static readonly string[] AcadShimFiles = { "Transom.Acad.McpShim.exe" };
+
     [CustomAction]
     public static ActionResult RefreshLocalAppDataShim(Session session)
     {
         try
         {
-            // DEFERRED custom actions can't read installer properties directly — the install dir is passed in via
-            // CustomActionData (UsesProperties = "INSTALLDIR=[INSTALLDIR]"). The add-in payload nests under a
-            // "Transom" subfolder of the versioned install dir (the .addin manifest points at "Transom\Transom.dll"),
-            // so the shim source is <INSTALLDIR>\Transom.
-            var installDir = session.CustomActionData["INSTALLDIR"];
-            if (string.IsNullOrEmpty(installDir))
-            {
-                session.Log("Transom #105: INSTALLDIR not provided to the shim-refresh action; skipping.");
-                return ActionResult.Success; // never fail the install over this
-            }
-
-            var sourceDir = Path.Combine(installDir, "Transom");
-            if (!Directory.Exists(sourceDir))
-            {
-                // Fallback: some layouts may place the payload directly in the install dir.
-                if (ShimPresentIn(installDir)) sourceDir = installDir;
-                else
-                {
-                    session.Log($"Transom #105: shim source not found under '{sourceDir}' or '{installDir}'; skipping (Revit first-launch will self-heal).");
-                    return ActionResult.Success;
-                }
-            }
-
             var destDir = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                 "Transom", "mcp");
-            Directory.CreateDirectory(destDir);
 
-            int copied = 0;
-            foreach (var name in ShimFiles)
+            // DEFERRED custom actions can't read installer properties directly — the install dirs are passed in via
+            // CustomActionData (UsesProperties = "INSTALLDIR=[INSTALLDIR],ACADDIR=[ACADDIR]"). The add-in payload
+            // nests under a "Transom" subfolder of the versioned install dir (the .addin manifest points at
+            // "Transom\Transom.dll"), so the Revit shim source is <INSTALLDIR>\Transom.
+            var installDir = Data(session, "INSTALLDIR");
+            if (string.IsNullOrEmpty(installDir))
+                session.Log("Transom #105: INSTALLDIR not provided to the shim-refresh action; skipping the Revit shims.");
+            else
             {
-                var src = Path.Combine(sourceDir, name);
-                var dst = Path.Combine(destDir, name);
-                try
-                {
-                    if (!File.Exists(src))
-                    {
-                        session.Log($"Transom #105: bundled shim '{name}' not found at '{src}'; skipping it.");
-                        continue;
-                    }
-                    File.Copy(src, dst, overwrite: true); // refresh on install/upgrade/repair — overwrite a stale shim
-                    copied++;
-                }
-                catch (IOException ex)
-                {
-                    // A running Claude client can hold the exe locked — best-effort: leave it, the add-in's
-                    // first-launch copy is the self-heal fallback for this case.
-                    session.Log($"Transom #105: couldn't copy '{name}' (likely in use): {ex.Message}. First-launch copy will self-heal.");
-                }
-                catch (UnauthorizedAccessException ex)
-                {
-                    session.Log($"Transom #105: access denied copying '{name}': {ex.Message}. First-launch copy will self-heal.");
-                }
+                var sourceDir = Path.Combine(installDir, "Transom");
+                if (!Directory.Exists(sourceDir) && ShimPresentIn(installDir)) sourceDir = installDir; // flat layout fallback
+                if (Directory.Exists(sourceDir))
+                    CopyAll(session, sourceDir, ShimFiles, destDir, "Revit first-launch");
+                else
+                    session.Log($"Transom #105: shim source not found under '{sourceDir}' or '{installDir}'; skipping (Revit first-launch will self-heal).");
             }
 
-            session.Log($"Transom #105: refreshed {copied}/{ShimFiles.Length} shim file(s) into '{destDir}'.");
+            // The AutoCAD bundle: ACADDIR is <...>\ApplicationPlugins\Transom.Acad.bundle. It resolves even when the
+            // AutoCAD feature is deselected; then nothing is on disk there and this half simply logs and skips.
+            var acadDir = Data(session, "ACADDIR");
+            var acadContents = string.IsNullOrEmpty(acadDir) ? null : Path.Combine(acadDir, "Contents");
+            if (acadContents != null && File.Exists(Path.Combine(acadContents, AcadShimFiles[0])))
+                CopyAll(session, acadContents, AcadShimFiles, destDir, "AutoCAD plug-in startup");
+            else
+                session.Log("Transom #105: AutoCAD plug-in shim not installed; skipping it.");
+
             return ActionResult.Success;
         }
         catch (Exception ex)
@@ -101,6 +82,47 @@ public static class ShimRefresh
             try { session.Log($"Transom #105: shim refresh failed (non-fatal): {ex.Message}"); } catch { /* ignore */ }
             return ActionResult.Success;
         }
+    }
+
+    /// <summary>A missing CustomActionData key must not throw: an MSI built before ACADDIR existed never sends it.</summary>
+    private static string? Data(Session session, string key)
+    {
+        try { return session.CustomActionData.ContainsKey(key) ? session.CustomActionData[key] : null; }
+        catch { return null; }
+    }
+
+    /// <summary>Best-effort copy of <paramref name="names"/> from <paramref name="sourceDir"/> into
+    /// <paramref name="destDir"/>. Never throws; a locked or missing file is logged and skipped.</summary>
+    private static void CopyAll(Session session, string sourceDir, string[] names, string destDir, string fallback)
+    {
+        Directory.CreateDirectory(destDir);
+        int copied = 0;
+        foreach (var name in names)
+        {
+            var src = Path.Combine(sourceDir, name);
+            var dst = Path.Combine(destDir, name);
+            try
+            {
+                if (!File.Exists(src))
+                {
+                    session.Log($"Transom #105: bundled shim '{name}' not found at '{src}'; skipping it.");
+                    continue;
+                }
+                File.Copy(src, dst, overwrite: true); // refresh on install/upgrade/repair — overwrite a stale shim
+                copied++;
+            }
+            catch (IOException ex)
+            {
+                // A running Claude client can hold the exe locked — best-effort: leave it, the host application's
+                // own copy on its next launch is the self-heal fallback for this case.
+                session.Log($"Transom #105: couldn't copy '{name}' (likely in use): {ex.Message}. {fallback} copy will self-heal.");
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                session.Log($"Transom #105: access denied copying '{name}': {ex.Message}. {fallback} copy will self-heal.");
+            }
+        }
+        session.Log($"Transom #105: refreshed {copied}/{names.Length} shim file(s) from '{sourceDir}' into '{destDir}'.");
     }
 
     private static bool ShimPresentIn(string dir)

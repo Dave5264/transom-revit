@@ -149,6 +149,102 @@ void AssertAireAppPublished(System.Version expected)
     static System.Version Trim(System.Version v) => new(v.Major, v.Minor, Math.Max(v.Build, 0));
 }
 
+// AUTOCAD 2027 PLUG-IN — Transom for AutoCAD: an autoloader bundle that starts a loopback MCP bridge inside AutoCAD
+// 2027 and its verticals (AutoCAD Architecture 2027 and the rest of the R26.0 family), so Claude can work in drawings
+// through the AutoCAD .NET API the way the Revit add-in's bridge works in models. The bundle is staged, complete and
+// versioned, by Transom.Acad.csproj's StageAcadBundle target; the installer only harvests it.
+//
+// Off by default, and ticked automatically when AutoCAD 2027 is on the machine: the RegValueProperty below reads the
+// install path every R26.0 product writes to HKLM\...\R26.0\InstalledProducts (its default value), and the feature's
+// condition raises it to the default install level when that search found something. WixSharp defaults Win64 to
+// FALSE for registry searches regardless of platform; AutoCAD writes the 64-bit hive, so it must be set.
+//
+// No ConfigurableDir: AutoCAD's autoloader only scans fixed ApplicationPlugins folders, so the location is not the
+// user's to choose. Per-user MSI → %AppData%\Autodesk\ApplicationPlugins (this user's AutoCAD only). Per-machine MSI →
+// %ProgramFiles%\Autodesk\ApplicationPlugins (every user). AutoCAD asks before loading an unsigned DLL from the
+// per-user folder; Program Files is believed to be implicitly trusted, which would skip that prompt (unverified).
+const string acadBundle = @"source\Transom.Acad\bin\Release\bundle\Transom.Acad.bundle";
+AssertAcadPublished(versioning.VersionPrefix);
+
+project.Properties =
+[
+    new RegValueProperty
+    {
+        Name = "ACAD2027_DIR",
+        Root = RegistryHive.LocalMachine,
+        Key = @"SOFTWARE\Autodesk\AutoCAD\R26.0\InstalledProducts",
+        EntryName = "",
+        Win64 = true,
+    }
+];
+
+var acadFeature = new Feature
+{
+    Name = "AutoCAD 2027 plug-in",
+    Description =
+        "Lets Claude work in AutoCAD drawings through the AutoCAD API. It can read layers and objects, run "
+        + "commands, capture the view, and run C# against the open drawing. Needs AutoCAD 2027 or an AutoCAD 2027 "
+        + "vertical such as AutoCAD Architecture 2027. It is ticked for you when AutoCAD 2027 is installed. "
+        + "The plug-in loads when AutoCAD starts and only listens on this computer. AutoCAD may ask once whether "
+        + "to load it. About 47 MB.",
+    Display = FeatureDisplay.expand,
+    IsEnabled = false,
+    Condition = new FeatureCondition("ACAD2027_DIR", 1),
+};
+
+// Explicit ids on every level, for the reason AireDirs gives (WIX0091 across the two BuildMsi calls). The bundle's
+// Contents folder is its own Dir rather than a recursive Files harvest, which would auto-name it.
+Dir[] AcadDirs(string payloadRoot) =>
+[
+    new Dir(new Id("TRANSOM_ACAD_ADSK"), $@"{payloadRoot}\Autodesk",
+        new Dir(new Id("TRANSOM_ACAD_PLUGINS"), "ApplicationPlugins",
+            new Dir(new Id("ACADDIR"), "Transom.Acad.bundle",
+                new WixSharp.File(acadFeature, $@"{acadBundle}\PackageContents.xml"),
+                new Dir(new Id("ACADCONTENTSDIR"), "Contents",
+                    new Files(acadFeature, $@"{acadBundle}\Contents\*.*", f => !f.EndsWith(".pdb"))))))
+];
+
+// Same spirit as AssertAireAppPublished. The bundle folder is only refreshed by building Transom.Acad.csproj, and its
+// shim only by publishing Transom.Acad.McpShim (a step 3 Revit build touches neither), so a stale or half-staged
+// bundle would otherwise ship silently: last release's plug-in, or a plug-in whose MCP shim is missing.
+void AssertAcadPublished(System.Version expected)
+{
+    var want = Trim(expected);
+    var commands =
+        $"  dotnet publish source/Transom.Acad.McpShim/Transom.Acad.McpShim.csproj -c Release -r win-x64 -p:Version={want}\n" +
+        $"  dotnet build source/Transom.Acad/Transom.Acad.csproj -c Release -p:Version={want}\n" +
+        "(in that order: the build stages the published shim into the bundle).";
+
+    string[] required =
+    [
+        "PackageContents.xml",
+        @"Contents\Transom.Acad.dll",
+        @"Contents\Transom.Acad.Scripting.dll",
+        @"Contents\Transom.Acad.Scripting.deps.json",
+        @"Contents\Microsoft.CodeAnalysis.CSharp.Scripting.dll",
+        @"Contents\Transom.Acad.McpShim.exe",
+    ];
+    var missing = required.Where(f => !System.IO.File.Exists(System.IO.Path.Combine(acadBundle, f))).ToArray();
+    if (missing.Length > 0)
+        throw new Exception(
+            $"AutoCAD plug-in bundle INCOMPLETE under '{acadBundle}': missing '{string.Join("', '", missing)}'. Stage it —\n" +
+            commands + "\nRefusing to ship an AutoCAD feature that installs a broken bundle.");
+
+    foreach (var f in new[] { @"Contents\Transom.Acad.dll", @"Contents\Transom.Acad.McpShim.exe" })
+    {
+        var path = System.IO.Path.Combine(acadBundle, f);
+        var found = System.Diagnostics.FileVersionInfo.GetVersionInfo(path).FileVersion;
+        if (!System.Version.TryParse(found, out var actual) || Trim(actual) != want)
+            throw new Exception(
+                $"AutoCAD plug-in is STALE: '{path}' is file version {found ?? "(none)"} but this pack is {want}. Rebuild it —\n" +
+                commands + "\nRefusing to ship last release's AutoCAD plug-in under this release's installer.");
+    }
+
+    Console.WriteLine($"OK: AutoCAD plug-in bundle matches pack version {want}");
+
+    static System.Version Trim(System.Version v) => new(v.Major, v.Minor, Math.Max(v.Build, 0));
+}
+
 // #105 (seamless MCP, MUST-FIX): a DEFERRED, IMPERSONATED managed custom action that copies the shim trio from the
 // install dir into %LocalAppData%\Transom\mcp\ at install time (see ShimRefresh) — so the Claude client launches the
 // CURRENT shim WITHOUT needing Revit opened first (protocol-skew hazard otherwise). SingleUser (per-user) ONLY: that
@@ -157,7 +253,9 @@ void AssertAireAppPublished(System.Version expected)
 // Revit-first-launch copy (EnsureBundledShimAndAutoRegister), which also stays as the self-heal fallback everywhere.
 //   • After InstallFiles (the trio is on disk to copy from); NOT_BeingRemoved so it fires on fresh install AND
 //     upgrade/repair (refresh a stale shim) but not uninstall. Return.ignore + best-effort copy → never fails install.
-//   • Deferred CAs can't read INSTALLDIR directly → it's passed via CustomActionData (UsesProperties).
+//   • Deferred CAs can't read INSTALLDIR directly → it's passed via CustomActionData (UsesProperties). ACADDIR rides
+//     along so the same action also refreshes the AutoCAD plug-in's shim (Transom.Acad.McpShim.exe); ACADDIR resolves
+//     whether or not that feature is selected, and the action skips it when the bundle's copy isn't on disk.
 var refreshShim = new ManagedAction(
     ShimRefresh.RefreshLocalAppDataShim,
     Return.ignore,
@@ -167,7 +265,7 @@ var refreshShim = new ManagedAction(
 {
     Execute = Execute.deferred,
     Impersonate = true,
-    UsesProperties = "INSTALLDIR=[INSTALLDIR]",
+    UsesProperties = "INSTALLDIR=[INSTALLDIR],ACADDIR=[ACADDIR]",
 };
 
 BuildSingleUserMsi();
@@ -222,7 +320,8 @@ void BuildSingleUserMsi()
     project.Dirs =
     [
         new InstallDir(@"%AppDataFolder%\Autodesk\Revit\Addins\", wixEntities),
-        ..AireDirs(@"%LocalAppDataFolder%") // optional AIRE standalone app, in the installing user's profile
+        ..AireDirs(@"%LocalAppDataFolder%"), // optional AIRE standalone app, in the installing user's profile
+        ..AcadDirs(@"%AppDataFolder%")       // optional AutoCAD plug-in, this user's AutoCAD autoload folder
     ];
     project.Actions = [refreshShim]; // #105: install-time %LocalAppData% shim refresh — per-user MSI only
     project.BuildMsi();
@@ -244,7 +343,8 @@ void BuildMultiUserUserMsi()
     project.Dirs =
     [
         new InstallDir(@"%CommonAppDataFolder%\Autodesk\Revit\Addins", wixEntities),
-        ..AireDirs(@"%ProgramFiles%") // optional AIRE standalone app, machine-wide, with an all-users Start Menu shortcut
+        ..AireDirs(@"%ProgramFiles%"), // optional AIRE standalone app, machine-wide, with an all-users Start Menu shortcut
+        ..AcadDirs(@"%ProgramFiles%")  // optional AutoCAD plug-in, the all-users AutoCAD autoload folder
     ];
     project.Actions = []; // #105: NOT on the per-machine MSI (runs as SYSTEM — can't write each user's %LocalAppData%)
     project.BuildMsi();

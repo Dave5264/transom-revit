@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <!-- The ONLY AutoCAD-side project allowed to reference Roslyn (the AutoCAD counterpart of Transom.Scripting).
+             Transom.Acad.dll loads this assembly into a dedicated AssemblyLoadContext (IsolatedAssembly.cs) and calls
+             ScriptHost via reflection, so no Microsoft.CodeAnalysis* bind ever happens in AutoCAD's default context:
+             AutoCAD 2027 ships its own Microsoft.CodeAnalysis 4.10 next to acad.exe, the same version that clashed
+             with Transom inside Revit (via pyRevit). Keep this project free of AutoCAD / Transom.Acad references. -->
+        <TargetFramework>net10.0</TargetFramework>
+        <Nullable>enable</Nullable>
+        <LangVersion>latest</LangVersion>
+        <!-- Emits deps.json for the isolated context's AssemblyDependencyResolver and copies Roslyn to bin. -->
+        <EnableDynamicLoading>true</EnableDynamicLoading>
+        <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <!-- Same version as Transom.Scripting (the Revit side). -->
+        <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Scripting" Version="4.12.0"/>
+    </ItemGroup>
+
+</Project>

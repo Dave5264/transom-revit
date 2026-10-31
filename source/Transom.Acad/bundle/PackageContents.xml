@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Template: Transom.Acad.csproj's StageAcadBundle target fills AppVersion with the build's Version. -->
+<ApplicationPackage
+    SchemaVersion="1.0"
+    AutodeskProduct="AutoCAD"
+    ProductType="Application"
+    Name="Transom for AutoCAD"
+    Description="Lets Claude drive AutoCAD through the .NET API over a local, token-protected MCP bridge"
+    AppVersion="$VERSION$"
+    Author="Transom"
+    ProductCode="{6333D313-9A36-4EEA-A349-053493E7374C}">
+  <CompanyDetails Name="Transom" />
+  <Components Description="AutoCAD 2027 and AutoCAD-based verticals">
+    <RuntimeRequirements OS="Win64" Platform="AutoCAD*" SeriesMin="R26.0" SeriesMax="R26.0" />
+    <ComponentEntry
+        AppName="Transom.Acad"
+        ModuleName="./Contents/Transom.Acad.dll"
+        AppDescription="Starts the Transom for AutoCAD bridge on 127.0.0.1:48830"
+        LoadOnAutoCADStartup="True" />
+  </Components>
+</ApplicationPackage>

@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>Transom.Acad.McpShim</AssemblyName>
+    <RootNamespace>Transom.Acad.McpShim</RootNamespace>
+
+    <!-- Same packaging as Transom.McpShim: self-contained single file, so it runs with no admin rights and no
+         separately installed .NET runtime. Publish with -p:Version=<v>: the installer's AssertAcadPublished
+         refuses a shim whose file version differs from the pack version. -->
+    <PublishSingleFile>true</PublishSingleFile>
+    <SelfContained>true</SelfContained>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+  </PropertyGroup>
+
+  <!-- No NuGet packages: System.Text.Json + System.Net.Http come with the framework. Deliberately NOT a reference to
+       Transom.McpShim: the AutoCAD tools are a separate MCP server (transom-acad) on a separate bridge port. -->
+
+</Project>
