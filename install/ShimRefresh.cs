@@ -1,5 +1,8 @@
 using System;
 using System.IO;
+using System.Linq;
+using System.Security.Cryptography;
+using Transom.Core;
 using WixToolset.Dtf.WindowsInstaller;
 
 namespace Installer;
@@ -17,9 +20,10 @@ namespace Installer;
 ///     <para>
 ///     This action COPIES the trio from the install dir into <c>%LocalAppData%\Transom\mcp\</c> at install time, so the
 ///     shim is current the moment install finishes — no Revit needed. It is scheduled DEFERRED + IMPERSONATED, so it
-///     runs as the installing USER and <c>%LocalAppData%</c> resolves to THAT user's profile (admin-free). The copy is
-///     best-effort: a locked/missing file is skipped (never fails the install) and the add-in's first-launch copy
-///     (<c>EnsureBundledShimAndAutoRegister</c>) remains as the self-heal fallback for the exe-locked case.
+///     runs as the installing USER and <c>%LocalAppData%</c> resolves to THAT user's profile (admin-free). A shim that is
+///     running (Claude Code open) is renamed aside and replaced, as the add-in does. The copy is best-effort: a file
+///     that can't be replaced is skipped (never fails the install) and the add-in's first-launch copy
+///     (<c>EnsureBundledShimAndAutoRegister</c>) remains as the self-heal fallback.
 ///     </para>
 ///     <para>
 ///     The same action refreshes the AutoCAD plug-in's shim (<c>Transom.Acad.McpShim.exe</c>) from the bundle's
@@ -49,20 +53,21 @@ public static class ShimRefresh
                 "Transom", "mcp");
 
             // DEFERRED custom actions can't read installer properties directly — the install dirs are passed in via
-            // CustomActionData (UsesProperties = "INSTALLDIR=[INSTALLDIR],ACADDIR=[ACADDIR]"). The add-in payload
-            // nests under a "Transom" subfolder of the versioned install dir (the .addin manifest points at
-            // "Transom\Transom.dll"), so the Revit shim source is <INSTALLDIR>\Transom.
+            // CustomActionData (UsesProperties = "INSTALLDIR=[INSTALLDIR],ACADDIR=[ACADDIR]"). INSTALLDIR is the Revit
+            // Addins ROOT, not a versioned dir: the payload sits one Revit-year folder below it, nested under "Transom"
+            // (the .addin manifest points at "Transom\Transom.dll"), so the Revit shim source is
+            // <INSTALLDIR>\<year>\Transom (Directory table: INSTALL2025 = INSTALLDIR\2025, Transom under that). This
+            // used to look in <INSTALLDIR>\Transom, which never exists, so only Revit's first launch ever copied.
             var installDir = Data(session, "INSTALLDIR");
             if (string.IsNullOrEmpty(installDir))
                 session.Log("Transom #105: INSTALLDIR not provided to the shim-refresh action; skipping the Revit shims.");
             else
             {
-                var sourceDir = Path.Combine(installDir, "Transom");
-                if (!Directory.Exists(sourceDir) && ShimPresentIn(installDir)) sourceDir = installDir; // flat layout fallback
-                if (Directory.Exists(sourceDir))
+                var sourceDir = FindRevitShimDir(installDir);
+                if (sourceDir != null)
                     CopyAll(session, sourceDir, ShimFiles, destDir, "Revit first-launch");
                 else
-                    session.Log($"Transom #105: shim source not found under '{sourceDir}' or '{installDir}'; skipping (Revit first-launch will self-heal).");
+                    session.Log($"Transom #105: no '{ShimFiles[0]}' under '{Path.Combine(installDir, "<year>", "Transom")}' for any Revit year; skipping the Revit shims (Revit first-launch will self-heal).");
             }
 
             // The AutoCAD bundle: ACADDIR is <...>\ApplicationPlugins\Transom.Acad.bundle. It resolves even when the
@@ -92,7 +97,8 @@ public static class ShimRefresh
     }
 
     /// <summary>Best-effort copy of <paramref name="names"/> from <paramref name="sourceDir"/> into
-    /// <paramref name="destDir"/>. Never throws; a locked or missing file is logged and skipped.</summary>
+    /// <paramref name="destDir"/>. Never throws; a missing file, or one that couldn't be replaced, is logged and
+    /// skipped.</summary>
     private static void CopyAll(Session session, string sourceDir, string[] names, string destDir, string fallback)
     {
         Directory.CreateDirectory(destDir);
@@ -101,28 +107,61 @@ public static class ShimRefresh
         {
             var src = Path.Combine(sourceDir, name);
             var dst = Path.Combine(destDir, name);
-            try
+            if (!File.Exists(src))
             {
-                if (!File.Exists(src))
-                {
-                    session.Log($"Transom #105: bundled shim '{name}' not found at '{src}'; skipping it.");
-                    continue;
-                }
-                File.Copy(src, dst, overwrite: true); // refresh on install/upgrade/repair — overwrite a stale shim
+                session.Log($"Transom #105: bundled shim '{name}' not found at '{src}'; skipping it.");
+                continue;
+            }
+
+            // The MCP servers in this trio are RUNNING whenever Claude Code is open, and Windows won't overwrite a
+            // running exe — a plain File.Copy left them stale through every install. DeployFile (the add-in's own
+            // helper) renames the running exe aside and copies into the freed path; the running server keeps its
+            // old image until it exits, and the client's next launch gets the new one.
+            if (!DeployFile.CopyIfNewer(src, dst))
+                session.Log($"Transom #105: couldn't replace '{dst}' (locked and couldn't be renamed aside). {fallback} copy will self-heal.");
+            // Count only what is verifiably on disk: a copy once reported success here while the file stayed stale.
+            else if (!SameContent(src, dst))
+                session.Log($"Transom #105: '{dst}' doesn't verifiably match '{src}' after the refresh. {fallback} copy will self-heal.");
+            else
                 copied++;
-            }
-            catch (IOException ex)
-            {
-                // A running Claude client can hold the exe locked — best-effort: leave it, the host application's
-                // own copy on its next launch is the self-heal fallback for this case.
-                session.Log($"Transom #105: couldn't copy '{name}' (likely in use): {ex.Message}. {fallback} copy will self-heal.");
-            }
-            catch (UnauthorizedAccessException ex)
-            {
-                session.Log($"Transom #105: access denied copying '{name}': {ex.Message}. {fallback} copy will self-heal.");
-            }
         }
         session.Log($"Transom #105: refreshed {copied}/{names.Length} shim file(s) from '{sourceDir}' into '{destDir}'.");
+    }
+
+    /// <summary>True when both files hold the same bytes. Reads with full sharing, so a running exe can be read.</summary>
+    private static bool SameContent(string a, string b)
+    {
+        try
+        {
+            if (new FileInfo(a).Length != new FileInfo(b).Length) return false;
+            return Hash(a).AsSpan().SequenceEqual(Hash(b));
+        }
+        catch { return false; }
+
+        static byte[] Hash(string path)
+        {
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            return SHA256.HashData(stream);
+        }
+    }
+
+    /// <summary>
+    ///     The <c>&lt;year&gt;\Transom</c> folder under <paramref name="installDir"/> that holds the shim, newest Revit
+    ///     year first, or null. Only the years the user ticked have files on disk, and each year carries the same
+    ///     trio, so the first match is as good as any. Never throws.
+    /// </summary>
+    private static string? FindRevitShimDir(string installDir)
+    {
+        try
+        {
+            return Directory.GetDirectories(installDir)
+                .Select(dir => (dir, name: Path.GetFileName(dir)))
+                .Where(d => d.name.Length == 4 && int.TryParse(d.name, out _))
+                .OrderByDescending(d => int.Parse(d.name))
+                .Select(d => Path.Combine(d.dir, "Transom"))
+                .FirstOrDefault(ShimPresentIn);
+        }
+        catch { return null; }
     }
 
     private static bool ShimPresentIn(string dir)
