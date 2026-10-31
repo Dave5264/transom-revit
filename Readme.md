@@ -15,7 +15,7 @@ enhance your renders with AI.**
 
 [![Latest release](https://img.shields.io/github/v/release/Dave5264/transom-revit?label=latest%20release&color=2ea44f&logo=github)](https://github.com/Dave5264/transom-revit/releases/latest)
 
-### ⬇ [Download the installer](https://github.com/Dave5264/transom-revit/releases/download/v1.9.18/Transom-1.9.18-SingleUser.msi)
+### ⬇ [Download the installer](https://github.com/Dave5264/transom-revit/releases/download/v1.9.19/Transom-1.9.19-SingleUser.msi)
 
 **One click, no admin rights.** Installs into your per-user Revit add-ins folder.
 Double-click the `.msi`, then start Revit. Supports **Revit 2025, 2026 & 2027**. Free.
@@ -27,7 +27,7 @@ edits back safely. It connects the live model to **Claude Code**. And it enhance
 
 Each part works on its own. The schedule editor doesn't need Claude. The Claude layer works anywhere in the model,
 schedules or not. The render enhancer only reads image files, so nothing has to be open. None of it needs
-administrator rights.
+administrator rights. There's also an optional plug-in that connects **AutoCAD 2027** to Claude Code.
 
 ### Schedules — export, edit anywhere, import back
 
@@ -173,13 +173,12 @@ and `aire_log`.
 *AIRE is much newer than the schedule editor and has had a lot less mileage. Treat your early batches and
 clips as a trial, and check the first costs against your real OpenAI and Higgsfield usage.*
 
-> **Status:** v1.9.18 (Revit 2025/2026/2027) fixes AIRE's shipped default and teaches it to explain itself
-> when a batch goes wrong. The **Input fidelity** setting is no longer sent to models that refuse it — which
-> was making every render fail on a fresh install — and the checkbox now greys out and says why. A refusal
-> that would repeat on every image, such as an unverified OpenAI account, **stops the batch after the first
-> one** instead of grinding through twenty identical failures, and a one-time prompt explains organization
-> verification before your first spend. **View Log** reads any batch log back in plain English, with what to
-> do about each failure. Before it, v1.9.17 moved AIRE to OpenAI's **GPT Image 2.5** models and made its
+> **Status:** v1.9.19 (Revit 2025/2026/2027) adds an optional **AutoCAD 2027 plug-in**, so Claude can work
+> in your drawings as well as your models. Claude can also now run **AIRE with nothing open**. It can price,
+> start and watch renders and Higgsfield clips with Revit and the AIRE window both closed, and read a run's
+> log back in plain English. The installer also sets up Claude's Revit connection at install time as it was
+> meant to, instead of leaving that to Revit's first launch. Before it, v1.9.18 fixed AIRE's shipped default
+> and taught it to explain a failed batch, v1.9.17 moved AIRE to OpenAI's **GPT Image 2.5** models and made its
 > price honest, v1.9.16 put the standalone AIRE app in the firm-wide installer, v1.9.15 gave AIRE the
 > **Video tab** described above, and earlier releases brought a **prompt library, saved API keys and a
 > pop-out editor** (v1.9.14), **AIRE as a standalone app** that runs without Revit (v1.9.12), a **Cancel
@@ -214,12 +213,34 @@ Editing inside a group changes the group itself, so every copy of that group get
 need them to differ, put the edit on a new per-element parameter instead. Claude is driving the real
 interface here, so try it on a throwaway model first, and never Synchronize with Central part way through.
 
+### Claude in AutoCAD
+
+The installer can also add an **AutoCAD 2027 plug-in**. It works in AutoCAD and in verticals like AutoCAD
+Architecture 2027, and it gives Claude Code the same kind of connection into your drawings that Transom gives
+it into Revit. It's ticked for you when AutoCAD 2027 is installed and left off when it isn't.
+
+- **Claude can read the drawing.** Layers, objects and their geometry, text, blocks with their attributes, and
+  a picture of the current view.
+- **It can draw and edit.** It runs AutoCAD commands the way you'd type them. For anything else it can run C#
+  against the AutoCAD API, inside a transaction that rolls back if anything fails.
+- **One undo per change.** Each change Claude makes is a single step you can take back with U. Reading the
+  drawing never adds to the undo list.
+- **It waits for you.** If you're partway through a command or a dialog, Claude is told AutoCAD is busy and
+  doesn't jump in.
+- **It connects itself.** The first time AutoCAD starts with the plug-in, it sets up the Claude connection.
+
+*The plug-in isn't signed yet, so AutoCAD asks before loading it. Choose **Load Once** or **Always Load**. It
+asks again after each Transom update.*
+
 ## Install
 
 1. Download **`Transom-…-SingleUser.msi`** from the [latest release](https://github.com/Dave5264/transom-revit/releases/latest).
 2. Double-click it. It installs into `%AppData%\Autodesk\Revit\Addins\` for the current user only, with no
    administrator rights.
 3. Launch Revit and Transom is on the ribbon. To remove it later: *Apps & features → Transom*.
+
+If AutoCAD 2027 is on the machine, the feature screen also has the AutoCAD plug-in ticked. Untick it there if
+you don't want it.
 
 **Always use the SingleUser installer.** Claude-Assist's install-time setup only runs there. There's a
 machine-wide **MultiUser** MSI built from this codebase for IT and firm-wide deployment, but it isn't linked
