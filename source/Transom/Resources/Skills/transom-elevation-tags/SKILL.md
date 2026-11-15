@@ -1,7 +1,32 @@
 ---
-name: elevation-door-window-tags
+name: transom-elevation-tags
 description: Tags the doors and windows on exterior building elevations, using a colour-coded image pass to recognise only the openings actually visible in each view — occluded ones are never tagged — and skipping any already tagged. Use it when a set of elevations needs its openings tagged.
+hooks:
+  PreToolUse:
+    - matcher: "mcp__transom__execute_revit_code"
+      hooks:
+        - type: command
+          command: 'powershell -NoProfile -ExecutionPolicy Bypass -File "$HOME/.claude/skills/transom/hooks/transom_hooks.ps1" revit-pre'
+    - matcher: "mcp__transom-acad__.*"
+      hooks:
+        - type: command
+          command: 'powershell -NoProfile -ExecutionPolicy Bypass -File "$HOME/.claude/skills/transom/hooks/transom_hooks.ps1" acad-pre'
+    - matcher: "Bash|PowerShell"
+      hooks:
+        - type: command
+          command: 'powershell -NoProfile -ExecutionPolicy Bypass -File "$HOME/.claude/skills/transom/hooks/transom_hooks.ps1" shell-pre'
+  PostToolUse:
+    - matcher: "mcp__transom__execute_revit_code"
+      hooks:
+        - type: command
+          command: 'powershell -NoProfile -ExecutionPolicy Bypass -File "$HOME/.claude/skills/transom/hooks/transom_hooks.ps1" revit-post'
+    - matcher: "Bash|PowerShell"
+      hooks:
+        - type: command
+          command: 'powershell -NoProfile -ExecutionPolicy Bypass -File "$HOME/.claude/skills/transom/hooks/transom_hooks.ps1" shell-post'
 ---
+
+Part of the Transom skills: the bridge rules, script loaders and hooks are in the `transom` skill.
 
 # Tag doors and windows on elevation views
 

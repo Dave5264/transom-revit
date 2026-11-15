@@ -196,8 +196,29 @@ internal static class Program
                 ["name"] = ServerName,
                 ["version"] = ServerVersion,
             },
+            // Points every client at the shipped skills, so Claude finds the method for a task instead of guessing.
+            ["instructions"] = Instructions,
         };
     }
+
+    /// <summary>
+    ///     Short operating notes for the model, surfaced through the initialize result. The detail lives in the
+    ///     skills Transom installs (Claude Code: %USERPROFILE%\.claude\skills\transom*; library: the Hub's Claude
+    ///     Skills tab); this only says where to start and the rules whose violation costs the most.
+    /// </summary>
+    private const string Instructions =
+        "Transom ships Claude skills. START with the `transom` skill: it routes a task to the right one - " +
+        "transom-model (modeling a building from CAD, eleven stage skills transom-model-01-project ... -11-checks, " +
+        "and replaying a recorded model into a new file), transom-ui (driving or testing Revit's UI), " +
+        "transom-schedules, transom-elevation-tags. In Claude Code they are installed in ~/.claude/skills; " +
+        "elsewhere they are in %LOCALAPPDATA%\\Transom\\skills.\n\n" +
+        "Rules that cost the most when broken: (1) execute_revit_code runs against the ACTIVE model - when " +
+        "several are open, resolve the target by title from app.Documents. (2) Write with readOnly:true inside " +
+        "your own Transaction with an IFailuresPreprocessor: in the bridge's own transaction a single warning " +
+        "opens Revit's modal failure dialog and the bridge hangs until someone answers it. (3) 'timed out " +
+        "waiting for Revit' after ~30 s does NOT mean the request stopped - it keeps running; check for a dialog, " +
+        "then poll and read back before resending anything. (4) Never synchronize with central or save unless " +
+        "the user asked. (5) Never force-kill Revit.";
 
     private static JsonObject HandleToolsList()
     {

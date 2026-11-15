@@ -1,7 +1,32 @@
 ---
-name: schedule-inventory
+name: transom-schedules
 description: Read-only survey of every schedule in the open model — name, column list, and row count — reported as a compact markdown table. A safe first skill to try; changes nothing.
+hooks:
+  PreToolUse:
+    - matcher: "mcp__transom__execute_revit_code"
+      hooks:
+        - type: command
+          command: 'powershell -NoProfile -ExecutionPolicy Bypass -File "$HOME/.claude/skills/transom/hooks/transom_hooks.ps1" revit-pre'
+    - matcher: "mcp__transom-acad__.*"
+      hooks:
+        - type: command
+          command: 'powershell -NoProfile -ExecutionPolicy Bypass -File "$HOME/.claude/skills/transom/hooks/transom_hooks.ps1" acad-pre'
+    - matcher: "Bash|PowerShell"
+      hooks:
+        - type: command
+          command: 'powershell -NoProfile -ExecutionPolicy Bypass -File "$HOME/.claude/skills/transom/hooks/transom_hooks.ps1" shell-pre'
+  PostToolUse:
+    - matcher: "mcp__transom__execute_revit_code"
+      hooks:
+        - type: command
+          command: 'powershell -NoProfile -ExecutionPolicy Bypass -File "$HOME/.claude/skills/transom/hooks/transom_hooks.ps1" revit-post'
+    - matcher: "Bash|PowerShell"
+      hooks:
+        - type: command
+          command: 'powershell -NoProfile -ExecutionPolicy Bypass -File "$HOME/.claude/skills/transom/hooks/transom_hooks.ps1" shell-post'
 ---
+
+Part of the Transom skills: the bridge rules, script loaders and hooks are in the `transom` skill.
 
 # Schedule inventory
 

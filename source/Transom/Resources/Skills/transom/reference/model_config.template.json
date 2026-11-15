@@ -1,0 +1,38 @@
+{
+  "_about": "transom-model project config: copy to <project>\\Revit Modeling\\model_config.json and fill in. Every script reads it through ARGS CFG. *_ft in feet, *_in in model inches.",
+  "project": "<Project name>",
+  "model_title": "<Title prefix of the model to write to, e.g. ProjectName>",
+  "model_path": "<project>\\Revit Modeling\\<ProjectName>.rvt",
+  "template": "C:\\ProgramData\\Autodesk\\RVT 2025\\Templates\\English-Imperial\\default.rte",
+  "family_templates": "C:\\ProgramData\\Autodesk\\RVT 2025\\Family Templates\\English-Imperial",
+  "modeling_dir": "<project>\\Revit Modeling",
+  "work_dir": "<project>\\Revit Modeling",
+  "reference_dir": "<project>\\Revit Modeling\\reference",
+  "families_dir": "<project>\\Revit Modeling\\Families",
+  "family_library": "<project>\\Revit Modeling\\Families\\library",
+  "textures_dir": "<project>\\Revit Modeling\\Textures",
+  "cad_dir": "<project>\\New CAD Files",
+  "cad_units": "Inch",
+
+  "datum_ft": 100.0,
+  "levels": [
+    { "name": "LOWER LEVEL", "elev_ft": 90.0,  "plan": "LOWER LEVEL - PLAN" },
+    { "name": "MAIN LEVEL",  "elev_ft": 100.0, "plan": "MAIN LEVEL - PLAN" },
+    { "name": "UPPER LEVEL", "elev_ft": 111.5, "plan": "UPPER LEVEL - PLAN" },
+    { "name": "ROOF LEVEL",  "elev_ft": 120.875, "plan": "ROOF LEVEL - PLAN" }
+  ],
+  "building_box_in": [0, 0, 1200, 600],
+  "site_box_in": [-1500, -1400, 2300, 1500],
+
+  "cad_to_model_in": [0.0, 0.0],
+  "plan_links": [
+    { "file": "ACAD-MainLevel-Clean.dwg", "view": "MAIN LEVEL - PLAN" }
+  ],
+  "elevation_links": [
+    { "file": "SouthElevation-Clean.dwg", "view": "SOUTH ELEVATION", "zero_level": "MAIN LEVEL" }
+  ],
+
+  "wall_types_by_material": { "Stone": "SA EXT - Stone Base", "Siding": "SA EXT - Lap Siding" },
+  "datum_level_by_material": { "Stone": "LOWER LEVEL", "Siding": "MAIN LEVEL" },
+  "tag": "SHELL"
+}

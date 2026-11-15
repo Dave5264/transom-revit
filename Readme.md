@@ -15,7 +15,7 @@ enhance your renders with AI.**
 
 [![Latest release](https://img.shields.io/github/v/release/Dave5264/transom-revit?label=latest%20release&color=2ea44f&logo=github)](https://github.com/Dave5264/transom-revit/releases/latest)
 
-### ⬇ [Download the installer](https://github.com/Dave5264/transom-revit/releases/download/v1.9.19/Transom-1.9.19-SingleUser.msi)
+### ⬇ [Download the installer](https://github.com/Dave5264/transom-revit/releases/download/v1.9.20/Transom-1.9.20-SingleUser.msi)
 
 **One click, no admin rights.** Installs into your per-user Revit add-ins folder.
 Double-click the `.msi`, then start Revit. Supports **Revit 2025, 2026 & 2027**. Free.
@@ -173,7 +173,13 @@ and `aire_log`.
 *AIRE is much newer than the schedule editor and has had a lot less mileage. Treat your early batches and
 clips as a trial, and check the first costs against your real OpenAI and Higgsfield usage.*
 
-> **Status:** v1.9.19 (Revit 2025/2026/2027) adds an optional **AutoCAD 2027 plug-in**, so Claude can work
+> **Status:** v1.9.20 (Revit 2025/2026/2027) ships **Claude skills for modeling** and installs them where Claude
+> finds them on its own. One `transom` skill routes to the right one: modeling a building from its CAD drawings in
+> eleven stages (CAD cleanup and linking, the shell, openings, families, details, a site of floors, an Enscape
+> landscape, checks), driving Revit's UI, schedules and elevation tags. They go into Claude Code's skills folder
+> and the Hub's Claude Skills tab, and an update never overwrites a skill you've edited.
+>
+> v1.9.19 added an optional **AutoCAD 2027 plug-in**, so Claude can work
 > in your drawings as well as your models. Claude can also now run **AIRE with nothing open**. It can price,
 > start and watch renders and Higgsfield clips with Revit and the AIRE window both closed, and read a run's
 > log back in plain English. The installer also sets up Claude's Revit connection at install time as it was

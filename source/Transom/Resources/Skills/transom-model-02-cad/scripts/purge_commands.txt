@@ -1,0 +1,10 @@
+# run_command token lists for the purge (Step 5), then REGEN and look
+run_command ["-PURGE","_A","*","_N"]
+run_command ["-PURGE","_R","*","_N"]
+run_command ["_.AUDIT","_Y"]
+run_command ["_.REGEN"]          // blocks show cached graphics: erased in-block text stays visible until REGEN
+run_command ["_.ZOOM","_E"]
+run_command ["_.QSAVE"]
+
+# export (Step 6)
+run_command ["-AECEXPORTTOAUTOCAD", "", "<folder>\\ACAD-<name>-Clean.dwg"]

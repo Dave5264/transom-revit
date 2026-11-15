@@ -110,12 +110,17 @@
          Helper projects simply skips them and the build still succeeds — run the build pipeline (or publish
          those two projects) to populate the payload. They are version-agnostic (one net8.0-windows self-contained
          exe drives Revit 2025/2026/2027), so the same files are bundled for every configuration. -->
-    <!-- Skills shipped with Transom (Claude Skills tab, user request 2026-07-18): copied into a "skills"
-         subfolder of the payload; SkillLibrary.EnsureSeeded copies them to %LocalAppData%\Transom\skills on
-         first launch (never overwriting a user-edited copy). Add new shipped skills to Resources\Skills. -->
+    <!-- Skills shipped with Transom: one folder per skill (SKILL.md + scripts/, reference/, hooks/), copied with
+         their sub-folders into the payload's "skills" folder. On startup SkillLibrary.EnsureSeeded installs each into
+         the Transom library (%LocalAppData%\Transom\skills, the Hub's Claude Skills tab) and as a Claude Code skill
+         (%USERPROFILE%\.claude\skills), replacing only files the user has not edited. Start a new skill at
+         Resources\Skills\<name>\SKILL.md; the `transom` skill is the index that routes to the others. -->
     <ItemGroup>
-        <None Include="Resources\Skills\*.md">
-            <Link>skills\%(Filename)%(Extension)</Link>
+        <!-- the skills' .cs files are scripts the bridge compiles at run time, never part of Transom.dll -->
+        <Compile Remove="Resources\Skills\**" />
+        <None Remove="Resources\Skills\**" />
+        <None Include="Resources\Skills\**\*">
+            <Link>skills\%(RecursiveDir)%(Filename)%(Extension)</Link>
             <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
             <Visible>false</Visible>
         </None>

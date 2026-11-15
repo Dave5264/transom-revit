@@ -181,9 +181,12 @@ internal static class Program
         "true colour.\n\n" +
         "KEYBOARD + TYPING (atomic focus): revit_keys takes a canvas x,y — it clicks there for focus, then " +
         "sends the shortcut (e.g. 'tl' = Thin Lines) in one step. revit_type takes the value-cell x,y — it " +
-        "clicks to focus and types in one step (enter=true commits). A separate click-then-type loses focus " +
+        "clicks to focus and types in one step. A separate click-then-type loses focus " +
         "to a permission prompt. Properties value cells are NOT exposed to UI Automation, so revit_type is " +
-        "the only way to set them; revit_scroll the parameter into view first.\n\n" +
+        "the only way to set them; revit_scroll the parameter into view first. The click SELECTS the cell's " +
+        "text, so typing REPLACES the old value (no Ctrl+A). enter=true does NOT always apply it: a text cell " +
+        "(Comments) stayed pending until the palette's Apply button was clicked (tested 2026-11-15) - click " +
+        "Apply, then read the parameter back through the API.\n\n" +
         "DIALOGS are SEPARATE top-level windows the main-window tools can't see: revit_list_dialogs to read " +
         "title/text/buttons, revit_click_dialog to click one (omit the button to safe-dismiss).\n\n" +
         "NO RIGHT-CLICK, AND POPUPS ARE UNOBSERVABLE — don't burn turns here:\n" +
@@ -313,8 +316,10 @@ internal static class Program
                 "Type text into a Properties value cell (or any field) — the way to edit a parameter value, " +
                 "since the Properties palette cells aren't exposed to UI Automation. Provide x,y of the FIELD: " +
                 "the tool clicks it to focus and types in one atomic step (so a permission prompt can't drop the " +
-                "field focus). Set enter=true to commit the cell (Enter) in the same step. Use revit_scroll first " +
-                "if the parameter isn't visible.",
+                "field focus). The click selects the cell's text, so the typed value REPLACES the old one. " +
+                "enter=true presses Enter in the same step, but a Properties text cell may stay pending: click " +
+                "the palette's Apply button, then verify through the API. Use revit_scroll first if the " +
+                "parameter isn't visible.",
                 ObjSchema(new()
                 {
                     ["text"] = Prop("string", "The text to type into the field."),

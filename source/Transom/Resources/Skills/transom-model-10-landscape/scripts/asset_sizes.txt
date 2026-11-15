@@ -1,0 +1,36 @@
+7432683|Bush 018 Feather Reed Grass|2.7|2.5|4.3|cx -0.0 cy -0.0 zmin 0.0
+7442422|Bush 010 English Laurel|2.3|2.3|2.0|cx 0.1 cy 0.0 zmin 0.0
+7444079|Bush 011 English Laurel|3.6|3.5|2.0|cx -0.0 cy 0.0 zmin 0.0
+7451564|Flower 092 Wild Sage|1.7|1.5|1.2|cx 0.0 cy -0.0 zmin 0.0
+7458177|Flower 066 Rhododendron|4.3|4.5|2.8|cx -0.2 cy 0.0 zmin -0.0
+7466104|Deciduous Tree 066 Red Maple|11.5|12.2|15.0|cx -0.0 cy -0.0 zmin 0.0
+7469300|Deciduous Tree 301 Paper Birch|5.1|6.8|15.0|cx 0.2 cy 0.2 zmin -0.3
+7471007|Deciduous Tree 227 Paper Birch|9.3|8.7|15.0|cx -0.1 cy -0.0 zmin 0.0
+7472792|Deciduous Tree 036 Japanese Maple Beni Maiko|7.1|7.1|4.7|cx -0.3 cy 0.1 zmin -0.0
+7474505|Deciduous Tree 148 Pagoda|8.2|8.1|12.0|cx 0.1 cy -0.0 zmin 0.0
+7476144|Deciduous Tree 056 Oak|11.3|11.6|15.2|cx 0.4 cy 0.3 zmin -0.2
+7477745|Evergreen Tree 004 English Laurel|4.6|4.5|10.1|cx -0.0 cy 0.0 zmin -0.4
+7479372|Coniferous Tree 028 Juniper|3.2|3.2|11.2|cx 0.1 cy 0.0 zmin 0.0
+7480983|Deciduous Tree 291 Japanese Zelkova (summer)|9.4|10.5|12.0|cx -0.2 cy -0.2 zmin -0.0
+7649511|Flower 092 Wild Sage|3.0|2.8|2.3|cx 0.1 cy -0.1 zmin 0.0
+7808837|Bush 117 Lavender|2.2|2.5|2.0|cx 0.0 cy 0.2 zmin -0.1
+7808839|Bush 137 St. John's Wort|4.5|3.7|1.7|cx 0.1 cy 0.0 zmin -0.1
+7808841|Deciduous Tree 076 Rowan|14.0|14.0|20.0|cx 0.1 cy -0.8 zmin -0.0
+7808843|Deciduous Tree 046 Maple|19.6|19.5|26.5|cx -0.4 cy -0.1 zmin 0.0
+7808845|Deciduous Tree 259 Honey Locust (spring)|13.4|13.8|14.1|cx 0.8 cy -0.2 zmin -0.0
+7808847|Flower 040 Hydrangea|1.6|1.3|1.7|cx 0.1 cy 0.0 zmin -0.2
+7808849|Bush 019 Feather Reed Grass|4.3|4.3|4.4|cx 0.0 cy 0.0 zmin -0.0
+7808851|Flower 068 Rhododendron|4.6|4.8|3.0|cx -0.2 cy 0.0 zmin -0.0
+7808853|Deciduous Tree 289 Japanese Zelkova (summer)|17.6|17.4|20.0|cx -1.2 cy -0.0 zmin 0.0
+7808855|Bush 009 English Laurel|3.8|3.8|3.2|cx 0.1 cy 0.0 zmin 0.0
+7808857|Armchair 046 Outdoor|2.6|3.1|2.5|cx 0.0 cy 0.0 zmin 0.0
+7808859|Coniferous Tree 001 Fir|6.7|7.8|9.4|cx 0.0 cy 0.0 zmin -0.0
+7808861|Deciduous Tree 054 Maple|18.5|18.2|32.4|cx 1.4 cy -1.5 zmin 0.0
+7808863|Deciduous Tree 134 London Plane|25.8|27.9|38.9|cx 0.5 cy -0.3 zmin -0.3
+7808865|Deciduous Tree 088 Sweetgum|25.2|25.2|28.2|cx -0.1 cy -0.2 zmin 0.0
+7808867|Perennial 024 Bloody Cranesbill (spring)|2.1|2.4|1.3|cx -0.1 cy -0.1 zmin 0.0
+7808869|Perennial 052 False Blue Indigo (spring)|4.1|4.0|3.1|cx 0.1 cy 0.0 zmin -0.3
+7808871|Bush 128 Rose of Sharon|3.0|2.8|4.4|cx 0.1 cy -0.1 zmin -0.1
+7808873|Bush 061 Yeg|5.5|5.5|4.8|cx 0.0 cy 0.1 zmin 0.0
+7808875|Table 051 Outdoor|3.9|4.0|0.8|cx 0.0 cy -0.0 zmin 0.0
+7808877|Sofa 052 Outdoor|2.6|5.2|2.5|cx 0.0 cy -0.0 zmin 0.0
